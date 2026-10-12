@@ -108,6 +108,7 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/nodes", s.handleListNodes)
 	h("PATCH /api/v1/nodes/{id}", s.handleUpdateNode)
 	h("DELETE /api/v1/nodes/{id}", s.handleDeleteNode)
+	h("POST /api/v1/nodes/{id}/drain", s.handleDrainNode)
 	h("GET /api/v1/cluster/join", s.handleJoinInfo)
 	h("GET /api/v1/sizes", s.handleSizes)
 

@@ -133,3 +133,51 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 ## Webhooks
 
 `POST /webhooks/github/{serviceId}` — configure it in GitHub (content type `application/json`, secret = the service `webhook_secret`, event `push`). Pushes to the service branch deploy automatically; `root_dir` limits deploys to changes under that folder.
+
+## Advanced features
+
+### Service fields (create / PATCH)
+- `"type": "cron"` with `"schedule": "*/15 * * * *"` (UTC, 5 fields or `@daily`/`@hourly`…), `"job_timeout_sec": 3600`, `"command": [...]`. Cron services get no domain and no replicas.
+- `"previews": true` — every pull request targeting the service branch gets its own service (`<slug>-pr-<n>`, URL `<slug>-pr-<n>-<project>.<base>`), sleeping when idle, deleted when the PR closes. Needs the GitHub webhook with the `pull_request` event.
+- `"autoscale": {"enabled": true, "min": 1, "max": 5, "target_cpu_percent": 70, "target_rps": 50}`.
+- `GET /services/{id}` additionally returns `previews` (list of services with `parent_id`/`preview_pr`) and `next_run` (cron).
+- Services have `parent_id` and `preview_pr` (null for normal services).
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/services/{id}/run` | start a cron job now → job run (202) |
+| GET | `/services/{id}/runs` | `[{id, status: running|succeeded|failed, exit_code, output, trigger: schedule|manual, started_at, finished_at}]` |
+| GET | `/services/{id}/metrics?hours=6` | `{points: [{ts, instances, memory_mb, cpu_millis, requests, errors_5xx}], rps_5m, errors_5m}` (one point per minute) |
+| GET | `/nodes/{id}/metrics` | `[{ts, cpu_percent, memory_used_mb, memory_committed_mb}]` (24 h) |
+
+### Templates and Docker Compose
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/templates` | `[{id, title, description, category, services, databases}]` |
+| POST | `/projects/{id}/templates/{templateId}` | `{domain?}` → `{services, databases}`; databases are provisioned first |
+| POST | `/projects/{id}/compose` | `{compose: "<yaml>"}` → `{services, warnings}`. Image services only; named volumes kept; services reach each other by compose name |
+
+### Notifications (per team)
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/teams/{team}/notifications` | `{channels: [{id, name, kind, events}], events: [all event names]}` |
+| POST | `/teams/{team}/notifications` | `{name, kind: webhook|slack|discord|telegram, target, events}`; telegram target is `<bot token>:<chat id>` |
+| DELETE | `/teams/{team}/notifications/{id}` | |
+| POST | `/teams/{team}/notifications/{id}/test` | sends a test message |
+
+Events: `deploy.succeeded`, `deploy.failed`, `instance.crashloop`, `instance.evicted`, `node.offline`, `backup.failed`, `job.failed`, `autoscale`.
+
+### Two-factor authentication
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/me/2fa/setup` | `{secret, otpauth_url}` (not active until enabled) |
+| POST | `/me/2fa/enable` | `{code}` |
+| POST | `/me/2fa/disable` | `{code, password}` |
+
+When enabled, `/auth/login` answers `401 {"error": "two-factor code required", "two_factor": true}` until the body includes `"code"`. `user.totp_enabled` tells whether it is on.
+
+### Other
+- `GET /sizes` also returns `database_sizes` (presets with `Name`, `MemoryMB`, `CPU`, `MaxConns`) and `engines`.
+- Backups have `s3_key` when copied off-site (`PAAS_S3_*` settings); restoring on another node downloads from S3.
+- SSE deployment streams send `id:` per line and honor `Last-Event-ID`.
+- Viewers can read env var names (values masked).

@@ -41,10 +41,8 @@
     refresh();
     const es = new EventSource(api.deploymentLogStreamURL(deploymentId));
     streaming = true;
-    // The server replays the stored log from the start on every (re)connect.
-    es.addEventListener('open', () => {
-      lines = [];
-    });
+    // Lines carry SSE ids; on reconnect the browser sends Last-Event-ID and the
+    // server resumes after it, so the buffer is kept.
     es.addEventListener('log', (ev) => {
       lines.push((ev as MessageEvent).data);
     });

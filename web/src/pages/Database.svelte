@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, errorMessage, databaseSizes, defaultEnvName, type Backup, type DatabaseDetail, type ProjectDetail } from '../lib/api';
+  import { api, catalog, defaultEnvFor, errorMessage, type Backup, type DatabaseDetail, type ProjectDetail, type SizesResponse } from '../lib/api';
   import { can } from '../lib/session.svelte';
   import { href, navigate } from '../lib/router.svelte';
   import { mb, cpu, relTime, absTime, bytes, between } from '../lib/format';
@@ -61,6 +61,7 @@
 
   onMount(() => {
     load();
+    catalog().then((c) => (cat = c)).catch(() => {});
     return poll(tick, 3000);
   });
 
@@ -71,7 +72,9 @@
   const serviceName = (sid: string) => project?.services.find((s) => s.id === sid)?.name ?? sid.slice(0, 8);
   const linkable = $derived((project?.services ?? []).filter((s) => !detail?.links.some((l) => l.service_id === s.id)));
   const engineLabel: Record<string, string> = { postgres: 'PostgreSQL', mysql: 'MySQL (MariaDB)', redis: 'Redis', mongo: 'MongoDB' };
-  const sizePreset = $derived(databaseSizes.find((s) => s.name === db?.size_preset));
+  let cat = $state<SizesResponse | null>(null);
+  const dbSizes = $derived(cat?.database_sizes ?? []);
+  const sizePreset = $derived(dbSizes.find((s) => s.Name === db?.size_preset));
 
   async function act(name: string, fn: () => Promise<unknown>, ok: string) {
     busy = name;
@@ -212,7 +215,7 @@
         <dl class="kv card-body">
           <dt>Engine</dt><dd>{engineLabel[db.engine] ?? db.engine}</dd>
           <dt>Mode</dt><dd>{db.mode === 'shared' ? 'Shared server (logical database)' : 'Dedicated server'}</dd>
-          <dt>Size</dt><dd>{db.mode === 'shared' ? 'shared' : `${db.size_preset}${sizePreset ? ` — ${mb(sizePreset.memory_mb)}, ${cpu(sizePreset.cpu_millis)}` : ''}`}</dd>
+          <dt>Size</dt><dd>{db.mode === 'shared' ? 'shared' : `${db.size_preset}${sizePreset ? ` — ${mb(sizePreset.MemoryMB)}, ${cpu(sizePreset.CPU)}, ${sizePreset.MaxConns} connections` : ''}`}</dd>
           {#if detail.server}
             <dt>Server</dt>
             <dd>
@@ -257,7 +260,7 @@
           </label>
           <label class="field">
             <span>Env variable</span>
-            <input class="mono" bind:value={linkEnv} placeholder={defaultEnvName[db.engine]} />
+            <input class="mono" bind:value={linkEnv} placeholder={defaultEnvFor(db.engine, cat)} />
           </label>
           <label class="check small"><input type="checkbox" bind:checked={linkRestart} />Restart service</label>
           <button class="primary" type="submit" disabled={!linkService || busy === 'link'}>{#if busy === 'link'}<span class="spinner"></span>{/if}Link</button>
@@ -313,7 +316,7 @@
         <label class="field">
           <span>Size</span>
           <select bind:value={upgradeSize}>
-            {#each databaseSizes as s (s.name)}<option value={s.name}>{s.name} — {mb(s.memory_mb)}, {cpu(s.cpu_millis)}</option>{/each}
+            {#each dbSizes as s (s.Name)}<option value={s.Name}>{s.Name} — {mb(s.MemoryMB)}, {cpu(s.CPU)}</option>{/each}
           </select>
         </label>
       </form>

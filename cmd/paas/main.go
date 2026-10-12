@@ -177,7 +177,13 @@ Usage:
   paas db info <name>
   paas db backup <name>
   paas db link <name> <service> [--env DATABASE_URL]
+  paas run <cron-service>              Run a cron job now and show its output
+  paas runs <cron-service>             Recent job runs
+  paas templates                       List one-click templates
+  paas install <template> [--domain D] Install a template into the project
+  paas compose <docker-compose.yml>    Import a compose file into the project
   paas nodes                           Cluster nodes and density (admin)
+  paas drain <node>                    Move workloads off a node (admin)
   paas join-command                    Print the command to add a node (admin)
 
 Global flags via env: PAAS_SERVER, PAAS_TOKEN, PAAS_PROJECT.
@@ -232,6 +238,18 @@ func main() {
 		err = cmdDB(rest)
 	case "nodes":
 		err = cmdNodes()
+	case "run":
+		err = cmdRun(rest)
+	case "runs":
+		err = cmdRuns(rest)
+	case "templates":
+		err = cmdTemplates()
+	case "install":
+		err = cmdInstall(rest)
+	case "compose":
+		err = cmdCompose(rest)
+	case "drain":
+		err = cmdDrain(rest)
 	case "join-command":
 		var out struct {
 			Command string `json:"command"`
@@ -295,7 +313,7 @@ func cmdLogin(args []string) error {
 	}
 	cfg.Token = out.Token
 	var me meResp
-	if err := call(http.MethodGet, "/me", nil, &me); err == nil && len(me.Teams) > 0 && cfg.Team == "" {
+	if err := call(http.MethodGet, "/me", nil, &me); err == nil && len(me.Teams) > 0 {
 		cfg.Team = me.Teams[0].ID
 	}
 	fmt.Println("Logged in as", out.User.Email)
@@ -1154,4 +1172,174 @@ func cmdNodes() error {
 	_ = tw.Flush()
 	fmt.Printf("\nsleeping services: %d\n", out.Sleeping)
 	return nil
+}
+
+type jobRun struct {
+	ID         string     `json:"id"`
+	Status     string     `json:"status"`
+	ExitCode   *int       `json:"exit_code"`
+	Output     string     `json:"output"`
+	Trigger    string     `json:"trigger"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+}
+
+func cmdRun(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: paas run <cron-service>")
+	}
+	s, _, err := findService(args[0])
+	if err != nil {
+		return err
+	}
+	var run jobRun
+	if err := call(http.MethodPost, "/services/"+s.ID+"/run", nil, &run); err != nil {
+		return err
+	}
+	fmt.Println("Job started:", run.ID[:8])
+	for i := 0; i < 1800; i++ {
+		var runs []jobRun
+		if err := call(http.MethodGet, "/services/"+s.ID+"/runs", nil, &runs); err != nil {
+			return err
+		}
+		for _, r := range runs {
+			if r.ID == run.ID && r.Status != "running" {
+				fmt.Println(r.Output)
+				code := -1
+				if r.ExitCode != nil {
+					code = *r.ExitCode
+				}
+				fmt.Printf("\n%s (exit %d)\n", r.Status, code)
+				if r.Status != "succeeded" {
+					os.Exit(1)
+				}
+				return nil
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	return errors.New("timed out waiting for the job")
+}
+
+func cmdRuns(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: paas runs <cron-service>")
+	}
+	s, _, err := findService(args[0])
+	if err != nil {
+		return err
+	}
+	var runs []jobRun
+	if err := call(http.MethodGet, "/services/"+s.ID+"/runs", nil, &runs); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "RUN\tTRIGGER\tSTATUS\tEXIT\tSTARTED\tDURATION")
+	for _, r := range runs {
+		exit, dur := "-", "-"
+		if r.ExitCode != nil {
+			exit = fmt.Sprint(*r.ExitCode)
+		}
+		if r.FinishedAt != nil {
+			dur = r.FinishedAt.Sub(r.StartedAt).Round(100 * time.Millisecond).String()
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ID[:8], r.Trigger, r.Status, exit, r.StartedAt.Local().Format("01-02 15:04:05"), dur)
+	}
+	return tw.Flush()
+}
+
+func cmdTemplates() error {
+	var list []struct {
+		ID          string `json:"id"`
+		Title       string `json:"title"`
+		Category    string `json:"category"`
+		Description string `json:"description"`
+	}
+	if err := call(http.MethodGet, "/templates", nil, &list); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "TEMPLATE\tCATEGORY\tDESCRIPTION")
+	for _, t := range list {
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", t.ID, t.Category, t.Description)
+	}
+	return tw.Flush()
+}
+
+func cmdInstall(args []string) error {
+	pos, flags := splitFlags(args)
+	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	domain := fs.String("domain", "", "custom domain for the main service")
+	_ = fs.Parse(flags)
+	if len(pos) != 1 {
+		return errors.New("usage: paas install <template> [--domain D]")
+	}
+	p, err := currentProject()
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Services []service `json:"services"`
+	}
+	if err := call(http.MethodPost, "/projects/"+p.ID+"/templates/"+pos[0], map[string]string{"domain": *domain}, &out); err != nil {
+		return err
+	}
+	for _, s := range out.Services {
+		fmt.Println("Created", s.Slug, "- deploying once its databases are ready")
+	}
+	return nil
+}
+
+func cmdCompose(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: paas compose <docker-compose.yml>")
+	}
+	data, err := os.ReadFile(args[0])
+	if err != nil {
+		return err
+	}
+	p, err := currentProject()
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Services []service `json:"services"`
+		Warnings []string  `json:"warnings"`
+	}
+	if err := call(http.MethodPost, "/projects/"+p.ID+"/compose", map[string]string{"compose": string(data)}, &out); err != nil {
+		return err
+	}
+	for _, s := range out.Services {
+		fmt.Printf("Created %s (%s)\n", s.Slug, s.Type)
+	}
+	for _, w := range out.Warnings {
+		fmt.Println("warning:", w)
+	}
+	return nil
+}
+
+func cmdDrain(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: paas drain <node>")
+	}
+	var out struct {
+		Nodes []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"nodes"`
+	}
+	if err := call(http.MethodGet, "/nodes", nil, &out); err != nil {
+		return err
+	}
+	for _, n := range out.Nodes {
+		if n.Name == args[0] || n.ID == args[0] {
+			var res map[string]any
+			if err := call(http.MethodPost, "/nodes/"+n.ID+"/drain", nil, &res); err != nil {
+				return err
+			}
+			fmt.Printf("Draining %s: moving %v instance(s); stateful services kept: %v\n", n.Name, res["moving"], res["pinned_stateful"])
+			return nil
+		}
+	}
+	return fmt.Errorf("node %q not found", args[0])
 }

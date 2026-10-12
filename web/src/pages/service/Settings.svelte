@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { api, errorMessage, type HealthCheck, type QoS, type Resources, type ServiceDetail, type ServiceInput, type Size, type Volume } from '../../lib/api';
+  import { api, catalog, errorMessage, type HealthCheck, type QoS, type Resources, type ServiceDetail, type ServiceInput, type Size, type Volume } from '../../lib/api';
   import { mb, cpu } from '../../lib/format';
   import { navigate } from '../../lib/router.svelte';
   import { toast } from '../../lib/toast.svelte';
@@ -61,7 +61,7 @@
 
   onMount(async () => {
     try {
-      sizes = (await api.sizes()).sizes;
+      sizes = (await catalog()).sizes;
       size = presetOf(s0.spec.resources, sizes);
     } catch (e) {
       error = errorMessage(e);

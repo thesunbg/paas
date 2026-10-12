@@ -1,6 +1,6 @@
 // Typed client for the PaaS REST API (/api/v1). Field names mirror the Go JSON tags.
 
-export type ServiceType = 'web' | 'worker' | 'static';
+export type ServiceType = 'web' | 'worker' | 'static' | 'cron';
 export type ServiceStatus = 'created' | 'deploying' | 'running' | 'sleeping' | 'stopped' | 'failed';
 export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'active' | 'superseded' | 'failed' | 'cancelled';
 export type DatabaseStatus = 'provisioning' | 'ready' | 'failed' | 'upgrading' | 'deleting';
@@ -13,6 +13,7 @@ export interface User {
   email: string;
   name: string;
   is_admin: boolean;
+  totp_enabled?: boolean;
   created_at: string;
 }
 
@@ -119,6 +120,14 @@ export interface SleepPolicy {
   idle_minutes?: number;
 }
 
+export interface Autoscale {
+  enabled: boolean;
+  min?: number;
+  max?: number;
+  target_cpu_percent?: number;
+  target_rps?: number;
+}
+
 export interface ServiceSpec {
   port?: number;
   replicas: number;
@@ -134,6 +143,10 @@ export interface ServiceSpec {
   env?: Record<string, string>;
   language?: string;
   dns_aliases?: string[];
+  previews?: boolean;
+  autoscale?: Autoscale;
+  schedule?: string;
+  job_timeout_sec?: number;
 }
 
 export interface Service {
@@ -148,6 +161,8 @@ export interface Service {
   has_git_token: boolean;
   node_id: string | null;
   current_deployment_id: string | null;
+  parent_id?: string | null;
+  preview_pr?: number | null;
   status: ServiceStatus;
   last_request_at: string | null;
   created_at: string;
@@ -263,6 +278,8 @@ export interface ServiceDetail {
   internal_host: string;
   recommendation: Recommendation | null;
   tuning_env: Record<string, string> | null;
+  previews?: Service[];
+  next_run?: string | null;
 }
 
 export interface ServiceInput {
@@ -286,6 +303,10 @@ export interface ServiceInput {
   domain?: string;
   auto_deploy?: boolean;
   deploy?: boolean;
+  previews?: boolean;
+  autoscale?: Autoscale;
+  schedule?: string;
+  job_timeout_sec?: number;
 }
 
 export interface CreateServiceResponse {
@@ -367,6 +388,7 @@ export interface CreateDatabaseInput {
 }
 
 export interface Backup {
+  s3_key?: string;
   id: string;
   database_id: string;
   node_id: string | null;
@@ -441,6 +463,111 @@ export interface Size {
   cpu_request_millis: number;
 }
 
+export interface DatabaseSize {
+  Name: string;
+  MemoryMB: number;
+  CPU: number;
+  MaxConns: number;
+}
+
+export interface EngineInfo {
+  Name: string;
+  Image: string;
+  Port: number;
+  SharedOK: boolean;
+  DefaultEnv: string;
+  MinMemoryMB: number;
+}
+
+export interface SizesResponse {
+  sizes: Size[];
+  database_sizes?: DatabaseSize[];
+  engines?: Record<string, EngineInfo>;
+}
+
+export interface JobRun {
+  id: string;
+  service_id: string;
+  node_id: string | null;
+  container_id: string;
+  status: 'running' | 'succeeded' | 'failed';
+  exit_code: number | null;
+  output: string;
+  trigger: 'schedule' | 'manual' | string;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface MetricPoint {
+  ts: string;
+  instances: number;
+  memory_mb: number;
+  cpu_millis: number;
+  requests: number;
+  errors_5xx: number;
+}
+
+export interface ServiceMetrics {
+  points: MetricPoint[] | null;
+  rps_5m: number;
+  errors_5m: number;
+}
+
+export interface NodeMetricPoint {
+  ts: string;
+  cpu_percent: number;
+  memory_used_mb: number;
+  memory_committed_mb: number;
+}
+
+export interface TemplateService {
+  name: string;
+  image: string;
+  type: string;
+  port?: number;
+  env?: Record<string, string>;
+  volumes?: Volume[];
+  command?: string[];
+  size?: string;
+  health_path?: string;
+}
+
+export interface Template {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  services: TemplateService[];
+  databases?: { name: string; engine: string; mode?: string }[];
+}
+
+export interface InstallResponse {
+  services: Service[] | null;
+  databases?: Database[] | null;
+  warnings?: string[] | null;
+}
+
+export type ChannelKind = 'webhook' | 'slack' | 'discord' | 'telegram';
+
+export interface Channel {
+  id: string;
+  team_id: string;
+  name: string;
+  kind: ChannelKind;
+  events: string[];
+  created_at: string;
+}
+
+export interface ChannelsResponse {
+  channels: Channel[] | null;
+  events: string[];
+}
+
+export interface TwoFactorSetup {
+  secret: string;
+  otpauth_url: string;
+}
+
 export interface AddMemberResponse {
   user: User;
   temporary_password?: string;
@@ -448,7 +575,11 @@ export interface AddMemberResponse {
 
 /** Error carrying the HTTP status and the server's `{"error"}` message. */
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public data: Record<string, unknown> | null = null,
+  ) {
     super(message);
   }
 }
@@ -486,7 +617,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     const msg =
       data && typeof data === 'object' && 'error' in data ? String((data as { error: unknown }).error) : res.statusText || `HTTP ${res.status}`;
     if (res.status === 401 && !path.startsWith('/auth/') && onUnauthorized) onUnauthorized();
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, data && typeof data === 'object' ? (data as Record<string, unknown>) : null);
   }
   return data as T;
 }
@@ -502,7 +633,10 @@ export const api = {
   // Auth
   setup: () => get<SetupStatus>('/setup'),
   register: (email: string, password: string, name: string) => post<AuthResponse>('/auth/register', { email, password, name }),
-  login: (email: string, password: string) => post<AuthResponse>('/auth/login', { email, password }),
+  login: (email: string, password: string, code?: string) => post<AuthResponse>('/auth/login', code ? { email, password, code } : { email, password }),
+  twoFactorSetup: () => post<TwoFactorSetup>('/me/2fa/setup'),
+  twoFactorEnable: (code: string) => post<{ status: string }>('/me/2fa/enable', { code }),
+  twoFactorDisable: (code: string, password: string) => post<{ status: string }>('/me/2fa/disable', { code, password }),
   logout: () => post<{ status: string }>('/auth/logout'),
   me: () => get<Me>('/me'),
   changePassword: (current: string, next: string) => post<{ status: string }>('/me/password', { current, new: next }),
@@ -517,6 +651,11 @@ export const api = {
   members: (team: string) => get<Member[] | null>(`/teams/${e(team)}/members`),
   addMember: (team: string, email: string, role: Role) => post<AddMemberResponse>(`/teams/${e(team)}/members`, { email, role }),
   removeMember: (team: string, user: string) => del(`/teams/${e(team)}/members/${e(user)}`),
+  channels: (team: string) => get<ChannelsResponse>(`/teams/${e(team)}/notifications`),
+  createChannel: (team: string, input: { name: string; kind: ChannelKind; target: string; events: string[] }) =>
+    post<Channel>(`/teams/${e(team)}/notifications`, input),
+  deleteChannel: (team: string, id: string) => del(`/teams/${e(team)}/notifications/${e(id)}`),
+  testChannel: (team: string, id: string) => post<{ status: string }>(`/teams/${e(team)}/notifications/${e(id)}/test`),
   projects: (team: string) => get<ProjectListItem[] | null>(`/teams/${e(team)}/projects`),
   createProject: (team: string, name: string) => post<Project>(`/teams/${e(team)}/projects`, { name }),
 
@@ -525,6 +664,10 @@ export const api = {
   deleteProject: (id: string) => del(`/projects/${e(id)}`),
   createService: (project: string, input: ServiceInput) => post<CreateServiceResponse>(`/projects/${e(project)}/services`, input),
   createDatabase: (project: string, input: CreateDatabaseInput) => post<Database>(`/projects/${e(project)}/databases`, input),
+  templates: () => get<Template[] | null>('/templates'),
+  installTemplate: (project: string, template: string, domain?: string) =>
+    post<InstallResponse>(`/projects/${e(project)}/templates/${e(template)}`, domain ? { domain } : {}),
+  importCompose: (project: string, compose: string) => post<InstallResponse>(`/projects/${e(project)}/compose`, { compose }),
 
   // Services
   service: (id: string) => get<ServiceDetail>(`/services/${e(id)}`),
@@ -546,6 +689,9 @@ export const api = {
   logs: (id: string, tail = 300) => get<InstanceLogs[]>(`/services/${e(id)}/logs?tail=${tail}`),
   exec: (id: string, command: string) => post<ExecResult>(`/services/${e(id)}/exec`, { command }),
   serviceLogStreamURL: (id: string) => `${BASE}/services/${e(id)}/logs/stream`,
+  runJob: (id: string) => post<JobRun>(`/services/${e(id)}/run`),
+  runs: (id: string) => get<JobRun[] | null>(`/services/${e(id)}/runs`),
+  metrics: (id: string, hours: number) => get<ServiceMetrics>(`/services/${e(id)}/metrics?hours=${hours}`),
 
   // Deployments
   deployment: (id: string) => get<DeploymentDetail>(`/deployments/${e(id)}`),
@@ -570,27 +716,24 @@ export const api = {
   nodes: () => get<NodesResponse>('/nodes'),
   updateNode: (id: string, input: NodeUpdate) => patch<ClusterNode>(`/nodes/${e(id)}`, input),
   deleteNode: (id: string) => del(`/nodes/${e(id)}`),
+  nodeMetrics: (id: string) => get<NodeMetricPoint[] | null>(`/nodes/${e(id)}/metrics`),
   joinInfo: () => get<JoinInfo>('/cluster/join'),
-  sizes: () => get<{ sizes: Size[] }>('/sizes'),
+  sizes: () => get<SizesResponse>('/sizes'),
 };
 
-/** Default env var injected into services linked to a database of this engine. */
-export const defaultEnvName: Record<Engine, string> = {
-  postgres: 'DATABASE_URL',
-  mysql: 'DATABASE_URL',
-  redis: 'REDIS_URL',
-  mongo: 'MONGODB_URL',
-};
+/** Fallback env var names when /sizes does not list engines. */
+const fallbackEnv: Record<string, string> = { postgres: 'DATABASE_URL', mysql: 'DATABASE_URL', redis: 'REDIS_URL', mongo: 'MONGODB_URL' };
 
-/** Database sizing presets (internal/databases/engines.go; not exposed by the API). */
-export const databaseSizes = [
-  { name: 'nano', memory_mb: 128, cpu_millis: 250 },
-  { name: 'micro', memory_mb: 256, cpu_millis: 500 },
-  { name: 'small', memory_mb: 512, cpu_millis: 1000 },
-  { name: 'medium', memory_mb: 1024, cpu_millis: 2000 },
-  { name: 'large', memory_mb: 2048, cpu_millis: 4000 },
-  { name: 'xlarge', memory_mb: 4096, cpu_millis: 8000 },
-];
+let sizesCache: Promise<SizesResponse> | null = null;
+/** /sizes is static per server; fetch it once per page load. */
+export function catalog(): Promise<SizesResponse> {
+  if (!sizesCache) sizesCache = api.sizes().catch((err) => ((sizesCache = null), Promise.reject(err)));
+  return sizesCache;
+}
+
+export function defaultEnvFor(engine: string, cat?: SizesResponse | null): string {
+  return cat?.engines?.[engine]?.DefaultEnv || fallbackEnv[engine] || 'DATABASE_URL';
+}
 
 export function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;

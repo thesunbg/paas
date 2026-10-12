@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, errorMessage, type ProjectDetail, type ServiceInput, type ServiceType, type Size } from '../lib/api';
+  import { api, catalog, errorMessage, type ProjectDetail, type ServiceInput, type ServiceType, type Size } from '../lib/api';
   import { href, navigate } from '../lib/router.svelte';
   import { mb, cpu } from '../lib/format';
   import { rowsToMap, validateRows, type EnvRow } from '../lib/env';
@@ -40,7 +40,7 @@
 
   onMount(async () => {
     try {
-      const [p, s] = await Promise.all([api.project(projectId), api.sizes()]);
+      const [p, s] = await Promise.all([api.project(projectId), catalog()]);
       project = p;
       sizes = s.sizes;
     } catch (e) {

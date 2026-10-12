@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/scheduler"
@@ -143,4 +146,62 @@ func (s *Server) handleJoinInfo(w http.ResponseWriter, r *http.Request) {
 	natsURL := fmt.Sprintf("nats://%s:%s", host, port)
 	cmd := fmt.Sprintf("curl -fsSL %s/install.sh | sudo sh -s -- join --server %s --token %s --roles worker", s.cfg.PublicURL, natsURL, s.ClusterToken)
 	writeJSON(w, 200, map[string]string{"nats_url": natsURL, "token": s.ClusterToken, "command": cmd})
+}
+
+// handleDrainNode cordons a node and moves its stateless instances elsewhere without downtime.
+func (s *Server) handleDrainNode(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	n, err := s.store.NodeByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, 404, "node not found")
+		return
+	}
+	if err := s.store.UpdateNodeSettings(r.Context(), n.ID, "cordoned", n.OvercommitMemory, n.OvercommitCPU, n.ReservedMB, n.Labels); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	instances, _ := s.store.InstancesForNode(r.Context(), n.ID)
+	moved, pinned := 0, []string{}
+	for _, in := range instances {
+		svc, err := s.store.ServiceByID(r.Context(), in.ServiceID)
+		if err != nil {
+			continue
+		}
+		if svc.NodeID != nil && *svc.NodeID == n.ID {
+			pinned = append(pinned, svc.Slug) // stateful: its volume lives here
+			continue
+		}
+		moved++
+		go s.moveInstance(context.Background(), svc.ID, in, n.ID)
+	}
+	writeJSON(w, 202, map[string]any{"status": "draining", "moving": moved, "pinned_stateful": pinned})
+}
+
+func (s *Server) moveInstance(ctx context.Context, serviceID string, in store.Instance, from string) {
+	unlock := s.lock(serviceID)
+	defer unlock()
+	svc, err := s.store.ServiceByID(ctx, serviceID)
+	if err != nil || svc.CurrentDeploymentID == nil {
+		return
+	}
+	d, err := s.store.DeploymentByID(ctx, *svc.CurrentDeploymentID)
+	if err != nil {
+		return
+	}
+	proj, err := s.store.ProjectByID(ctx, svc.ProjectID)
+	if err != nil {
+		return
+	}
+	if in.DeploymentID != nil && *in.DeploymentID == d.ID {
+		if _, err := s.startInstance(ctx, svc, proj, d, "", map[string]bool{from: true}); err != nil {
+			slog.Warn("drain: no room elsewhere, keeping instance", "service", svc.Slug, "err", err)
+			return
+		}
+		s.publishAll(ctx)
+		time.Sleep(2 * time.Second)
+	}
+	s.stopInstance(ctx, &in, 15)
+	s.publishAll(ctx)
 }

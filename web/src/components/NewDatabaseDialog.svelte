@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { api, errorMessage, databaseSizes, defaultEnvName, type Engine, type ProjectService } from '../lib/api';
+  import { onMount } from 'svelte';
+  import { api, catalog, defaultEnvFor, errorMessage, type Engine, type ProjectService, type SizesResponse } from '../lib/api';
   import { mb, cpu } from '../lib/format';
   import { toast } from '../lib/toast.svelte';
   import { navigate } from '../lib/router.svelte';
@@ -8,7 +9,13 @@
 
   let { open = $bindable(false), projectId, services }: { open: boolean; projectId: string; services: ProjectService[] } = $props();
 
-  const engines: { id: Engine; label: string; shared: boolean }[] = [
+  let cat = $state<SizesResponse | null>(null);
+  onMount(() => {
+    catalog().then((c) => (cat = c)).catch(() => {});
+  });
+  const dbSizes = $derived(cat?.database_sizes ?? []);
+
+  const engineList: { id: Engine; label: string; shared: boolean }[] = [
     { id: 'postgres', label: 'PostgreSQL', shared: true },
     { id: 'mysql', label: 'MySQL (MariaDB)', shared: true },
     { id: 'redis', label: 'Redis', shared: false },
@@ -25,6 +32,8 @@
   let busy = $state(false);
   let error = $state('');
 
+  // Prefer the server's engine catalog for shared-mode support.
+  const engines = $derived(engineList.map((e) => ({ ...e, shared: cat?.engines?.[e.id]?.SharedOK ?? e.shared })));
   const sharedOK = $derived(engines.find((e) => e.id === engine)?.shared ?? false);
   $effect(() => {
     if (!sharedOK) mode = 'dedicated';
@@ -86,7 +95,7 @@
       <label class="field">
         <span>Size</span>
         <select bind:value={size}>
-          {#each databaseSizes as s (s.name)}<option value={s.name}>{s.name} — {mb(s.memory_mb)} RAM, {cpu(s.cpu_millis)}</option>{/each}
+          {#each dbSizes as s (s.Name)}<option value={s.Name}>{s.Name} — {mb(s.MemoryMB)} RAM, {cpu(s.CPU)}, {s.MaxConns} connections</option>{/each}
         </select>
       </label>
     {/if}
@@ -103,7 +112,7 @@
     <div class="grid-2">
       <label class="field">
         <span>Env variable name</span>
-        <input class="mono" bind:value={envName} placeholder={defaultEnvName[engine]} />
+        <input class="mono" bind:value={envName} placeholder={defaultEnvFor(engine, cat)} />
         <span class="hint">Injected into linked services.</span>
       </label>
       <label class="field">

@@ -6,6 +6,30 @@
 
 ---
 
+## 0. Trạng thái triển khai (cập nhật)
+
+Mã nguồn đã chạy end-to-end trong môi trường thử nghiệm (2 node, containerd + runc, BuildKit, PostgreSQL).
+
+| Hạng mục | Trạng thái | Ghi chú |
+|---|---|---|
+| Control plane, API, dashboard, CLI | ✅ | Một binary `paasd` (khoảng 37 MB, khoảng 40 MB RAM). Dashboard Svelte nhúng sẵn. CLI `paas` |
+| Build tự nhận diện + BuildKit | ✅ | Node/Next/Vite…, Go, Python, PHP, Ruby, Rust, Java, Deno, HTML tĩnh, Dockerfile |
+| Runtime containerd + crun (không Docker) | ✅ | Tự chuyển sang runc khi cgroup ở chế độ hybrid. gVisor nếu có cài |
+| Site tĩnh phục vụ thẳng từ proxy | ✅ | SPA fallback, gzip, cache bất biến |
+| Edge proxy Go + HTTPS tự động (certmagic) | ✅ | Thay Caddy ngay từ đầu. Có giới hạn tốc độ theo IP |
+| Deploy không downtime, rollback, tự phục hồi | ✅ | Đã đo: 0 request lỗi trong lúc deploy |
+| Database: shared/dedicated, link, backup, restore, nâng cấp | ✅ | Postgres, MariaDB, Redis, MongoDB. Backup ra S3 bằng presigned URL |
+| Mật độ: QoS, overcommit, ngủ/đánh thức, tinh chỉnh runtime, eviction PSI, right-sizing, zram | ✅ | |
+| Cluster: join 1 lệnh, WireGuard mesh, cách ly nftables xuyên node, registry nội bộ, drain/cordon | ✅ | Dùng WireGuard userspace (wireguard-go), không cần module kernel |
+| Preview cho mỗi PR, cron job, autoscaling, thông báo, metrics, 2FA, template, import Compose | ✅ | |
+| HA control plane (3 node) | ⏳ | Chưa làm. Khi control plane dừng, workload vẫn chạy |
+| Tự động thêm node qua API cloud (Hetzner/DO/AWS) | ⏳ | Chưa làm |
+| Lazy pulling, Firecracker, Wasm, CRIU | ⏳ | Giai đoạn 4 |
+| SSO/OIDC, tính phí, đa vùng/GeoDNS, quét image | ⏳ | Giai đoạn 4 |
+| VictoriaMetrics/VictoriaLogs | ↔️ | Thay bằng metrics tối giản trong Postgres (48 giờ) và log file trên agent, để nhẹ hơn |
+
+---
+
 ## 1. Nguyên tắc kiến trúc
 
 | Nguyên tắc | Cụ thể |
