@@ -108,7 +108,7 @@ type ServiceSpec struct {
 	Command      []string          `json:"command,omitempty"`
 	Image        string            `json:"image,omitempty"` // fixed image (databases)
 	SPA          bool              `json:"spa,omitempty"`
-	Env          map[string]string `json:"env,omitempty"` // non-secret env baked by the system (databases)
+	Env          map[string]string `json:"env,omitempty"`      // non-secret env baked by the system (databases)
 	Language     string            `json:"language,omitempty"` // detected language, used for runtime tuning
 	DNSAliases   []string          `json:"dns_aliases,omitempty"`
 }

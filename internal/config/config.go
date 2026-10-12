@@ -41,13 +41,13 @@ type Agent struct {
 }
 
 type Proxy struct {
-	NATSURL      string // PAAS_NATS_URL
-	ClusterToken string // PAAS_CLUSTER_TOKEN
-	HTTPAddr     string // PAAS_PROXY_HTTP_ADDR
-	HTTPSAddr    string // PAAS_PROXY_HTTPS_ADDR
-	ACMEEmail    string // PAAS_ACME_EMAIL, enables automatic HTTPS when set
-	ACMECA       string // PAAS_ACME_CA, optional custom directory (e.g. staging)
-	DataDir      string // PAAS_DATA_DIR
+	NATSURL           string // PAAS_NATS_URL
+	ClusterToken      string // PAAS_CLUSTER_TOKEN
+	HTTPAddr          string // PAAS_PROXY_HTTP_ADDR
+	HTTPSAddr         string // PAAS_PROXY_HTTPS_ADDR
+	ACMEEmail         string // PAAS_ACME_EMAIL, enables automatic HTTPS when set
+	ACMECA            string // PAAS_ACME_CA, optional custom directory (e.g. staging)
+	DataDir           string // PAAS_DATA_DIR
 	DashboardUpstream string // PAAS_DASHBOARD_UPSTREAM, e.g. 127.0.0.1:8080
 }
 

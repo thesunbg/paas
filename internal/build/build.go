@@ -294,4 +294,3 @@ func firstNonEmpty(v ...string) string {
 func ImageName(serviceID, deploymentID string) string {
 	return fmt.Sprintf("paas.local/%s:%s", serviceID, deploymentID)
 }
-

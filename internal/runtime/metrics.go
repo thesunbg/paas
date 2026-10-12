@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	v1 "github.com/containerd/cgroups/v3/cgroup1/stats"
 	v2 "github.com/containerd/cgroups/v3/cgroup2/stats"
+	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/typeurl/v2"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -204,10 +206,19 @@ func (r *Runtime) Exec(ctx context.Context, req proto.ExecRequest) proto.ExecRep
 	}
 	var stderrBuf bytes.Buffer
 	execID := fmt.Sprintf("exec-%d", time.Now().UnixNano())
-	proc, err := task.Exec(cctx, execID, &pspec, cio.NewCreator(cio.WithStreams(stdin, stdout, &limitedBuffer{buf: &stderrBuf, max: 1 << 20})))
+	eof := &eofReader{r: stdin, done: make(chan struct{})}
+	proc, err := task.Exec(cctx, execID, &pspec, cio.NewCreator(cio.WithStreams(eof, stdout, &limitedBuffer{buf: &stderrBuf, max: 1 << 20})))
 	if err != nil {
 		return proto.ExecReply{Error: err.Error()}
 	}
+	go func() {
+		// Close the process stdin once everything was sent, so tools like psql see EOF.
+		select {
+		case <-eof.done:
+			_ = proc.CloseIO(cctx, client.WithStdinCloser)
+		case <-cctx.Done():
+		}
+	}()
 	defer proc.Delete(context.WithoutCancel(cctx))
 	statusC, err := proc.Wait(cctx)
 	if err != nil {
@@ -232,6 +243,20 @@ func (r *Runtime) Exec(ctx context.Context, req proto.ExecRequest) proto.ExecRep
 		}
 	}
 	return rep
+}
+
+type eofReader struct {
+	r    io.Reader
+	once sync.Once
+	done chan struct{}
+}
+
+func (e *eofReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err == io.EOF {
+		e.once.Do(func() { close(e.done) })
+	}
+	return n, err
 }
 
 type limitedBuffer struct {

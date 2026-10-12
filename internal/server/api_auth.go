@@ -1,0 +1,305 @@
+package server
+
+import (
+	"errors"
+	"net/http"
+	"net/mail"
+	"strings"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/thesunbg/paas/internal/store"
+	"github.com/thesunbg/paas/internal/util"
+)
+
+const sessionTTL = 30 * 24 * time.Hour
+
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("not-a-real-password"), bcrypt.DefaultCost)
+
+func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
+	n, err := s.store.CountUsers(r.Context())
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	signup, _ := s.store.GetSetting(r.Context(), settingAllowSignup)
+	writeJSON(w, 200, map[string]any{"needs_setup": n == 0, "allow_signup": signup == "true", "base_domain": s.cfg.BaseDomain})
+}
+
+type credentialsInput struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name"`
+}
+
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var in credentialsInput
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	in.Email = strings.TrimSpace(strings.ToLower(in.Email))
+	if _, err := mail.ParseAddress(in.Email); err != nil {
+		writeError(w, 400, "invalid email")
+		return
+	}
+	if len(in.Password) < 8 {
+		writeError(w, 400, "password must be at least 8 characters")
+		return
+	}
+	n, err := s.store.CountUsers(r.Context())
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	first := n == 0
+	if !first {
+		signup, _ := s.store.GetSetting(r.Context(), settingAllowSignup)
+		if signup != "true" {
+			writeError(w, 403, "registration is closed; ask an administrator to invite you")
+			return
+		}
+	}
+	u, err := s.createUser(r, in, first)
+	if err != nil {
+		if store.IsUniqueViolation(err) {
+			writeError(w, 409, "email already registered")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	s.startSession(w, r, u)
+}
+
+func (s *Server) createUser(r *http.Request, in credentialsInput, admin bool) (*store.User, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	name := in.Name
+	if name == "" {
+		name = strings.SplitN(in.Email, "@", 2)[0]
+	}
+	u, err := s.store.CreateUser(r.Context(), in.Email, name, string(hash), admin)
+	if err != nil {
+		return nil, err
+	}
+	slug := util.Slugify(name) + "-" + util.RandomToken(2)
+	if _, err := s.store.CreateTeam(r.Context(), name+"'s team", slug, u.ID, false); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var in credentialsInput
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	u, err := s.store.UserByEmail(r.Context(), strings.TrimSpace(in.Email))
+	if err != nil {
+		// Spend comparable time to avoid user enumeration.
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(in.Password))
+		writeError(w, 401, "invalid email or password")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)) != nil {
+		writeError(w, 401, "invalid email or password")
+		return
+	}
+	s.startSession(w, r, u)
+}
+
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.User) {
+	tok := util.RandomToken(32)
+	if err := s.store.CreateSession(r.Context(), util.HashToken(tok), u.ID, time.Now().Add(sessionTTL)); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", MaxAge: int(sessionTTL.Seconds()),
+	})
+	writeJSON(w, 200, map[string]any{"user": u, "token": tok})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		_ = s.store.DeleteSession(r.Context(), util.HashToken(c.Value))
+	}
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		_ = s.store.DeleteSession(r.Context(), util.HashToken(strings.TrimPrefix(h, "Bearer ")))
+	}
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	teams, err := s.store.TeamsForUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"user": u, "teams": teams})
+}
+
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Current string `json:"current"`
+		New     string `json:"new"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	u := currentUser(r)
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Current)) != nil {
+		writeError(w, 400, "current password is wrong")
+		return
+	}
+	if len(in.New) < 8 {
+		writeError(w, 400, "password must be at least 8 characters")
+		return
+	}
+	hash, _ := bcrypt.GenerateFromPassword([]byte(in.New), bcrypt.DefaultCost)
+	if err := s.store.UpdatePassword(r.Context(), u.ID, string(hash)); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
+	toks, err := s.store.ListAPITokens(r.Context(), currentUser(r).ID)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, toks)
+}
+
+func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &in); err != nil || strings.TrimSpace(in.Name) == "" {
+		writeError(w, 400, "name required")
+		return
+	}
+	tok := "paas_" + util.RandomToken(24)
+	t, err := s.store.CreateAPIToken(r.Context(), currentUser(r).ID, in.Name, util.HashToken(tok))
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, map[string]any{"token": tok, "info": t})
+}
+
+func (s *Server) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeleteAPIToken(r.Context(), currentUser(r).ID, r.PathValue("id")); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "deleted"})
+}
+
+// Teams.
+
+func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
+	teams, err := s.store.TeamsForUser(r.Context(), currentUser(r).ID)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, teams)
+}
+
+func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &in); err != nil || strings.TrimSpace(in.Name) == "" {
+		writeError(w, 400, "name required")
+		return
+	}
+	t, err := s.store.CreateTeam(r.Context(), in.Name, util.Slugify(in.Name)+"-"+util.RandomToken(2), currentUser(r).ID, false)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, t)
+}
+
+func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
+	team := r.PathValue("team")
+	if !s.requireTeam(w, r, team, "viewer") {
+		return
+	}
+	m, err := s.store.TeamMembers(r.Context(), team)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, m)
+}
+
+// handleAddMember adds an existing user, or creates an account with a temporary password.
+func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
+	team := r.PathValue("team")
+	if !s.requireTeam(w, r, team, "admin") {
+		return
+	}
+	var in struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if _, ok := roleRank[in.Role]; !ok || in.Role == "owner" {
+		writeError(w, 400, "role must be admin, developer or viewer")
+		return
+	}
+	resp := map[string]any{}
+	u, err := s.store.UserByEmail(r.Context(), in.Email)
+	if errors.Is(err, store.ErrNotFound) {
+		if _, perr := mail.ParseAddress(in.Email); perr != nil {
+			writeError(w, 400, "invalid email")
+			return
+		}
+		pass := util.RandomPassword(16)
+		u, err = s.createUser(r, credentialsInput{Email: in.Email, Password: pass}, false)
+		resp["temporary_password"] = pass
+	}
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if err := s.store.AddMember(r.Context(), team, u.ID, in.Role); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	resp["user"] = u
+	writeJSON(w, 201, resp)
+}
+
+func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
+	team := r.PathValue("team")
+	if !s.requireTeam(w, r, team, "admin") {
+		return
+	}
+	if r.PathValue("user") == currentUser(r).ID {
+		writeError(w, 400, "you cannot remove yourself")
+		return
+	}
+	if err := s.store.RemoveMember(r.Context(), team, r.PathValue("user")); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "removed"})
+}

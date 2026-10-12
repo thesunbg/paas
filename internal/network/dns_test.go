@@ -13,7 +13,9 @@ type fakeWriter struct {
 }
 
 func (f *fakeWriter) WriteMsg(m *dns.Msg) error { f.msg = m; return nil }
-func (f *fakeWriter) RemoteAddr() net.Addr      { return &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 5000} }
+func (f *fakeWriter) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 5000}
+}
 
 func TestInternalLookup(t *testing.T) {
 	s := NewDNSServer()

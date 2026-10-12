@@ -21,12 +21,12 @@ const DefaultPort = 8080
 
 // Plan is the result of inspecting a repository.
 type Plan struct {
-	Language   string // node | go | python | php | ruby | rust | java | deno | static | dockerfile
-	Framework  string
-	Static     bool   // build output is a static site served by the proxy
-	Dockerfile string // generated Dockerfile content; empty when UserDockerfile is set
+	Language       string // node | go | python | php | ruby | rust | java | deno | static | dockerfile
+	Framework      string
+	Static         bool   // build output is a static site served by the proxy
+	Dockerfile     string // generated Dockerfile content; empty when UserDockerfile is set
 	UserDockerfile string // path (relative to root) of the repository's own Dockerfile
-	Port       int
+	Port           int
 }
 
 // Summary is a short human-readable description, e.g. "node/next".
@@ -43,9 +43,9 @@ func (p *Plan) Summary() string {
 
 // Options influence detection.
 type Options struct {
-	ServiceType string // web | worker | static
-	Build       model.BuildConfig
-	Dockerfile  string // explicit Dockerfile path
+	ServiceType  string // web | worker | static
+	Build        model.BuildConfig
+	Dockerfile   string // explicit Dockerfile path
 	BuildEnvKeys []string
 }
 
@@ -358,7 +358,7 @@ func (d *detector) golang() (*Plan, error) {
 		build = fmt.Sprintf(`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /paas-bin/app %s`, pkg)
 	}
 	start := d.opt.Build.StartCmd
-	cmd := `CMD ["/app"]`
+	cmd := `CMD ["/app/server"]`
 	if start != "" {
 		cmd = fmt.Sprintf(`CMD ["sh", "-c", %s]`, strconv.Quote(start))
 	}
@@ -374,7 +374,7 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifica
 COPY --from=build /usr/local/go/lib/time/zoneinfo.zip /usr/local/share/zoneinfo.zip
 ENV ZONEINFO=/usr/local/share/zoneinfo.zip
 WORKDIR /app
-COPY --from=build /paas-bin/app /app
+COPY --from=build /paas-bin/app /app/server
 COPY --from=build /src /src-assets
 ENV PORT=%d
 EXPOSE %d

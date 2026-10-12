@@ -32,13 +32,14 @@ func DeployLogSubject(deploymentID string) string {
 
 // Agent commands.
 const (
-	CmdRun     = "run"
-	CmdStop    = "stop"
-	CmdBuild   = "build"
-	CmdExec    = "exec"
-	CmdLogs    = "logs"
-	CmdImageGC = "imagegc"
+	CmdRun         = "run"
+	CmdStop        = "stop"
+	CmdBuild       = "build"
+	CmdExec        = "exec"
+	CmdLogs        = "logs"
+	CmdImageGC     = "imagegc"
 	CmdRemoveFiles = "rmfiles"
+	CmdStats       = "stats"
 )
 
 type RegisterRequest struct {
@@ -53,8 +54,10 @@ type RegisterRequest struct {
 }
 
 type RegisterReply struct {
-	NodeID string `json:"node_id"`
-	Error  string `json:"error,omitempty"`
+	NodeID         string `json:"node_id"`
+	SharedNetIndex int    `json:"shared_net_index"`
+	AllowLocalGit  bool   `json:"allow_local_git"`
+	Error          string `json:"error,omitempty"`
 }
 
 type NodeUsage struct {
@@ -179,8 +182,8 @@ type LogsReply struct {
 }
 
 type ImageGCRequest struct {
-	Keep []string `json:"keep"` // images still referenced
-	Prefix string `json:"prefix"`
+	Keep   []string `json:"keep"` // images still referenced
+	Prefix string   `json:"prefix"`
 }
 
 type RemoveFilesRequest struct {
@@ -188,7 +191,7 @@ type RemoveFilesRequest struct {
 }
 
 type ProxyStats struct {
-	ProxyID string                  `json:"proxy_id"`
+	ProxyID string                 `json:"proxy_id"`
 	Hits    map[string]ServiceHits `json:"hits"` // service id -> hits
 }
 

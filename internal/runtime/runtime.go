@@ -53,6 +53,7 @@ type Runtime struct {
 	ociBinary string // crun | runc
 	net       *network.Manager
 	cgroupV2  bool
+	negOOM    bool // kernel lets us lower oom_score_adj (protect databases)
 
 	mu         sync.Mutex
 	containers map[string]*managed
@@ -98,6 +99,7 @@ func New(ctx context.Context, sock, ns, dataDir, ociRuntime string, nm *network.
 		ociBinary:  ociRuntime,
 		net:        nm,
 		cgroupV2:   statErr == nil,
+		negOOM:     canLowerOOMScore(),
 		containers: map[string]*managed{},
 	}
 	for _, d := range []string{"containers", "volumes", "netns"} {
@@ -112,7 +114,9 @@ func (r *Runtime) Close() error { return r.client.Close() }
 
 func (r *Runtime) Client() *client.Client { return r.client }
 
-func (r *Runtime) ctx(ctx context.Context) context.Context { return namespaces.WithNamespace(ctx, r.ns) }
+func (r *Runtime) ctx(ctx context.Context) context.Context {
+	return namespaces.WithNamespace(ctx, r.ns)
+}
 
 // Capabilities reports optional runtime features of this node.
 func (r *Runtime) Capabilities() map[string]string {
@@ -279,7 +283,7 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 		oci.WithNoNewPrivileges,
 		oci.WithPidsLimit(4096),
 		seccomp.WithDefaultProfile(),
-		withResources(req.Resources, req.QoS, r.cgroupV2),
+		withResources(req.Resources, req.QoS, r.cgroupV2, r.negOOM),
 	}
 	if len(req.Command) > 0 {
 		specOpts = append(specOpts, withCommand(img, req.Command))
@@ -315,7 +319,7 @@ func withCommand(img client.Image, cmd []string) oci.SpecOpts {
 }
 
 // withResources applies memory/CPU limits and the QoS policy to the OCI spec.
-func withResources(res model.Resources, qos string, cgroupV2 bool) oci.SpecOpts {
+func withResources(res model.Resources, qos string, cgroupV2, negOOM bool) oci.SpecOpts {
 	return func(ctx context.Context, c oci.Client, ctr *containers.Container, s *oci.Spec) error {
 		if s.Linux == nil {
 			s.Linux = &specs.Linux{}
@@ -365,12 +369,28 @@ func withResources(res model.Resources, qos string, cgroupV2 bool) oci.SpecOpts 
 		switch qos {
 		case model.QoSGuaranteed:
 			adj = -900
+			if !negOOM {
+				adj = 0
+			}
 		case model.QoSBestEffort:
 			adj = 1000
 		}
 		s.Process.OOMScoreAdj = &adj
 		return nil
 	}
+}
+
+// canLowerOOMScore reports whether negative oom_score_adj values are permitted here.
+func canLowerOOMScore() bool {
+	cur, err := os.ReadFile("/proc/self/oom_score_adj")
+	if err != nil {
+		return false
+	}
+	if err := os.WriteFile("/proc/self/oom_score_adj", []byte("-1"), 0o644); err != nil {
+		return false
+	}
+	_ = os.WriteFile("/proc/self/oom_score_adj", cur, 0o644)
+	return true
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -396,7 +416,9 @@ func (r *Runtime) startTask(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("create task: %w", err)
 	}
-	exitCh, err := task.Wait(ctx)
+	// Wait must outlive the caller's request context, otherwise cancelling it
+	// reports a bogus exit (code 255) and triggers a restart.
+	exitCh, err := task.Wait(r.ctx(context.Background()))
 	if err != nil {
 		_, _ = task.Delete(ctx)
 		return err
@@ -574,7 +596,7 @@ func (r *Runtime) Stop(ctx context.Context, id string, grace time.Duration) erro
 	if grace <= 0 {
 		grace = 10 * time.Second
 	}
-	exitCh, err := task.Wait(ctx)
+	exitCh, err := task.Wait(r.ctx(context.Background()))
 	if err == nil {
 		_ = task.Kill(ctx, syscall.SIGTERM)
 		select {
@@ -648,7 +670,7 @@ func (r *Runtime) Recover(ctx context.Context) {
 		if task, err := ctr.Task(cctx, nil); err == nil {
 			if st, err := task.Status(cctx); err == nil && st.Status == client.Running {
 				running = true
-				exitCh, err := task.Wait(cctx)
+				exitCh, err := task.Wait(r.ctx(context.Background()))
 				if err == nil {
 					wctx, cancel := context.WithCancel(context.Background())
 					r.mu.Lock()
