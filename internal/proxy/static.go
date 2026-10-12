@@ -28,8 +28,8 @@ func compressible(contentType string) bool {
 	return false
 }
 
-// serveStatic serves a file from root with SPA fallback, caching and compression.
-func serveStatic(w http.ResponseWriter, r *http.Request, root string, spa bool) {
+// ServeStatic serves a file from root with SPA fallback, caching and compression.
+func ServeStatic(w http.ResponseWriter, r *http.Request, root string, spa bool) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		errorPage(w, http.StatusMethodNotAllowed, "Method not allowed", "")

@@ -2,8 +2,10 @@ package network
 
 import (
 	"net"
+	"strings"
 	"testing"
 
+	gocni "github.com/containerd/go-cni"
 	"github.com/miekg/dns"
 )
 
@@ -36,12 +38,41 @@ func TestInternalLookup(t *testing.T) {
 	}
 }
 
-func TestSubnet(t *testing.T) {
-	m := &Manager{base: [2]int{10, 200}}
-	if s, g := m.Subnet(3); s != "10.200.3.0/24" || g != "10.200.3.1" {
+func TestAddressPlan(t *testing.T) {
+	base := [2]int{10, 100}
+	if s, g := subnetFor(base, 1, 3); s != "10.101.0.192/26" || g != "10.101.0.193" {
 		t.Fatal(s, g)
 	}
-	if s, _ := m.Subnet(300); s != "10.201.44.0/24" {
+	if s, _ := subnetFor(base, 2, 300); s != "10.102.75.0/26" {
 		t.Fatal(s)
+	}
+	if NodeMeshIP(base, 7) != "10.107.255.254" || NodeCIDR(base, 7) != "10.107.0.0/16" {
+		t.Fatal("mesh address plan")
+	}
+	// The infrastructure slot never collides with a project subnet.
+	if s, _ := subnetFor(base, 1, MaxProjects-1); !strings.HasPrefix(s, "10.101.255.128") {
+		t.Fatal(s)
+	}
+	if _, err := ParseBase("10.10"); err != nil {
+		t.Fatal(err)
+	}
+	if MaxNodes([2]int{10, 100}) != 155 || MaxNodes([2]int{10, 0}) != 250 {
+		t.Fatal("max nodes")
+	}
+}
+
+func TestRulesetIsolation(t *testing.T) {
+	m := &Manager{base: [2]int{10, 100}, node: 1, shared: 1, networks: map[int]gocni.CNI{1: nil, 2: nil}}
+	r := m.Ruleset()
+	for _, want := range []string{
+		`oifname "pn1" ip saddr @cluster accept`,
+		`oifname "pn2" ip saddr & 0.0.255.192 == 0.0.0.128 ip saddr @cluster accept`,
+		`oifname "pn2" ip saddr @cluster drop`,
+		`iifname "pn*" oifname "paaswg0" drop`,
+		`masquerade`,
+	} {
+		if !strings.Contains(r, want) {
+			t.Errorf("ruleset missing %q:\n%s", want, r)
+		}
 	}
 }

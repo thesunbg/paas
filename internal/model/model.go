@@ -120,7 +120,9 @@ type Route struct {
 	Kind       string   `json:"kind"` // upstream | static | sleeping | dashboard | unavailable
 	Upstreams  []string `json:"upstreams,omitempty"`
 	StaticRoot string   `json:"static_root,omitempty"`
-	SPA        bool     `json:"spa,omitempty"`
+	// StaticOrigin serves StaticRoot over the mesh for proxies on other nodes.
+	StaticOrigin string `json:"static_origin,omitempty"`
+	SPA          bool   `json:"spa,omitempty"`
 }
 
 type RouteTable struct {

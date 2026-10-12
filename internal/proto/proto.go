@@ -18,6 +18,8 @@ const (
 	SubjWake       = "paas.proxy.wake"       // proxy -> server (request/reply)
 	SubjDNS        = "paas.dns"              // server -> agents (full table)
 	SubjDNSGet     = "paas.dns.get"
+	SubjMesh       = "paas.mesh" // server -> agents (WireGuard peers)
+	SubjMeshGet    = "paas.mesh.get"
 )
 
 // AgentSubject returns the subject an agent listens on for a command.
@@ -40,6 +42,7 @@ const (
 	CmdImageGC     = "imagegc"
 	CmdRemoveFiles = "rmfiles"
 	CmdStats       = "stats"
+	CmdPush        = "push"
 )
 
 type RegisterRequest struct {
@@ -51,10 +54,14 @@ type RegisterRequest struct {
 	MemoryMB     int               `json:"memory_mb"`
 	Capabilities map[string]string `json:"capabilities"`
 	Version      string            `json:"version"`
+	WGPublicKey  string            `json:"wg_public_key"`
+	WGPort       int               `json:"wg_port"`
 }
 
 type RegisterReply struct {
 	NodeID         string `json:"node_id"`
+	NodeIndex      int    `json:"node_index"`
+	ClusterBase    string `json:"cluster_base"` // first two octets, e.g. "10.100"
 	SharedNetIndex int    `json:"shared_net_index"`
 	AllowLocalGit  bool   `json:"allow_local_git"`
 	Error          string `json:"error,omitempty"`
@@ -91,22 +98,23 @@ type Heartbeat struct {
 }
 
 type RunRequest struct {
-	InstanceID   string            `json:"instance_id"`
-	ServiceID    string            `json:"service_id"`
-	ContainerID  string            `json:"container_id"`
-	NetIndex     int               `json:"net_index"`
-	Hostname     string            `json:"hostname"`
-	Image        string            `json:"image"`
-	PullImage    bool              `json:"pull_image"`
-	Env          map[string]string `json:"env"`
-	Command      []string          `json:"command,omitempty"`
-	Port         int               `json:"port"`
-	Resources    model.Resources   `json:"resources"`
-	QoS          string            `json:"qos"`
-	RuntimeClass string            `json:"runtime_class"`
-	Volumes      []model.Volume    `json:"volumes,omitempty"`
-	HealthCheck  model.HealthCheck `json:"health_check"`
-	LogSubject   string            `json:"log_subject,omitempty"`
+	InstanceID        string            `json:"instance_id"`
+	ServiceID         string            `json:"service_id"`
+	ContainerID       string            `json:"container_id"`
+	NetIndex          int               `json:"net_index"`
+	Hostname          string            `json:"hostname"`
+	Image             string            `json:"image"`
+	PullImage         bool              `json:"pull_image"`
+	Env               map[string]string `json:"env"`
+	Command           []string          `json:"command,omitempty"`
+	Port              int               `json:"port"`
+	Resources         model.Resources   `json:"resources"`
+	QoS               string            `json:"qos"`
+	RuntimeClass      string            `json:"runtime_class"`
+	Volumes           []model.Volume    `json:"volumes,omitempty"`
+	HealthCheck       model.HealthCheck `json:"health_check"`
+	LogSubject        string            `json:"log_subject,omitempty"`
+	PlainHTTPRegistry string            `json:"plain_http_registry,omitempty"` // internal registry host:port
 }
 
 type RunReply struct {
@@ -208,4 +216,23 @@ type WakeRequest struct {
 type WakeReply struct {
 	Upstreams []string `json:"upstreams"`
 	Error     string   `json:"error,omitempty"`
+}
+
+// MeshPeer is one node in the WireGuard mesh.
+type MeshPeer struct {
+	NodeID    string `json:"node_id"`
+	NodeIndex int    `json:"node_index"`
+	PublicKey string `json:"public_key"`
+	Endpoint  string `json:"endpoint"` // host:port
+}
+
+type MeshTable struct {
+	Peers []MeshPeer `json:"peers"`
+}
+
+// PushRequest asks a build node to copy a local image to the internal registry.
+type PushRequest struct {
+	Image    string `json:"image"`
+	Target   string `json:"target"` // registry reference
+	Insecure bool   `json:"insecure"`
 }

@@ -45,7 +45,7 @@ func (s *Server) QueueDeployment(ctx context.Context, svc *store.Service, trigge
 }
 
 func (s *Server) deployWorker(ctx context.Context) {
-	sem := make(chan struct{}, 4) // concurrent deployments across services
+	sem := make(chan struct{}, 8) // concurrent deployments across services
 	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
 	for {
@@ -196,6 +196,7 @@ func (s *Server) buildDeployment(ctx context.Context, svc *store.Service, d *sto
 		return err
 	}
 	_ = s.store.UpdateDeploymentBuild(ctx, d.ID, node.ID)
+	d.BuildNodeID = &node.ID
 	token, err := s.box.Decrypt(svc.GitTokenEnc)
 	if err != nil {
 		return fmt.Errorf("decrypt git token: %w", err)
@@ -335,11 +336,6 @@ func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *st
 	if err != nil {
 		return nil, err
 	}
-	if len(svc.Spec.Volumes) > 0 && svc.NodeID == nil {
-		// Stateful services are pinned to the node that holds their volume.
-		_ = s.store.SetServiceNode(ctx, svc.ID, &node.ID)
-		svc.NodeID = &node.ID
-	}
 	env, err := s.runtimeEnv(ctx, svc, proj)
 	if err != nil {
 		return nil, err
@@ -355,9 +351,14 @@ func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *st
 	if logID != "" {
 		s.hub.Log(logID, fmt.Sprintf("==> starting instance %s on %s (%d MB, %s)", containerID, node.Name, svc.Spec.Resources.MemoryLimitMB, svc.Spec.QoS))
 	}
+	image, plainRegistry, err := s.imageFor(ctx, d, node, logID)
+	if err != nil {
+		_ = s.store.DeleteInstance(ctx, inst.ID)
+		return nil, err
+	}
 	req := proto.RunRequest{
 		InstanceID: inst.ID, ServiceID: svc.ID, ContainerID: containerID, NetIndex: proj.NetIndex,
-		Hostname: svc.Slug, Image: d.Image, PullImage: !strings.HasPrefix(d.Image, "paas.local/"),
+		Hostname: svc.Slug, Image: image, PullImage: !strings.HasPrefix(image, "paas.local/"), PlainHTTPRegistry: plainRegistry,
 		Env: env, Command: svc.Spec.Command, Port: svc.Spec.Port, Resources: svc.Spec.Resources,
 		QoS: svc.Spec.QoS, RuntimeClass: svc.Spec.RuntimeClass, Volumes: svc.Spec.Volumes, HealthCheck: svc.Spec.HealthCheck,
 	}
@@ -375,6 +376,11 @@ func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *st
 	}
 	if err := s.store.SetInstanceRunning(ctx, inst.ID, rep.IP); err != nil {
 		return nil, err
+	}
+	if len(svc.Spec.Volumes) > 0 && svc.NodeID == nil {
+		// Stateful services stay on the node that now holds their volume.
+		_ = s.store.SetServiceNode(ctx, svc.ID, &node.ID)
+		svc.NodeID = &node.ID
 	}
 	inst.IP, inst.Status = rep.IP, model.InstRunning
 	if logID != "" {
@@ -470,7 +476,9 @@ func (s *Server) redeploy(ctx context.Context, svc *store.Service, from *store.D
 	if err != nil {
 		return nil, err
 	}
-	_, _ = s.store.DB.Exec(ctx, `UPDATE deployments SET detected=$2 WHERE id=$1`, d.ID, from.Detected)
+	// Keep where the artifact lives so other nodes can still fetch it from the internal registry.
+	_, _ = s.store.DB.Exec(ctx, `UPDATE deployments SET detected=$2, build_node_id=$3, pushed_image=$4 WHERE id=$1`,
+		d.ID, from.Detected, from.BuildNodeID, from.PushedImage)
 	s.hub.Log(d.ID, fmt.Sprintf("==> %s of deployment %s", trigger, util.ShortID(from.ID)))
 	kickDeploys()
 	return d, nil

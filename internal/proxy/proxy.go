@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -286,7 +288,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		p.dashboard.ServeHTTP(sw, r)
 	case "static":
-		serveStatic(sw, r, e.route.StaticRoot, e.route.SPA)
+		p.serveStaticRoute(sw, r, e)
 	case "upstream":
 		p.forward(sw, r, e.route.Upstreams, e)
 	case "sleeping":
@@ -416,3 +418,37 @@ func (b *bufferedErrWriter) Flush() {
 }
 
 func (b *bufferedErrWriter) Unwrap() http.ResponseWriter { return b.ResponseWriter }
+
+// serveStaticRoute serves from local disk when the build output lives on this
+// node, otherwise from the build node's static origin over the mesh.
+func (p *Proxy) serveStaticRoute(w http.ResponseWriter, r *http.Request, e *entry) {
+	root := e.route.StaticRoot
+	if _, err := os.Stat(root); err == nil || e.route.StaticOrigin == "" {
+		ServeStatic(w, r, root, e.route.SPA)
+		return
+	}
+	dep := filepath.Base(root)
+	svc := filepath.Base(filepath.Dir(root))
+	target, err := url.Parse(e.route.StaticOrigin)
+	if err != nil {
+		errorPage(w, http.StatusBadGateway, "Static origin misconfigured", "")
+		return
+	}
+	rp := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.URL.Path = "/" + svc + "/" + dep + pr.In.URL.Path
+			q := pr.Out.URL.Query()
+			if e.route.SPA {
+				q.Set("spa", "1")
+			}
+			pr.Out.URL.RawQuery = q.Encode()
+			pr.Out.Host = r.Host
+		},
+		Transport: p.transport,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			errorPage(w, http.StatusBadGateway, "Static site unavailable", "The node holding this build is unreachable.")
+		},
+	}
+	rp.ServeHTTP(w, r)
+}

@@ -89,6 +89,9 @@ func (s *Server) excludedNodes(serviceID string) map[string]bool {
 	defer s.evictMu.Unlock()
 	out := map[string]bool{}
 	for k, t := range s.evictedOn {
+		if strings.HasPrefix(k, "failing/") {
+			continue
+		}
 		if time.Since(t) > 5*time.Minute {
 			delete(s.evictedOn, k)
 			continue
@@ -174,7 +177,16 @@ func (s *Server) reconcileService(ctx context.Context, serviceID string) {
 			// Leftover from an interrupted rollout.
 			s.stopInstance(ctx, &in, 10)
 			changed = true
+		case current && in.Status == model.InstFailed && s.failingFor(in.ID) > 90*time.Second:
+			// Crash-looping for too long: replace it (possibly on another node).
+			slog.Warn("replacing crash-looping instance", "container", in.ContainerID, "restarts", in.Restarts)
+			s.stopInstance(ctx, &in, 2)
+			s.clearFailing(in.ID)
+			changed = true
 		case current && (in.Status == model.InstRunning || in.Status == model.InstFailed || in.Status == model.InstStarting):
+			if in.Status != model.InstFailed {
+				s.clearFailing(in.ID)
+			}
 			healthy = append(healthy, in)
 		}
 	}
@@ -353,4 +365,23 @@ func (s *Server) firstInstance(ctx context.Context, serviceID string) (*store.In
 		}
 	}
 	return nil, errNoInstance
+}
+
+// failingFor tracks how long an instance has been reported as failed.
+func (s *Server) failingFor(instanceID string) time.Duration {
+	s.evictMu.Lock()
+	defer s.evictMu.Unlock()
+	key := "failing/" + instanceID
+	t, ok := s.evictedOn[key]
+	if !ok {
+		s.evictedOn[key] = time.Now()
+		return 0
+	}
+	return time.Since(t)
+}
+
+func (s *Server) clearFailing(instanceID string) {
+	s.evictMu.Lock()
+	delete(s.evictedOn, "failing/"+instanceID)
+	s.evictMu.Unlock()
 }

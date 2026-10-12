@@ -42,7 +42,13 @@ func (s *Server) routeTable(ctx context.Context) (*model.RouteTable, error) {
 		}
 		upstreams[in.ServiceID] = append(upstreams[in.ServiceID], net.JoinHostPort(in.IP, strconv.Itoa(in.Port)))
 	}
+	nodes, _ := s.store.Nodes(ctx)
+	nodeByID := map[string]*store.Node{}
+	for i := range nodes {
+		nodeByID[nodes[i].ID] = &nodes[i]
+	}
 	staticPaths := map[string]string{}
+	staticOrigins := map[string]string{}
 	for _, svc := range services {
 		if svc.CurrentDeploymentID == nil {
 			continue
@@ -51,6 +57,11 @@ func (s *Server) routeTable(ctx context.Context) (*model.RouteTable, error) {
 			d, err := s.store.DeploymentByID(ctx, *svc.CurrentDeploymentID)
 			if err == nil && d.StaticPath != "" {
 				staticPaths[svc.ID] = d.StaticPath
+				if d.BuildNodeID != nil {
+					if addr := s.nodeMeshAddr(nodeByID[*d.BuildNodeID], StaticOriginPort); addr != "" {
+						staticOrigins[svc.ID] = "http://" + addr
+					}
+				}
 			}
 		}
 	}
@@ -73,6 +84,7 @@ func (s *Server) routeTable(ctx context.Context) (*model.RouteTable, error) {
 		case staticPaths[svc.ID] != "":
 			r.Kind = "static"
 			r.StaticRoot = staticPaths[svc.ID]
+			r.StaticOrigin = staticOrigins[svc.ID]
 			r.SPA = svc.Spec.SPA || svc.Type == model.TypeStatic
 		case svc.Status == model.StatusSleeping:
 			r.Kind = "sleeping"

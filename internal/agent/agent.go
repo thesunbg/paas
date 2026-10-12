@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +25,7 @@ import (
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/network"
 	"github.com/thesunbg/paas/internal/proto"
+	"github.com/thesunbg/paas/internal/proxy"
 	rt "github.com/thesunbg/paas/internal/runtime"
 )
 
@@ -35,6 +38,9 @@ type Agent struct {
 	net     *network.Manager
 	builder *build.Builder
 	nodeID  string
+	mesh    *network.Mesh
+	base    [2]int
+	index   int
 
 	cpuMu       sync.Mutex
 	lastCPU     [2]uint64
@@ -61,6 +67,15 @@ func New(ctx context.Context, cfg config.Agent, nc *nats.Conn) (*Agent, error) {
 		}
 	}
 	a := &Agent{cfg: cfg, nc: nc, rt: r, net: nm}
+	if cfg.Mesh {
+		m, err := network.NewMesh(cfg.DataDir, cfg.WGPort)
+		if err != nil {
+			slog.Warn("wireguard mesh disabled", "err", err)
+		} else {
+			a.mesh = m
+			nm.Mesh = m
+		}
+	}
 	if slices.Contains(cfg.Roles, "build") {
 		a.builder = build.New(cfg.BuildkitAddr, cfg.DataDir, 2)
 	}
@@ -72,6 +87,29 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.register(ctx); err != nil {
 		return err
 	}
+	if a.mesh != nil {
+		if err := a.mesh.Up(a.base, a.index); err != nil {
+			slog.Warn("wireguard mesh unavailable; containers on other nodes will be unreachable", "err", err)
+			a.mesh = nil
+		} else {
+			sub, err := a.nc.Subscribe(proto.SubjMesh, func(m *nats.Msg) { a.applyMesh(m.Data) })
+			if err != nil {
+				return err
+			}
+			defer sub.Unsubscribe()
+			if msg, err := a.nc.Request(proto.SubjMeshGet, nil, 5*time.Second); err == nil {
+				a.applyMesh(msg.Data)
+			}
+			defer a.mesh.Close()
+		}
+	}
+	if err := a.net.SyncFirewall(); err != nil {
+		slog.Warn("firewall", "err", err)
+	}
+	if a.builder != nil {
+		go a.serveStaticOrigin(ctx)
+	}
+	a.rt.OnChange = func() { a.heartbeat(context.Background()) }
 	a.rt.Recover(ctx)
 
 	subs := []struct {
@@ -87,6 +125,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return bus.Handle(nc, s, a.handleRemoveFiles)
 		}},
 		{proto.CmdBuild, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleBuild) }},
+		{proto.CmdPush, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handlePush) }},
 	}
 	for _, s := range subs {
 		if s.cmd == proto.CmdBuild && a.builder == nil {
@@ -128,6 +167,9 @@ func (a *Agent) register(ctx context.Context) error {
 		Token: a.cfg.ClusterToken, Name: a.cfg.NodeName, Address: a.cfg.NodeAddress, Roles: a.cfg.Roles,
 		CPUCores: runtime.NumCPU(), MemoryMB: memTotalMB(), Capabilities: a.rt.Capabilities(), Version: Version,
 	}
+	if a.mesh != nil {
+		req.WGPublicKey, req.WGPort = a.mesh.PublicKey(), a.mesh.Port()
+	}
 	for attempt := 0; ; attempt++ {
 		var rep proto.RegisterReply
 		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -135,7 +177,12 @@ func (a *Agent) register(ctx context.Context) error {
 		cancel()
 		if err == nil && rep.Error == "" {
 			a.nodeID = rep.NodeID
-			a.net.SetShared(rep.SharedNetIndex)
+			base, berr := network.ParseBase(firstNonEmpty(rep.ClusterBase, a.cfg.SubnetPrefix))
+			if berr != nil {
+				return berr
+			}
+			a.base, a.index = base, max(rep.NodeIndex, 1)
+			a.net.Configure(base, a.index, rep.SharedNetIndex)
 			if a.builder != nil {
 				a.builder.AllowLocalGit = rep.AllowLocalGit
 			}
@@ -363,4 +410,65 @@ func (a *Agent) checkMemoryPressure(ctx context.Context) {
 		slog.Error("evict", "id", victim, "err", err)
 	}
 	a.heartbeat(ctx)
+}
+
+func firstNonEmpty(v ...string) string {
+	for _, s := range v {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func (a *Agent) applyMesh(data []byte) {
+	if a.mesh == nil {
+		return
+	}
+	var t proto.MeshTable
+	if err := json.Unmarshal(data, &t); err != nil {
+		return
+	}
+	if err := a.mesh.SetPeers(t.Peers); err != nil {
+		slog.Warn("mesh peers", "err", err)
+	}
+}
+
+func (a *Agent) handlePush(ctx context.Context, req *proto.PushRequest) *proto.GenericReply {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	if err := a.rt.Push(ctx, req.Image, req.Target, req.Insecure); err != nil {
+		return &proto.GenericReply{Error: err.Error()}
+	}
+	return &proto.GenericReply{}
+}
+
+// serveStaticOrigin exposes static site outputs to edge proxies on other nodes, over the mesh only.
+func (a *Agent) serveStaticOrigin(ctx context.Context) {
+	if a.mesh == nil {
+		return
+	}
+	addr := net.JoinHostPort(network.NodeMeshIP(a.base, a.index), "7070")
+	root := filepath.Join(a.cfg.DataDir, "static")
+	srv := &http.Server{Addr: addr, ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Path: /<service>/<deployment>/<file...>
+		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 3)
+		if len(parts) < 2 {
+			http.NotFound(w, r)
+			return
+		}
+		site := filepath.Join(root, filepath.Base(parts[0]), filepath.Base(parts[1]))
+		rest := "/"
+		if len(parts) == 3 {
+			rest += parts[2]
+		}
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = rest
+		proxy.ServeStatic(w, r2, site, r.URL.Query().Get("spa") == "1")
+	})}
+	go func() { <-ctx.Done(); _ = srv.Close() }()
+	slog.Info("static origin listening", "addr", addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Warn("static origin", "err", err)
+	}
 }

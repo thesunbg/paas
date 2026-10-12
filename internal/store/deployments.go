@@ -19,6 +19,7 @@ type Deployment struct {
 	StaticPath    string     `json:"static_path"`
 	BuildNodeID   *string    `json:"build_node_id"`
 	Detected      string     `json:"detected"`
+	PushedImage   string     `json:"pushed_image"`
 	Error         string     `json:"error"`
 	CreatedBy     *string    `json:"created_by"`
 	CreatedAt     time.Time  `json:"created_at"`
@@ -26,12 +27,12 @@ type Deployment struct {
 	FinishedAt    *time.Time `json:"finished_at"`
 }
 
-const deploymentCols = `id, service_id, status, trigger, commit_sha, commit_message, branch, image, static_path, build_node_id, detected, error, created_by, created_at, started_at, finished_at`
+const deploymentCols = `id, service_id, status, trigger, commit_sha, commit_message, branch, image, static_path, build_node_id, detected, pushed_image, error, created_by, created_at, started_at, finished_at`
 
 func scanDeployment(row pgx.Row) (*Deployment, error) {
 	var d Deployment
 	err := row.Scan(&d.ID, &d.ServiceID, &d.Status, &d.Trigger, &d.CommitSHA, &d.CommitMessage, &d.Branch, &d.Image,
-		&d.StaticPath, &d.BuildNodeID, &d.Detected, &d.Error, &d.CreatedBy, &d.CreatedAt, &d.StartedAt, &d.FinishedAt)
+		&d.StaticPath, &d.BuildNodeID, &d.Detected, &d.PushedImage, &d.Error, &d.CreatedBy, &d.CreatedAt, &d.StartedAt, &d.FinishedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -151,4 +152,9 @@ func (s *Store) DeploymentLogs(ctx context.Context, deploymentID string, afterID
 		err := r.Scan(&l.ID, &l.TS, &l.Line)
 		return l, err
 	})
+}
+
+func (s *Store) SetDeploymentPushed(ctx context.Context, id, ref string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE deployments SET pushed_image=$2 WHERE id=$1`, id, ref)
+	return err
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,6 +25,9 @@ type Node struct {
 	Capabilities     map[string]string `json:"capabilities"`
 	Usage            proto.NodeUsage   `json:"usage"`
 	Version          string            `json:"version"`
+	NetIndex         *int              `json:"net_index"`
+	WGPublicKey      string            `json:"wg_public_key"`
+	WGPort           int               `json:"wg_port"`
 	LastSeenAt       time.Time         `json:"last_seen_at"`
 	CreatedAt        time.Time         `json:"created_at"`
 }
@@ -37,12 +41,12 @@ func (n *Node) HasRole(role string) bool {
 	return false
 }
 
-const nodeCols = `id, name, address, roles, labels, status, cpu_cores, memory_mb, reserved_mb, overcommit_memory, overcommit_cpu, capabilities, usage, version, last_seen_at, created_at`
+const nodeCols = `id, name, address, roles, labels, status, cpu_cores, memory_mb, reserved_mb, overcommit_memory, overcommit_cpu, capabilities, usage, version, net_index, wg_public_key, wg_port, last_seen_at, created_at`
 
 func scanNode(row pgx.Row) (*Node, error) {
 	var n Node
 	err := row.Scan(&n.ID, &n.Name, &n.Address, &n.Roles, &n.Labels, &n.Status, &n.CPUCores, &n.MemoryMB, &n.ReservedMB,
-		&n.OvercommitMemory, &n.OvercommitCPU, &n.Capabilities, &n.Usage, &n.Version, &n.LastSeenAt, &n.CreatedAt)
+		&n.OvercommitMemory, &n.OvercommitCPU, &n.Capabilities, &n.Usage, &n.Version, &n.NetIndex, &n.WGPublicKey, &n.WGPort, &n.LastSeenAt, &n.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -50,13 +54,33 @@ func scanNode(row pgx.Row) (*Node, error) {
 }
 
 // UpsertNode registers a node by name, keeping operator-set fields (status, overcommit) on re-registration.
-func (s *Store) UpsertNode(ctx context.Context, r *proto.RegisterRequest) (*Node, error) {
-	return scanNode(s.DB.QueryRow(ctx, `INSERT INTO nodes (name, address, roles, cpu_cores, memory_mb, capabilities, version, status, last_seen_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,'online',now())
+// It also allocates the node's network index (its slice of the cluster address space).
+func (s *Store) UpsertNode(ctx context.Context, r *proto.RegisterRequest, maxNodes int) (*Node, error) {
+	var n *Node
+	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+		var err error
+		n, err = scanNode(tx.QueryRow(ctx, `INSERT INTO nodes (name, address, roles, cpu_cores, memory_mb, capabilities, version, wg_public_key, wg_port, status, last_seen_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'online',now())
 		ON CONFLICT (name) DO UPDATE SET address=EXCLUDED.address, roles=EXCLUDED.roles, cpu_cores=EXCLUDED.cpu_cores,
-			memory_mb=EXCLUDED.memory_mb, capabilities=EXCLUDED.capabilities, version=EXCLUDED.version, last_seen_at=now(),
+			memory_mb=EXCLUDED.memory_mb, capabilities=EXCLUDED.capabilities, version=EXCLUDED.version,
+			wg_public_key=EXCLUDED.wg_public_key, wg_port=EXCLUDED.wg_port, last_seen_at=now(),
 			status = CASE WHEN nodes.status='cordoned' THEN 'cordoned' ELSE 'online' END
-		RETURNING `+nodeCols, r.Name, r.Address, r.Roles, r.CPUCores, r.MemoryMB, r.Capabilities, r.Version))
+		RETURNING `+nodeCols, r.Name, r.Address, r.Roles, r.CPUCores, r.MemoryMB, r.Capabilities, r.Version, r.WGPublicKey, r.WGPort))
+		if err != nil || n.NetIndex != nil {
+			return err
+		}
+		n, err = scanNode(tx.QueryRow(ctx, `UPDATE nodes SET net_index = (
+			SELECT min(i) FROM generate_series(1, $2::int) i WHERE i NOT IN (SELECT net_index FROM nodes WHERE net_index IS NOT NULL))
+			WHERE id=$1 RETURNING `+nodeCols, n.ID, maxNodes))
+		if err == nil && n.NetIndex == nil {
+			return fmt.Errorf("cluster is full: no free node network index")
+		}
+		return err
+	})
+	return n, err
 }
 
 func (s *Store) NodeByID(ctx context.Context, id string) (*Node, error) {

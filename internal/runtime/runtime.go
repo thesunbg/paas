@@ -25,6 +25,7 @@ import (
 	"github.com/containerd/containerd/v2/contrib/seccomp"
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes"
 	"github.com/containerd/containerd/v2/core/remotes/docker"
 	dockerconfig "github.com/containerd/containerd/v2/core/remotes/docker/config"
 	"github.com/containerd/containerd/v2/pkg/cio"
@@ -57,6 +58,15 @@ type Runtime struct {
 
 	mu         sync.Mutex
 	containers map[string]*managed
+
+	// OnChange is called when a container exits or comes back (for prompt status reports).
+	OnChange func()
+}
+
+func (r *Runtime) changed() {
+	if r.OnChange != nil {
+		go r.OnChange()
+	}
 }
 
 type managed struct {
@@ -144,7 +154,8 @@ func (r *Runtime) saveState(id string, m *managed) {
 }
 
 // EnsureImage makes sure an image exists locally, pulling it when allowed.
-func (r *Runtime) EnsureImage(ctx context.Context, ref string, pull bool) (client.Image, error) {
+// plainHost names a registry (host:port) reached over plain HTTP (the internal registry).
+func (r *Runtime) EnsureImage(ctx context.Context, ref string, pull bool, plainHost string) (client.Image, error) {
 	ctx = r.ctx(ctx)
 	img, err := r.client.GetImage(ctx, ref)
 	if err == nil {
@@ -153,11 +164,39 @@ func (r *Runtime) EnsureImage(ctx context.Context, ref string, pull bool) (clien
 	if !errdefs.IsNotFound(err) || !pull {
 		return nil, fmt.Errorf("image %s: %w", ref, err)
 	}
-	resolver := docker.NewResolver(docker.ResolverOptions{
+	slog.Info("pulling image", "ref", ref)
+	return r.client.Pull(ctx, ref, client.WithPullUnpack, client.WithResolver(r.resolver(ctx, plainHost)))
+}
+
+func (r *Runtime) resolver(ctx context.Context, plainHost string) remotes.Resolver {
+	if plainHost != "" && !strings.Contains(plainHost, "/") {
+		return docker.NewResolver(docker.ResolverOptions{
+			Hosts: func(host string) ([]docker.RegistryHost, error) {
+				if host == plainHost {
+					return docker.ConfigureDefaultRegistries(docker.WithPlainHTTP(docker.MatchAllHosts))(host)
+				}
+				return dockerconfig.ConfigureHosts(ctx, dockerconfig.HostOptions{HostDir: dockerconfig.HostDirFromRoot("/etc/containerd/certs.d")})(host)
+			},
+		})
+	}
+	return docker.NewResolver(docker.ResolverOptions{
 		Hosts: dockerconfig.ConfigureHosts(ctx, dockerconfig.HostOptions{HostDir: dockerconfig.HostDirFromRoot("/etc/containerd/certs.d")}),
 	})
-	slog.Info("pulling image", "ref", ref)
-	return r.client.Pull(ctx, ref, client.WithPullUnpack, client.WithResolver(resolver))
+}
+
+// Push copies a local image to a registry reference.
+func (r *Runtime) Push(ctx context.Context, src, target string, insecure bool) error {
+	ctx = r.ctx(ctx)
+	img, err := r.client.GetImage(ctx, src)
+	if err != nil {
+		return fmt.Errorf("image %s: %w", src, err)
+	}
+	plain := ""
+	if insecure {
+		plain = strings.SplitN(target, "/", 2)[0]
+	}
+	slog.Info("pushing image", "src", src, "target", target)
+	return r.client.Push(ctx, target, img.Target(), client.WithResolver(r.resolver(ctx, plain)))
 }
 
 // NormalizeRef expands short image names (postgres:16) to fully-qualified references.
@@ -183,7 +222,7 @@ func (r *Runtime) Run(ctx context.Context, req proto.RunRequest) (string, error)
 	if id == "" {
 		return "", errors.New("container id required")
 	}
-	img, err := r.EnsureImage(ctx, req.Image, req.PullImage)
+	img, err := r.EnsureImage(ctx, req.Image, req.PullImage, req.PlainHTTPRegistry)
 	if err != nil {
 		return "", err
 	}
@@ -468,7 +507,8 @@ func (r *Runtime) watch(ctx context.Context, id string, exitCh <-chan client.Exi
 	if stopped {
 		return
 	}
-	backoff := time.Duration(1<<min(restarts, 6)) * time.Second
+	r.changed()
+	backoff := time.Duration(1<<min(restarts-1, 7)) * 250 * time.Millisecond
 	slog.Warn("container exited, restarting", "id", id, "exit", st.ExitCode(), "backoff", backoff)
 	select {
 	case <-ctx.Done():
@@ -485,6 +525,7 @@ func (r *Runtime) watch(ctx context.Context, id string, exitCh <-chan client.Exi
 	for attempt := 1; ; attempt++ {
 		err := r.startTask(r.ctx(context.Background()), id)
 		if err == nil {
+			r.changed()
 			return
 		}
 		slog.Error("restart failed", "id", id, "attempt", attempt, "err", err)
@@ -666,6 +707,7 @@ func (r *Runtime) Recover(ctx context.Context) {
 		r.mu.Lock()
 		r.containers[id] = m
 		r.mu.Unlock()
+		r.net.Restore(m.Req.NetIndex)
 		running := false
 		if task, err := ctr.Task(cctx, nil); err == nil {
 			if st, err := task.Status(cctx); err == nil && st.Status == client.Running {
@@ -687,6 +729,9 @@ func (r *Runtime) Recover(ctx context.Context) {
 				slog.Error("restart recovered container", "id", id, "err", err)
 			}
 		}
+	}
+	if err := r.net.SyncFirewall(); err != nil {
+		slog.Warn("firewall", "err", err)
 	}
 }
 

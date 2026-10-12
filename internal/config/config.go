@@ -21,6 +21,7 @@ type Server struct {
 	ClusterToken    string // PAAS_CLUSTER_TOKEN (optional; generated and stored otherwise)
 	AllowLocalGit   bool   // PAAS_ALLOW_LOCAL_GIT, allow file:// repos (dev / testing)
 	ImageRetention  int    // PAAS_IMAGE_RETENTION, deployments kept per service for rollback
+	ClusterBase     string // PAAS_CLUSTER_BASE, first two octets of the container address space (default 10.100)
 }
 
 type Agent struct {
@@ -38,6 +39,8 @@ type Agent struct {
 	SubnetPrefix   string   // PAAS_SUBNET_PREFIX, first octet pair base (default 10.200)
 	EvictPSI       float64  // PAAS_EVICT_PSI, memory PSI some avg10 threshold for eviction
 	EvictMinFreeMB int      // PAAS_EVICT_MIN_FREE_MB
+	WGPort         int      // PAAS_WG_PORT, UDP port of the WireGuard mesh
+	Mesh           bool     // PAAS_MESH, connect to other nodes over WireGuard
 }
 
 type Proxy struct {
@@ -98,6 +101,7 @@ func LoadServer() Server {
 		ClusterToken:    env("PAAS_CLUSTER_TOKEN", ""),
 		AllowLocalGit:   envBool("PAAS_ALLOW_LOCAL_GIT", false),
 		ImageRetention:  envInt("PAAS_IMAGE_RETENTION", 3),
+		ClusterBase:     env("PAAS_CLUSTER_BASE", "10.100"),
 	}
 }
 
@@ -121,7 +125,9 @@ func LoadAgent() Agent {
 		OCIRuntime:     env("PAAS_OCI_RUNTIME", "crun"),
 		BuildkitAddr:   env("PAAS_BUILDKIT_ADDR", "unix:///run/buildkit/buildkitd.sock"),
 		CNIBinDir:      env("PAAS_CNI_BIN_DIR", "/opt/cni/bin"),
-		SubnetPrefix:   env("PAAS_SUBNET_PREFIX", "10.200"),
+		SubnetPrefix:   env("PAAS_SUBNET_PREFIX", "10.100"),
+		WGPort:         envInt("PAAS_WG_PORT", 51820),
+		Mesh:           envBool("PAAS_MESH", true),
 		EvictPSI:       envFloat("PAAS_EVICT_PSI", 40),
 		EvictMinFreeMB: envInt("PAAS_EVICT_MIN_FREE_MB", 256),
 	}

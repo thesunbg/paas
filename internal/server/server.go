@@ -20,6 +20,7 @@ import (
 	"github.com/thesunbg/paas/internal/bus"
 	"github.com/thesunbg/paas/internal/config"
 	"github.com/thesunbg/paas/internal/model"
+	"github.com/thesunbg/paas/internal/network"
 	"github.com/thesunbg/paas/internal/proto"
 	"github.com/thesunbg/paas/internal/secrets"
 	"github.com/thesunbg/paas/internal/store"
@@ -57,6 +58,8 @@ type Server struct {
 
 	wake *wakeGroup
 	http *http.Server
+
+	clusterBase [2]int
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.
@@ -79,7 +82,11 @@ func New(ctx context.Context, cfg config.Server) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, box: box, locks: map[string]*sync.Mutex{}, evictedOn: map[string]time.Time{}, wake: newWakeGroup()}
+	base, err := network.ParseBase(cfg.ClusterBase)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{cfg: cfg, store: st, box: box, locks: map[string]*sync.Mutex{}, evictedOn: map[string]time.Time{}, wake: newWakeGroup(), clusterBase: base}
 	if err := s.bootstrap(ctx); err != nil {
 		return nil, err
 	}
@@ -160,6 +167,7 @@ func (s *Server) Run(ctx context.Context) error {
 			case <-t.C:
 				s.publishRoutes(ctx)
 				s.publishDNS(ctx)
+				s.publishMesh(ctx)
 			}
 		}
 	}()
@@ -222,6 +230,14 @@ func (s *Server) registerBusHandlers() error {
 	}); err != nil {
 		return err
 	}
+	if _, err := s.nc.Subscribe(proto.SubjMeshGet, func(m *nats.Msg) {
+		t, err := s.meshTable(context.Background())
+		if err == nil {
+			_ = respondJSON(m, t)
+		}
+	}); err != nil {
+		return err
+	}
 	if _, err := s.nc.Subscribe(proto.SubjProxyStats, s.onProxyStats); err != nil {
 		return err
 	}
@@ -238,13 +254,17 @@ func (s *Server) onRegister(ctx context.Context, req *proto.RegisterRequest) *pr
 	if req.Name == "" {
 		return &proto.RegisterReply{Error: "node name required"}
 	}
-	n, err := s.store.UpsertNode(ctx, req)
+	n, err := s.store.UpsertNode(ctx, req, network.MaxNodes(s.clusterBase))
 	if err != nil {
 		return &proto.RegisterReply{Error: err.Error()}
 	}
-	slog.Info("node registered", "name", n.Name, "id", n.ID, "roles", n.Roles, "memory_mb", n.MemoryMB, "cpus", n.CPUCores)
-	go s.publishDNS(context.Background())
-	return &proto.RegisterReply{NodeID: n.ID, SharedNetIndex: s.sharedNetIndex, AllowLocalGit: s.cfg.AllowLocalGit}
+	slog.Info("node registered", "name", n.Name, "id", n.ID, "index", *n.NetIndex, "roles", n.Roles, "memory_mb", n.MemoryMB, "cpus", n.CPUCores)
+	go func() {
+		s.publishMesh(context.Background())
+		s.publishDNS(context.Background())
+	}()
+	return &proto.RegisterReply{NodeID: n.ID, NodeIndex: *n.NetIndex, ClusterBase: s.cfg.ClusterBase,
+		SharedNetIndex: s.sharedNetIndex, AllowLocalGit: s.cfg.AllowLocalGit}
 }
 
 // requestAgent sends a command to an agent and decodes the reply.
