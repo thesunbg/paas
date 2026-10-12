@@ -20,13 +20,13 @@ const (
 
 // Engine describes one database engine.
 type Engine struct {
-	Name        string
-	Image       string
-	Port        int
-	DataPath    string
-	SharedOK    bool   // supports many logical databases on one server
-	DefaultEnv  string // env var name injected into linked services
-	MinMemoryMB int
+	Name        string `json:"name"`
+	Image       string `json:"image"`
+	Port        int    `json:"port"`
+	DataPath    string `json:"data_path"`
+	SharedOK    bool   `json:"shared"`      // supports many logical databases on one server
+	DefaultEnv  string `json:"default_env"` // env var name injected into linked services
+	MinMemoryMB int    `json:"min_memory_mb"`
 }
 
 var Engines = map[string]Engine{
@@ -38,10 +38,10 @@ var Engines = map[string]Engine{
 
 // Preset is a sizing preset: container limit plus engine tuning derived from it.
 type Preset struct {
-	Name     string
-	MemoryMB int
-	CPU      int // millis
-	MaxConns int
+	Name     string `json:"name"`
+	MemoryMB int    `json:"memory_mb"`
+	CPU      int    `json:"cpu_millis"`
+	MaxConns int    `json:"max_connections"`
 }
 
 var Presets = []Preset{

@@ -74,7 +74,7 @@
   const engineLabel: Record<string, string> = { postgres: 'PostgreSQL', mysql: 'MySQL (MariaDB)', redis: 'Redis', mongo: 'MongoDB' };
   let cat = $state<SizesResponse | null>(null);
   const dbSizes = $derived(cat?.database_sizes ?? []);
-  const sizePreset = $derived(dbSizes.find((s) => s.Name === db?.size_preset));
+  const sizePreset = $derived(dbSizes.find((s) => s.name === db?.size_preset));
 
   async function act(name: string, fn: () => Promise<unknown>, ok: string) {
     busy = name;
@@ -215,7 +215,7 @@
         <dl class="kv card-body">
           <dt>Engine</dt><dd>{engineLabel[db.engine] ?? db.engine}</dd>
           <dt>Mode</dt><dd>{db.mode === 'shared' ? 'Shared server (logical database)' : 'Dedicated server'}</dd>
-          <dt>Size</dt><dd>{db.mode === 'shared' ? 'shared' : `${db.size_preset}${sizePreset ? ` — ${mb(sizePreset.MemoryMB)}, ${cpu(sizePreset.CPU)}, ${sizePreset.MaxConns} connections` : ''}`}</dd>
+          <dt>Size</dt><dd>{db.mode === 'shared' ? 'shared' : `${db.size_preset}${sizePreset ? ` — ${mb(sizePreset.memory_mb)}, ${cpu(sizePreset.cpu_millis)}, ${sizePreset.max_connections} connections` : ''}`}</dd>
           {#if detail.server}
             <dt>Server</dt>
             <dd>
@@ -316,7 +316,7 @@
         <label class="field">
           <span>Size</span>
           <select bind:value={upgradeSize}>
-            {#each dbSizes as s (s.Name)}<option value={s.Name}>{s.Name} — {mb(s.MemoryMB)}, {cpu(s.CPU)}</option>{/each}
+            {#each dbSizes as s (s.name)}<option value={s.name}>{s.name} — {mb(s.memory_mb)}, {cpu(s.cpu_millis)}</option>{/each}
           </select>
         </label>
       </form>

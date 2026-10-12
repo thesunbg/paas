@@ -111,6 +111,7 @@ func (s *Server) routes() http.Handler {
 	h("POST /api/v1/nodes/{id}/drain", s.handleDrainNode)
 	h("GET /api/v1/cluster/join", s.handleJoinInfo)
 	h("GET /api/v1/sizes", s.handleSizes)
+	h("DELETE /api/v1/users/{id}", s.handleDeleteUser)
 
 	mux.Handle("/", webui.Handler())
 	return logRequests(securityHeaders(mux))

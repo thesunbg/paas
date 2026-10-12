@@ -456,3 +456,24 @@ func clientAddr(r *http.Request) string {
 	}
 	return host
 }
+
+// handleDeleteUser removes an account (administrators only, not themselves).
+func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if id == currentUser(r).ID {
+		writeError(w, 400, "you cannot delete your own account")
+		return
+	}
+	if _, err := s.store.UserByID(r.Context(), id); err != nil {
+		writeError(w, 404, "user not found")
+		return
+	}
+	if _, err := s.store.DB.Exec(r.Context(), `DELETE FROM users WHERE id=$1`, id); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "deleted"})
+}

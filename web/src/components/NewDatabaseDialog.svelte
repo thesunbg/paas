@@ -33,7 +33,7 @@
   let error = $state('');
 
   // Prefer the server's engine catalog for shared-mode support.
-  const engines = $derived(engineList.map((e) => ({ ...e, shared: cat?.engines?.[e.id]?.SharedOK ?? e.shared })));
+  const engines = $derived(engineList.map((e) => ({ ...e, shared: cat?.engines?.[e.id]?.shared ?? e.shared })));
   const sharedOK = $derived(engines.find((e) => e.id === engine)?.shared ?? false);
   $effect(() => {
     if (!sharedOK) mode = 'dedicated';
@@ -95,7 +95,7 @@
       <label class="field">
         <span>Size</span>
         <select bind:value={size}>
-          {#each dbSizes as s (s.Name)}<option value={s.Name}>{s.Name} — {mb(s.MemoryMB)} RAM, {cpu(s.CPU)}, {s.MaxConns} connections</option>{/each}
+          {#each dbSizes as s (s.name)}<option value={s.name}>{s.name} — {mb(s.memory_mb)} RAM, {cpu(s.cpu_millis)}, {s.max_connections} connections</option>{/each}
         </select>
       </label>
     {/if}

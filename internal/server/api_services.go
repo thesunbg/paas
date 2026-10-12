@@ -289,9 +289,19 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 	for _, in := range instances {
 		insts = append(insts, instOut{Instance: in, NodeName: nodes[in.NodeID]})
 	}
-	previews, _ := s.store.PreviewsOf(ctx, svc.ID)
-	if previews == nil {
-		previews = []store.Service{}
+	type previewOut struct {
+		store.Service
+		URL string `json:"url"`
+	}
+	previews := []previewOut{}
+	if list, err := s.store.PreviewsOf(ctx, svc.ID); err == nil {
+		for _, pv := range list {
+			po := previewOut{Service: pv}
+			if doms, _ := s.store.DomainsForService(ctx, pv.ID); len(doms) > 0 {
+				po.URL = s.urlFor(doms[0].Hostname)
+			}
+			previews = append(previews, po)
+		}
 	}
 	var nextRun *time.Time
 	if svc.Type == model.TypeCron {

@@ -464,19 +464,19 @@ export interface Size {
 }
 
 export interface DatabaseSize {
-  Name: string;
-  MemoryMB: number;
-  CPU: number;
-  MaxConns: number;
+  name: string;
+  memory_mb: number;
+  cpu_millis: number;
+  max_connections: number;
 }
 
 export interface EngineInfo {
-  Name: string;
-  Image: string;
-  Port: number;
-  SharedOK: boolean;
-  DefaultEnv: string;
-  MinMemoryMB: number;
+  name: string;
+  image: string;
+  port: number;
+  shared: boolean;
+  default_env: string;
+  min_memory_mb: number;
 }
 
 export interface SizesResponse {
@@ -736,7 +736,7 @@ export function catalog(): Promise<SizesResponse> {
 }
 
 export function defaultEnvFor(engine: string, cat?: SizesResponse | null): string {
-  return cat?.engines?.[engine]?.DefaultEnv || fallbackEnv[engine] || 'DATABASE_URL';
+  return cat?.engines?.[engine]?.default_env || fallbackEnv[engine] || 'DATABASE_URL';
 }
 
 export function errorMessage(err: unknown): string {
