@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/thesunbg/paas/internal/store"
+	"github.com/thesunbg/paas/internal/totp"
 	"github.com/thesunbg/paas/internal/util"
 )
 
@@ -31,6 +32,7 @@ type credentialsInput struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	Name     string `json:"name"`
+	Code     string `json:"code"` // two-factor code
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +111,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)) != nil {
 		writeError(w, 401, "invalid email or password")
 		return
+	}
+	if u.TOTPEnabled {
+		secret, err := s.box.Decrypt(u.TOTPSecret)
+		if err != nil {
+			writeError(w, 500, "cannot read two-factor secret")
+			return
+		}
+		if in.Code == "" {
+			writeJSON(w, 401, map[string]any{"error": "two-factor code required", "two_factor": true})
+			return
+		}
+		if !totp.Verify(secret, in.Code, time.Now()) {
+			writeJSON(w, 401, map[string]any{"error": "invalid two-factor code", "two_factor": true})
+			return
+		}
 	}
 	s.startSession(w, r, u)
 }
@@ -302,4 +319,70 @@ func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "removed"})
+}
+
+// handle2FASetup creates a new (not yet enabled) TOTP secret.
+func (s *Server) handle2FASetup(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	if u.TOTPEnabled {
+		writeError(w, 400, "two-factor authentication is already enabled")
+		return
+	}
+	secret := totp.NewSecret()
+	if err := s.store.SetTOTP(r.Context(), u.ID, s.box.MustEncrypt(secret), false); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"secret": secret, "otpauth_url": totp.URI("paas", u.Email, secret)})
+}
+
+func (s *Server) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Code string `json:"code"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	u := currentUser(r)
+	secret, err := s.box.Decrypt(u.TOTPSecret)
+	if err != nil || secret == "" {
+		writeError(w, 400, "call /me/2fa/setup first")
+		return
+	}
+	if !totp.Verify(secret, in.Code, time.Now()) {
+		writeError(w, 400, "invalid code")
+		return
+	}
+	if err := s.store.SetTOTP(r.Context(), u.ID, u.TOTPSecret, true); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "enabled"})
+}
+
+func (s *Server) handle2FADisable(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Code     string `json:"code"`
+		Password string `json:"password"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	u := currentUser(r)
+	if !u.TOTPEnabled {
+		writeError(w, 400, "two-factor authentication is not enabled")
+		return
+	}
+	secret, _ := s.box.Decrypt(u.TOTPSecret)
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)) != nil || !totp.Verify(secret, in.Code, time.Now()) {
+		writeError(w, 400, "password or code is wrong")
+		return
+	}
+	if err := s.store.SetTOTP(r.Context(), u.ID, "", false); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "disabled"})
 }

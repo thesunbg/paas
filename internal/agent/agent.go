@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -126,6 +127,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		}},
 		{proto.CmdBuild, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleBuild) }},
 		{proto.CmdPush, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handlePush) }},
+		{proto.CmdJob, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleJob) }},
+		{proto.CmdTransfer, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleTransfer) }},
 	}
 	for _, s := range subs {
 		if s.cmd == proto.CmdBuild && a.builder == nil {
@@ -471,4 +474,72 @@ func (a *Agent) serveStaticOrigin(ctx context.Context) {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Warn("static origin", "err", err)
 	}
+}
+
+func (a *Agent) handleJob(ctx context.Context, req *proto.RunRequest) *proto.JobReply {
+	timeout := time.Duration(req.TimeoutSec)*time.Second + 10*time.Minute
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	rep := a.rt.RunJob(ctx, *req)
+	return &rep
+}
+
+// handleTransfer moves a file between the node and object storage.
+func (a *Agent) handleTransfer(ctx context.Context, req *proto.TransferRequest) *proto.GenericReply {
+	path, err := a.dataPath(req.Path)
+	if err != nil || path == "" {
+		return &proto.GenericReply{Error: "invalid path"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Hour)
+	defer cancel()
+	switch req.Method {
+	case http.MethodPut:
+		f, err := os.Open(path)
+		if err != nil {
+			return &proto.GenericReply{Error: err.Error()}
+		}
+		defer f.Close()
+		st, _ := f.Stat()
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPut, req.URL, f)
+		if err != nil {
+			return &proto.GenericReply{Error: err.Error()}
+		}
+		hreq.ContentLength = st.Size()
+		resp, err := http.DefaultClient.Do(hreq)
+		if err != nil {
+			return &proto.GenericReply{Error: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return &proto.GenericReply{Error: fmt.Sprintf("upload failed: HTTP %d %s", resp.StatusCode, body)}
+		}
+	case http.MethodGet:
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, req.URL, nil)
+		if err != nil {
+			return &proto.GenericReply{Error: err.Error()}
+		}
+		resp, err := http.DefaultClient.Do(hreq)
+		if err != nil {
+			return &proto.GenericReply{Error: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return &proto.GenericReply{Error: fmt.Sprintf("download failed: HTTP %d", resp.StatusCode)}
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return &proto.GenericReply{Error: err.Error()}
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return &proto.GenericReply{Error: err.Error()}
+		}
+		defer f.Close()
+		if _, err := io.Copy(f, resp.Body); err != nil {
+			return &proto.GenericReply{Error: err.Error()}
+		}
+	default:
+		return &proto.GenericReply{Error: "method must be GET or PUT"}
+	}
+	return &proto.GenericReply{}
 }

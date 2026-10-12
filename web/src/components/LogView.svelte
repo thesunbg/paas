@@ -57,6 +57,9 @@
   .wrap {
     position: relative;
   }
+  .wrap .log {
+    min-height: 240px;
+  }
   .jump {
     position: absolute;
     right: 14px;

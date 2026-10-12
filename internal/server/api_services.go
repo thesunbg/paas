@@ -12,6 +12,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/thesunbg/paas/internal/cron"
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/proto"
 	"github.com/thesunbg/paas/internal/resources"
@@ -20,26 +21,30 @@ import (
 )
 
 type serviceInput struct {
-	Name         *string              `json:"name"`
-	Type         string               `json:"type"`
-	Source       *model.ServiceSource `json:"source"`
-	Build        *model.BuildConfig   `json:"build"`
-	Size         string               `json:"size"`
-	QoS          string               `json:"qos"`
-	Port         *int                 `json:"port"`
-	Replicas     *int                 `json:"replicas"`
-	Resources    *model.Resources     `json:"resources"`
-	Sleep        *model.SleepPolicy   `json:"sleep"`
-	HealthCheck  *model.HealthCheck   `json:"health_check"`
-	RuntimeClass *string              `json:"runtime_class"`
-	Volumes      *[]model.Volume      `json:"volumes"`
-	Command      *[]string            `json:"command"`
-	SPA          *bool                `json:"spa"`
-	Env          map[string]string    `json:"env"`
-	GitToken     *string              `json:"git_token"`
-	Domain       string               `json:"domain"`
-	Deploy       *bool                `json:"deploy"`
-	AutoDeploy   *bool                `json:"auto_deploy"`
+	Name          *string              `json:"name"`
+	Type          string               `json:"type"`
+	Source        *model.ServiceSource `json:"source"`
+	Build         *model.BuildConfig   `json:"build"`
+	Size          string               `json:"size"`
+	QoS           string               `json:"qos"`
+	Port          *int                 `json:"port"`
+	Replicas      *int                 `json:"replicas"`
+	Resources     *model.Resources     `json:"resources"`
+	Sleep         *model.SleepPolicy   `json:"sleep"`
+	HealthCheck   *model.HealthCheck   `json:"health_check"`
+	RuntimeClass  *string              `json:"runtime_class"`
+	Volumes       *[]model.Volume      `json:"volumes"`
+	Command       *[]string            `json:"command"`
+	SPA           *bool                `json:"spa"`
+	Env           map[string]string    `json:"env"`
+	GitToken      *string              `json:"git_token"`
+	Domain        string               `json:"domain"`
+	Deploy        *bool                `json:"deploy"`
+	AutoDeploy    *bool                `json:"auto_deploy"`
+	Previews      *bool                `json:"previews"`
+	Autoscale     *model.Autoscale     `json:"autoscale"`
+	Schedule      *string              `json:"schedule"`
+	JobTimeoutSec *int                 `json:"job_timeout_sec"`
 }
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -85,10 +90,19 @@ func (s *Server) applyInput(svc *store.Service, in *serviceInput) error {
 		svc.Build = *in.Build
 	}
 	spec := &svc.Spec
-	if in.Size != "" || in.QoS != "" {
-		size, ok := resources.SizeByName(firstNonEmpty(in.Size, "small"))
+	if in.Size != "" {
+		size, ok := resources.SizeByName(in.Size)
 		if !ok {
 			return fmt.Errorf("unknown size %q", in.Size)
+		}
+		resources.Apply(spec, size, firstNonEmpty(in.QoS, spec.QoS))
+	} else if in.QoS != "" {
+		// Change only the QoS class, keeping the current limits.
+		cur := spec.Resources
+		size := resources.Size{MemoryLimitMB: cur.MemoryLimitMB, CPULimitMillis: cur.CPULimitMillis,
+			MemoryRequestMB: max(cur.MemoryRequestMB, cur.MemoryLimitMB/3), CPURequestMillis: max(cur.CPURequestMillis, cur.CPULimitMillis/10)}
+		if size.MemoryLimitMB == 0 {
+			size, _ = resources.SizeByName("small")
 		}
 		resources.Apply(spec, size, in.QoS)
 	}
@@ -127,6 +141,18 @@ func (s *Server) applyInput(svc *store.Service, in *serviceInput) error {
 	if in.SPA != nil {
 		spec.SPA = *in.SPA
 	}
+	if in.Previews != nil {
+		spec.Previews = *in.Previews
+	}
+	if in.Autoscale != nil {
+		spec.Autoscale = *in.Autoscale
+	}
+	if in.Schedule != nil {
+		spec.Schedule = strings.TrimSpace(*in.Schedule)
+	}
+	if in.JobTimeoutSec != nil {
+		spec.JobTimeoutSec = *in.JobTimeoutSec
+	}
 	if svc.Type == model.TypeStatic {
 		spec.Replicas = 0
 		spec.Port = 0
@@ -161,9 +187,9 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 	switch in.Type {
 	case "":
 		in.Type = model.TypeWeb
-	case model.TypeWeb, model.TypeWorker, model.TypeStatic:
+	case model.TypeWeb, model.TypeWorker, model.TypeStatic, model.TypeCron:
 	default:
-		writeError(w, 400, "type must be web, worker or static")
+		writeError(w, 400, "type must be web, worker, static or cron")
 		return
 	}
 	svc := &store.Service{ProjectID: p.ID, Type: in.Type, WebhookSecret: util.RandomToken(20)}
@@ -171,6 +197,12 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 	if err := s.applyInput(svc, &in); err != nil {
 		writeError(w, 400, err.Error())
 		return
+	}
+	if in.Domain != "" {
+		if err := validHostname(in.Domain); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
 	}
 	svc.Slug = util.Slugify(svc.Name)
 	for k := range in.Env {
@@ -191,15 +223,13 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 	for k, v := range in.Env {
 		_ = s.store.SetEnvVar(r.Context(), created.ID, k, s.box.MustEncrypt(v))
 	}
-	if created.Type != model.TypeWorker {
+	if created.Type != model.TypeWorker && created.Type != model.TypeCron {
 		host := s.generatedDomain(created.Slug, p.Slug)
 		if _, err := s.store.AddDomain(r.Context(), created.ID, host, true); err != nil {
 			_, _ = s.store.AddDomain(r.Context(), created.ID, s.generatedDomain(created.Slug+"-"+util.RandomToken(2), p.Slug), true)
 		}
 		if in.Domain != "" {
-			if err := validHostname(in.Domain); err == nil {
-				_, _ = s.store.AddDomain(r.Context(), created.ID, in.Domain, false)
-			}
+			_, _ = s.store.AddDomain(r.Context(), created.ID, strings.ToLower(in.Domain), false)
 		}
 	}
 	u := currentUser(r)
@@ -259,6 +289,17 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 	for _, in := range instances {
 		insts = append(insts, instOut{Instance: in, NodeName: nodes[in.NodeID]})
 	}
+	previews, _ := s.store.PreviewsOf(ctx, svc.ID)
+	if previews == nil {
+		previews = []store.Service{}
+	}
+	var nextRun *time.Time
+	if svc.Type == model.TypeCron {
+		if sch, err := cron.Parse(svc.Spec.Schedule); err == nil {
+			n := sch.Next(time.Now().UTC())
+			nextRun = &n
+		}
+	}
 	urls := []string{}
 	for _, d := range domains {
 		urls = append(urls, s.urlFor(d.Hostname))
@@ -282,6 +323,8 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		"internal_host":  internalHost(svc.Slug, p.Slug),
 		"recommendation": resources.Recommend(svc.Spec.Resources, peak),
 		"tuning_env":     resources.TuningEnv(svc.Spec.Language, svc.Spec.Resources),
+		"previews":       previews,
+		"next_run":       nextRun,
 	})
 }
 
@@ -429,10 +472,12 @@ func (s *Server) handleListDeployments(w http.ResponseWriter, r *http.Request) {
 // Environment variables.
 
 func (s *Server) handleGetEnv(w http.ResponseWriter, r *http.Request) {
-	svc, _ := s.serviceFor(w, r, "developer")
+	svc, p := s.serviceFor(w, r, "viewer")
 	if svc == nil {
 		return
 	}
+	role, _ := s.teamRole(r, p.TeamID)
+	masked := roleRank[role] < roleRank["developer"]
 	vars, err := s.store.EnvVars(r.Context(), svc.ID)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -443,6 +488,9 @@ func (s *Server) handleGetEnv(w http.ResponseWriter, r *http.Request) {
 		plain, err := s.box.Decrypt(v.ValueEnc)
 		if err != nil {
 			plain = "<undecryptable>"
+		}
+		if masked {
+			plain = "••••••"
 		}
 		out[v.Key] = plain
 	}
@@ -783,16 +831,20 @@ func (s *Server) handleDeploymentLogStream(w http.ResponseWriter, r *http.Reques
 	ch, cancel := s.hub.Subscribe(d.ID)
 	defer cancel()
 	var last int64
+	if v, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
+		last = v // EventSource reconnect: continue where the client stopped
+	}
 	sendStored := func() {
 		lines, _ := s.store.DeploymentLogs(r.Context(), d.ID, last, 5000)
 		for _, l := range lines {
+			fmt.Fprintf(w, "id: %d\n", l.ID)
 			writeSSE(w, "log", l.Line)
 			last = l.ID
 		}
 	}
 	sendStored()
 	flusher.Flush()
-	t := time.NewTicker(time.Second)
+	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 	for {
 		select {
@@ -846,4 +898,37 @@ func (s *Server) handleCancelDeployment(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = s.store.SetDeploymentStatus(r.Context(), d.ID, model.DeployCancelled, "cancelled by user")
 	writeJSON(w, 200, map[string]string{"status": model.DeployCancelled})
+}
+
+func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
+	svc, _ := s.serviceFor(w, r, "developer")
+	if svc == nil {
+		return
+	}
+	if svc.Type != model.TypeCron {
+		writeError(w, 400, "only cron services can be run on demand")
+		return
+	}
+	run, err := s.runJob(context.WithoutCancel(r.Context()), svc, "manual", false)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 202, run)
+}
+
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	svc, _ := s.serviceFor(w, r, "viewer")
+	if svc == nil {
+		return
+	}
+	runs, err := s.store.JobRuns(r.Context(), svc.ID, 50)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []store.JobRun{}
+	}
+	writeJSON(w, 200, runs)
 }

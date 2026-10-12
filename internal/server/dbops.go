@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -420,11 +421,24 @@ func (s *Server) backupDatabase(ctx context.Context, db *store.Database) (*store
 	_ = s.store.FinishBackup(ctx, b.ID, "completed", "", rep.StdoutBytes)
 	_ = s.store.TouchDatabaseBackup(ctx, db.ID)
 	b.Status, b.SizeBytes = "completed", rep.StdoutBytes
+	if s.s3.Enabled() {
+		key := s.s3.Key(db.ID, filepath.Base(path))
+		if err := s.transfer(ctx, in.NodeID, http.MethodPut, key, path); err != nil {
+			slog.Warn("off-site backup upload failed", "db", db.Name, "err", err)
+			_ = s.store.FinishBackup(ctx, b.ID, "completed", "local only: S3 upload failed: "+err.Error(), rep.StdoutBytes)
+		} else {
+			_ = s.store.SetBackupS3Key(ctx, b.ID, key)
+			b.S3Key = key
+		}
+	}
 	// Retention: keep the 7 most recent backups.
 	if old, err := s.store.OldBackups(ctx, db.ID, 7); err == nil {
 		for _, o := range old {
 			if o.NodeID != nil {
 				_ = s.requestAgent(ctx, *o.NodeID, proto.CmdRemoveFiles, proto.RemoveFilesRequest{Paths: []string{o.Path}}, &proto.GenericReply{}, time.Minute)
+			}
+			if o.S3Key != "" && s.s3.Enabled() {
+				_ = s.s3.Delete(o.S3Key)
 			}
 			_ = s.store.DeleteBackup(ctx, o.ID)
 		}
@@ -445,7 +459,13 @@ func (s *Server) restoreBackup(ctx context.Context, db *store.Database, b *store
 		return err
 	}
 	if b.NodeID == nil || *b.NodeID != in.NodeID {
-		return errors.New("backup file is stored on a different node than the database server")
+		if b.S3Key == "" || !s.s3.Enabled() {
+			return errors.New("backup file is stored on a different node than the database server (configure S3 for off-site backups)")
+		}
+		// Fetch the off-site copy onto the database server's node.
+		if err := s.transfer(ctx, in.NodeID, http.MethodGet, b.S3Key, b.Path); err != nil {
+			return fmt.Errorf("download backup from S3: %w", err)
+		}
 	}
 	cmd, err := databases.Restore(db.Engine, db.Mode == "shared", c)
 	if err != nil {
@@ -470,6 +490,9 @@ func (s *Server) runScheduledBackups(ctx context.Context) {
 		}
 		if _, err := s.backupDatabase(ctx, &db); err != nil {
 			slog.Warn("scheduled backup failed", "db", db.Name, "err", err)
+			if p, perr := s.store.ProjectByID(ctx, db.ProjectID); perr == nil {
+				s.notify(ctx, p.TeamID, "backup.failed", fmt.Sprintf("Backup of database %s/%s failed: %s", p.Slug, db.Name, truncate(err.Error(), 200)), nil)
+			}
 			_ = s.store.TouchDatabaseBackup(ctx, db.ID) // do not retry every minute
 		}
 	}
@@ -512,5 +535,21 @@ func (s *Server) upgradeDatabase(ctx context.Context, db *store.Database) error 
 		_ = s.execOnService(ctx, oldServer, drop, "", "", 1)
 	}
 	s.restartLinked(ctx, db.ID)
+	return nil
+}
+
+// transfer asks an agent to move a file to or from object storage with a presigned URL.
+func (s *Server) transfer(ctx context.Context, nodeID, method, key, path string) error {
+	u, err := s.s3.Presign(method, key, 2*time.Hour, time.Now())
+	if err != nil {
+		return err
+	}
+	var rep proto.GenericReply
+	if err := s.requestAgent(ctx, nodeID, proto.CmdTransfer, proto.TransferRequest{Method: method, URL: u, Path: path}, &rep, 2*time.Hour); err != nil {
+		return err
+	}
+	if rep.Error != "" {
+		return errors.New(rep.Error)
+	}
 	return nil
 }

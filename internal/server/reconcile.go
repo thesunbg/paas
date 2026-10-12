@@ -72,6 +72,9 @@ func (s *Server) onHeartbeat(m *nats.Msg) {
 func (s *Server) onEvicted(nodeID string, in store.Instance) {
 	ctx := context.Background()
 	slog.Warn("instance evicted under memory pressure", "container", in.ContainerID, "node", nodeID)
+	if svc, err := s.store.ServiceByID(ctx, in.ServiceID); err == nil {
+		s.notify(ctx, s.teamOfService(ctx, svc), "instance.evicted", fmt.Sprintf("%s was stopped to relieve memory pressure on its node", svc.Slug), nil)
+	}
 	s.evictMu.Lock()
 	s.evictedOn[in.ServiceID+"/"+nodeID] = time.Now()
 	s.evictMu.Unlock()
@@ -115,6 +118,9 @@ func (s *Server) reconcileLoop(ctx context.Context) {
 		if ids, err := s.store.MarkStaleNodesOffline(ctx, 30*time.Second); err == nil && len(ids) > 0 {
 			for _, id := range ids {
 				slog.Warn("node offline", "id", id)
+				if n, err := s.store.NodeByID(ctx, id); err == nil {
+					s.notifyAdmins(ctx, "node.offline", fmt.Sprintf("Node %s (%s) stopped responding; rescheduling its stateless workloads", n.Name, n.Address), nil)
+				}
 				_, _ = s.store.DB.Exec(ctx, `UPDATE instances SET status='lost' WHERE node_id=$1 AND status IN ('running','starting')`, id)
 			}
 			s.publishAll(ctx)
@@ -149,6 +155,9 @@ func (s *Server) reconcileService(ctx context.Context, serviceID string) {
 	if err != nil || svc.Status != model.StatusRunning || svc.CurrentDeploymentID == nil {
 		return
 	}
+	if svc.Type == model.TypeCron {
+		return
+	}
 	d, err := s.store.DeploymentByID(ctx, *svc.CurrentDeploymentID)
 	if err != nil || d.StaticPath != "" {
 		return
@@ -180,6 +189,7 @@ func (s *Server) reconcileService(ctx context.Context, serviceID string) {
 		case current && in.Status == model.InstFailed && s.failingFor(in.ID) > 90*time.Second:
 			// Crash-looping for too long: replace it (possibly on another node).
 			slog.Warn("replacing crash-looping instance", "container", in.ContainerID, "restarts", in.Restarts)
+			s.notify(ctx, proj.TeamID, "instance.crashloop", fmt.Sprintf("%s/%s keeps crashing (%d restarts); replacing instance %s", proj.Slug, svc.Slug, in.Restarts, in.ContainerID), nil)
 			s.stopInstance(ctx, &in, 2)
 			s.clearFailing(in.ID)
 			changed = true
@@ -218,6 +228,7 @@ func (s *Server) onProxyStats(m *nats.Msg) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for id, h := range st.Hits {
+		s.traffic.add(id, h.Requests, h.Errors5xx)
 		if h.LastRequest > 0 {
 			_ = s.store.TouchServiceRequest(ctx, id, time.Unix(h.LastRequest, 0))
 		}

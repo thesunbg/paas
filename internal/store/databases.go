@@ -149,15 +149,16 @@ type Backup struct {
 	Path       string     `json:"path"`
 	SizeBytes  int64      `json:"size_bytes"`
 	Error      string     `json:"error"`
+	S3Key      string     `json:"s3_key"`
 	CreatedAt  time.Time  `json:"created_at"`
 	FinishedAt *time.Time `json:"finished_at"`
 }
 
-const backupCols = `id, database_id, node_id, status, path, size_bytes, error, created_at, finished_at`
+const backupCols = `id, database_id, node_id, status, path, size_bytes, error, s3_key, created_at, finished_at`
 
 func scanBackup(row pgx.Row) (*Backup, error) {
 	var b Backup
-	if err := row.Scan(&b.ID, &b.DatabaseID, &b.NodeID, &b.Status, &b.Path, &b.SizeBytes, &b.Error, &b.CreatedAt, &b.FinishedAt); err != nil {
+	if err := row.Scan(&b.ID, &b.DatabaseID, &b.NodeID, &b.Status, &b.Path, &b.SizeBytes, &b.Error, &b.S3Key, &b.CreatedAt, &b.FinishedAt); err != nil {
 		return nil, notFound(err)
 	}
 	return &b, nil
@@ -207,5 +208,10 @@ func (s *Store) OldBackups(ctx context.Context, databaseID string, keep int) ([]
 
 func (s *Store) DeleteBackup(ctx context.Context, id string) error {
 	_, err := s.DB.Exec(ctx, `DELETE FROM backups WHERE id=$1`, id)
+	return err
+}
+
+func (s *Store) SetBackupS3Key(ctx context.Context, id, key string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE backups SET s3_key=$2 WHERE id=$1`, id, key)
 	return err
 }

@@ -43,6 +43,8 @@ const (
 	CmdRemoveFiles = "rmfiles"
 	CmdStats       = "stats"
 	CmdPush        = "push"
+	CmdJob         = "job"
+	CmdTransfer    = "transfer"
 )
 
 type RegisterRequest struct {
@@ -115,6 +117,17 @@ type RunRequest struct {
 	HealthCheck       model.HealthCheck `json:"health_check"`
 	LogSubject        string            `json:"log_subject,omitempty"`
 	PlainHTTPRegistry string            `json:"plain_http_registry,omitempty"` // internal registry host:port
+	Once              bool              `json:"once,omitempty"`                // run to completion, never restart (jobs)
+	DNSSearch         string            `json:"dns_search,omitempty"`          // e.g. shop.internal: compose-style short names resolve
+	TimeoutSec        int               `json:"timeout_sec,omitempty"`
+}
+
+// JobReply is returned when a one-off container finishes.
+type JobReply struct {
+	ContainerID string `json:"container_id"`
+	ExitCode    int    `json:"exit_code"`
+	Output      string `json:"output"`
+	Error       string `json:"error,omitempty"`
 }
 
 type RunReply struct {
@@ -235,4 +248,11 @@ type PushRequest struct {
 	Image    string `json:"image"`
 	Target   string `json:"target"` // registry reference
 	Insecure bool   `json:"insecure"`
+}
+
+// TransferRequest uploads (PUT) or downloads (GET) a file under the agent data dir using a presigned URL.
+type TransferRequest struct {
+	Method string `json:"method"`
+	URL    string `json:"url"`
+	Path   string `json:"path"`
 }

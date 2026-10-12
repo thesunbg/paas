@@ -130,7 +130,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 	go p.fetchInitialRoutes(ctx)
 	go p.statsLoop(ctx)
 
-	handler := http.Handler(p)
+	handler := newRateLimiter(p.cfg.RateLimit, p.cfg.RateBurst).wrap(p)
 	var servers []*http.Server
 	errc := make(chan error, 2)
 	if p.cfg.ACMEEmail != "" {

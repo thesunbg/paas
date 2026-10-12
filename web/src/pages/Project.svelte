@@ -3,7 +3,7 @@
   import { api, errorMessage, type ProjectDetail } from '../lib/api';
   import { can } from '../lib/session.svelte';
   import { href, navigate } from '../lib/router.svelte';
-  import { mb, relTime } from '../lib/format';
+  import { mb, relTime, plural } from '../lib/format';
   import { poll } from '../lib/poll';
   import { toast } from '../lib/toast.svelte';
   import { confirmDialog } from '../lib/confirm.svelte';
@@ -75,7 +75,7 @@
       <div>
         <h1>{p.name}</h1>
         <p class="sub">
-          <span class="mono">{p.slug}</span> · {data.services.length} services · {data.databases.length} databases · created {relTime(p.created_at)}
+          <span class="mono">{p.slug}</span> · {plural(data.services.length, 'service')} · {plural(data.databases.length, 'database')} · created {relTime(p.created_at)}
         </p>
       </div>
       <div class="row">

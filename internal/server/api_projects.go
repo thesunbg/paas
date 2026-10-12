@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/thesunbg/paas/internal/databases"
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/resources"
 	"github.com/thesunbg/paas/internal/store"
@@ -151,7 +152,7 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSizes(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"sizes": resources.Sizes})
+	writeJSON(w, 200, map[string]any{"sizes": resources.Sizes, "database_sizes": databases.Presets, "engines": databases.Engines})
 }
 
 // handleOverview returns cluster-wide numbers for the dashboard home page.

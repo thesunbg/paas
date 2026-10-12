@@ -13,14 +13,16 @@ type User struct {
 	Name         string    `json:"name"`
 	PasswordHash string    `json:"-"`
 	IsAdmin      bool      `json:"is_admin"`
+	TOTPEnabled  bool      `json:"totp_enabled"`
+	TOTPSecret   string    `json:"-"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-const userCols = `id, email, name, password_hash, is_admin, created_at`
+const userCols = `id, email, name, password_hash, is_admin, totp_enabled, totp_secret_enc, created_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.TOTPEnabled, &u.TOTPSecret, &u.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -58,7 +60,7 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash, userID string, exp
 }
 
 func (s *Store) UserBySession(ctx context.Context, tokenHash string) (*User, error) {
-	return scanUser(s.DB.QueryRow(ctx, `SELECT u.id, u.email, u.name, u.password_hash, u.is_admin, u.created_at
+	return scanUser(s.DB.QueryRow(ctx, `SELECT u.id, u.email, u.name, u.password_hash, u.is_admin, u.totp_enabled, u.totp_secret_enc, u.created_at
 		FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at > now()`, tokenHash))
 }
 
@@ -107,7 +109,7 @@ func (s *Store) DeleteAPIToken(ctx context.Context, userID, id string) error {
 func (s *Store) UserByAPIToken(ctx context.Context, tokenHash string) (*User, error) {
 	u, err := scanUser(s.DB.QueryRow(ctx, `UPDATE api_tokens t SET last_used_at=now() FROM users u
 		WHERE t.token_hash=$1 AND u.id=t.user_id
-		RETURNING u.id, u.email, u.name, u.password_hash, u.is_admin, u.created_at`, tokenHash))
+		RETURNING u.id, u.email, u.name, u.password_hash, u.is_admin, u.totp_enabled, u.totp_secret_enc, u.created_at`, tokenHash))
 	return u, err
 }
 
@@ -196,5 +198,10 @@ func (s *Store) AddMember(ctx context.Context, teamID, userID, role string) erro
 
 func (s *Store) RemoveMember(ctx context.Context, teamID, userID string) error {
 	_, err := s.DB.Exec(ctx, `DELETE FROM memberships WHERE team_id=$1 AND user_id=$2`, teamID, userID)
+	return err
+}
+
+func (s *Store) SetTOTP(ctx context.Context, userID, secretEnc string, enabled bool) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET totp_secret_enc=$2, totp_enabled=$3 WHERE id=$1`, userID, secretEnc, enabled)
 	return err
 }

@@ -47,7 +47,7 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"database": db}
-	if role, _ := s.teamRoleForDB(r, db); roleRank[role] >= roleRank["developer"] && db.Status == "ready" {
+	if role, _ := s.teamRoleForDB(r, db); roleRank[role] >= roleRank["developer"] && (db.Status == "ready" || db.Status == "upgrading") {
 		if c, srv, err := s.dbCreds(r.Context(), db); err == nil {
 			out["connection"] = map[string]any{
 				"host": c.Host, "port": c.Port, "database": c.DBName, "username": c.Username, "password": c.Password,
@@ -134,6 +134,10 @@ func (s *Server) handleUnlinkDatabase(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.UnlinkDatabase(r.Context(), r.PathValue("service"), db.ID); err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	if svc, err := s.store.ServiceByID(r.Context(), r.PathValue("service")); err == nil && svc.CurrentDeploymentID != nil && svc.Status == "running" {
+		u := currentUser(r)
+		_, _ = s.restartService(r.Context(), svc, &u.ID)
 	}
 	writeJSON(w, 200, map[string]string{"status": "unlinked"})
 }

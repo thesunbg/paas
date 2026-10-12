@@ -83,6 +83,23 @@ func (s *Server) failDeployment(ctx context.Context, d *store.Deployment, svc *s
 		_ = s.store.SetServiceStatus(ctx, svc.ID, model.StatusRunning)
 	}
 	s.reportCommitStatus(ctx, svc, d, "failure")
+	if svc != nil {
+		s.notify(ctx, s.teamOfService(ctx, svc), "deploy.failed", fmt.Sprintf("Deployment of %s failed: %s", svc.Slug, truncate(msg, 300)), map[string]any{"service": svc.ID, "deployment": d.ID})
+	}
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
@@ -125,7 +142,14 @@ func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
 	}
 	svc, _ = s.store.ServiceByID(ctx, d.ServiceID)
 
-	if d.StaticPath != "" {
+	if svc.Type == model.TypeCron {
+		// Jobs run on schedule; deploying only switches the image they use.
+		if err := s.store.SetServiceCurrentDeployment(ctx, svc.ID, d.ID, model.StatusRunning); err != nil {
+			s.failDeployment(ctx, d, svc, err)
+			return
+		}
+		s.hub.Log(d.ID, "==> job scheduled: "+svc.Spec.Schedule+" (UTC)")
+	} else if d.StaticPath != "" {
 		if err := s.store.SetServiceCurrentDeployment(ctx, svc.ID, d.ID, model.StatusRunning); err != nil {
 			s.failDeployment(ctx, d, svc, err)
 			return
@@ -150,6 +174,9 @@ func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
 		}
 	}
 	s.reportCommitStatus(ctx, svc, d, "success")
+	if d.Trigger != "system" {
+		s.notify(ctx, s.teamOfService(ctx, svc), "deploy.succeeded", fmt.Sprintf("%s deployed in %s (%s)", svc.Slug, time.Since(start).Round(100*time.Millisecond), firstNonEmpty(shortSHA(d.CommitSHA), d.Trigger)), map[string]any{"service": svc.ID, "deployment": d.ID})
+	}
 	go s.cleanupStatic(context.Background(), svc.ID)
 }
 
@@ -357,7 +384,7 @@ func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *st
 		return nil, err
 	}
 	req := proto.RunRequest{
-		InstanceID: inst.ID, ServiceID: svc.ID, ContainerID: containerID, NetIndex: proj.NetIndex,
+		InstanceID: inst.ID, ServiceID: svc.ID, ContainerID: containerID, NetIndex: proj.NetIndex, DNSSearch: proj.Slug + ".internal",
 		Hostname: svc.Slug, Image: image, PullImage: !strings.HasPrefix(image, "paas.local/"), PlainHTTPRegistry: plainRegistry,
 		Env: env, Command: svc.Spec.Command, Port: svc.Spec.Port, Resources: svc.Spec.Resources,
 		QoS: svc.Spec.QoS, RuntimeClass: svc.Spec.RuntimeClass, Volumes: svc.Spec.Volumes, HealthCheck: svc.Spec.HealthCheck,
@@ -522,6 +549,11 @@ func (s *Server) startService(ctx context.Context, svc *store.Service) error {
 
 // deleteService stops everything and removes the service.
 func (s *Server) deleteService(ctx context.Context, svc *store.Service) error {
+	if previews, err := s.store.PreviewsOf(ctx, svc.ID); err == nil {
+		for i := range previews {
+			_ = s.deleteService(ctx, &previews[i])
+		}
+	}
 	s.stopService(ctx, svc)
 	deps, _ := s.store.DeploymentsForService(ctx, svc.ID, 1000)
 	var paths []string

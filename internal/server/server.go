@@ -22,6 +22,7 @@ import (
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/network"
 	"github.com/thesunbg/paas/internal/proto"
+	"github.com/thesunbg/paas/internal/s3"
 	"github.com/thesunbg/paas/internal/secrets"
 	"github.com/thesunbg/paas/internal/store"
 	"github.com/thesunbg/paas/internal/util"
@@ -60,6 +61,12 @@ type Server struct {
 	http *http.Server
 
 	clusterBase [2]int
+
+	s3 *s3.Config
+
+	traffic *traffic
+	scaleMu sync.Mutex
+	scale   map[string]*scaleState
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.
@@ -86,7 +93,10 @@ func New(ctx context.Context, cfg config.Server) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, box: box, locks: map[string]*sync.Mutex{}, evictedOn: map[string]time.Time{}, wake: newWakeGroup(), clusterBase: base}
+	s := &Server{cfg: cfg, store: st, box: box, locks: map[string]*sync.Mutex{}, evictedOn: map[string]time.Time{}, wake: newWakeGroup(), clusterBase: base,
+		traffic: newTraffic(), scale: map[string]*scaleState{},
+		s3: &s3.Config{Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket, AccessKey: cfg.S3.AccessKey,
+			SecretKey: cfg.S3.SecretKey, Prefix: cfg.S3.Prefix, VirtualHost: cfg.S3.VirtualHost}}
 	if err := s.bootstrap(ctx); err != nil {
 		return nil, err
 	}
@@ -142,6 +152,7 @@ func (s *Server) bootstrap(ctx context.Context) error {
 	}
 	s.systemProjectID = proj.ID
 	s.sharedNetIndex = proj.NetIndex
+	_ = s.store.FailInterruptedJobs(ctx)
 	return s.store.FailStuckDeployments(ctx)
 }
 
@@ -155,6 +166,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	go s.deployWorker(ctx)
 	go s.resumeProvisioning(ctx)
+	go s.cronLoop(ctx)
+	go s.metricsLoop(ctx)
 	go s.reconcileLoop(ctx)
 	go s.maintenanceLoop(ctx)
 	go func() {

@@ -75,18 +75,20 @@ type Service struct {
 	WebhookSecret       string              `json:"-"`
 	NodeID              *string             `json:"node_id"`
 	CurrentDeploymentID *string             `json:"current_deployment_id"`
+	ParentID            *string             `json:"parent_id"`
+	PreviewPR           *int                `json:"preview_pr"`
 	Status              string              `json:"status"`
 	LastRequestAt       *time.Time          `json:"last_request_at"`
 	CreatedAt           time.Time           `json:"created_at"`
 	UpdatedAt           time.Time           `json:"updated_at"`
 }
 
-const serviceCols = `id, project_id, name, slug, type, source, build, spec, git_token_enc, webhook_secret, node_id, current_deployment_id, status, last_request_at, created_at, updated_at`
+const serviceCols = `id, project_id, name, slug, type, source, build, spec, git_token_enc, webhook_secret, node_id, current_deployment_id, parent_id, preview_pr, status, last_request_at, created_at, updated_at`
 
 func scanService(row pgx.Row) (*Service, error) {
 	var s Service
 	err := row.Scan(&s.ID, &s.ProjectID, &s.Name, &s.Slug, &s.Type, &s.Source, &s.Build, &s.Spec, &s.GitTokenEnc,
-		&s.WebhookSecret, &s.NodeID, &s.CurrentDeploymentID, &s.Status, &s.LastRequestAt, &s.CreatedAt, &s.UpdatedAt)
+		&s.WebhookSecret, &s.NodeID, &s.CurrentDeploymentID, &s.ParentID, &s.PreviewPR, &s.Status, &s.LastRequestAt, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -108,9 +110,9 @@ func collectServices(rows pgx.Rows, err error) ([]Service, error) {
 }
 
 func (s *Store) CreateService(ctx context.Context, svc *Service) (*Service, error) {
-	return scanService(s.DB.QueryRow(ctx, `INSERT INTO services (project_id, name, slug, type, source, build, spec, git_token_enc, webhook_secret, node_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+serviceCols,
-		svc.ProjectID, svc.Name, svc.Slug, svc.Type, svc.Source, svc.Build, svc.Spec, svc.GitTokenEnc, svc.WebhookSecret, svc.NodeID))
+	return scanService(s.DB.QueryRow(ctx, `INSERT INTO services (project_id, name, slug, type, source, build, spec, git_token_enc, webhook_secret, node_id, parent_id, preview_pr)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING `+serviceCols,
+		svc.ProjectID, svc.Name, svc.Slug, svc.Type, svc.Source, svc.Build, svc.Spec, svc.GitTokenEnc, svc.WebhookSecret, svc.NodeID, svc.ParentID, svc.PreviewPR))
 }
 
 func (s *Store) UpdateServiceConfig(ctx context.Context, svc *Service) error {
@@ -234,4 +236,13 @@ func (s *Store) queryDomains(ctx context.Context, where string, args ...any) ([]
 func (s *Store) DeleteDomain(ctx context.Context, serviceID, id string) error {
 	_, err := s.DB.Exec(ctx, `DELETE FROM domains WHERE service_id=$1 AND id=$2`, serviceID, id)
 	return err
+}
+
+func (s *Store) PreviewsOf(ctx context.Context, parentID string) ([]Service, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+serviceCols+` FROM services WHERE parent_id=$1 ORDER BY preview_pr`, parentID)
+	return collectServices(rows, err)
+}
+
+func (s *Store) PreviewFor(ctx context.Context, parentID string, pr int) (*Service, error) {
+	return scanService(s.DB.QueryRow(ctx, `SELECT `+serviceCols+` FROM services WHERE parent_id=$1 AND preview_pr=$2`, parentID, pr))
 }

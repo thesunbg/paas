@@ -7,7 +7,7 @@
 </script>
 
 <span class="secret">
-  <code class="val">{shown ? value : '•'.repeat(Math.min(Math.max(value.length, 8), 24))}</code>
+  <code class="val" class:masked={!shown}>{shown ? value : '•'.repeat(Math.min(Math.max(value.length, 8), 24))}</code>
   <button type="button" class="sm icon" aria-label={shown ? 'Hide value' : 'Reveal value'} aria-pressed={shown} onclick={() => (shown = !shown)}>
     <Icon name={shown ? 'eyeoff' : 'eye'} size={13} />
   </button>
@@ -25,5 +25,10 @@
   .val {
     overflow-wrap: anywhere;
     min-width: 0;
+  }
+  .val.masked {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
   }
 </style>

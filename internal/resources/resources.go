@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/thesunbg/paas/internal/cron"
 	"github.com/thesunbg/paas/internal/model"
 )
 
@@ -57,7 +58,7 @@ func Apply(spec *model.ServiceSpec, size Size, qos string) {
 
 // Normalize validates and fills defaults on a spec for the given service type.
 func Normalize(svcType string, spec *model.ServiceSpec) error {
-	if spec.Replicas <= 0 && svcType != model.TypeStatic {
+	if spec.Replicas <= 0 && svcType != model.TypeStatic && svcType != model.TypeCron {
 		spec.Replicas = 1
 	}
 	if spec.Replicas > 50 {
@@ -99,6 +100,32 @@ func Normalize(svcType string, spec *model.ServiceSpec) error {
 	}
 	if svcType == model.TypeWeb && spec.Port == 0 {
 		spec.Port = 8080
+	}
+	if svcType == model.TypeCron {
+		spec.Replicas, spec.Port = 0, 0
+		spec.Sleep = model.SleepPolicy{}
+		spec.Autoscale = model.Autoscale{}
+		if _, err := cron.Parse(spec.Schedule); err != nil {
+			return fmt.Errorf("schedule: %w", err)
+		}
+	}
+	if a := &spec.Autoscale; a.Enabled {
+		if a.Min <= 0 {
+			a.Min = 1
+		}
+		if a.Max < a.Min {
+			a.Max = max(a.Min, 3)
+		}
+		if a.Max > 50 {
+			return fmt.Errorf("autoscale max must be <= 50")
+		}
+		if a.TargetCPUPercent == 0 && a.TargetRPS == 0 {
+			a.TargetCPUPercent = 70
+		}
+		if len(spec.Volumes) > 0 {
+			return fmt.Errorf("services with volumes cannot autoscale")
+		}
+		spec.Replicas = min(max(spec.Replicas, a.Min), a.Max)
 	}
 	return nil
 }

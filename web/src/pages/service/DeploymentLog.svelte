@@ -159,7 +159,4 @@
   .filter {
     max-width: 280px;
   }
-  :global(.log) {
-    min-height: 260px;
-  }
 </style>

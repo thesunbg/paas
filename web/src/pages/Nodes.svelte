@@ -196,12 +196,11 @@
                 <th>Status</th>
                 <th>CPU</th>
                 <th>Memory</th>
-                <th style="min-width:200px">Committed / capacity</th>
+                <th style="min-width:180px">Committed / capacity</th>
                 <th class="right">Used by apps</th>
                 <th class="right">Overcommit</th>
                 <th class="right">Instances</th>
                 <th>Disk</th>
-                <th>Last seen</th>
                 <th class="right">Actions</th>
               </tr>
             </thead>
@@ -221,6 +220,7 @@
                   <td>
                     <Status status={stale(n) && n.status === 'online' ? 'offline' : n.status} label={stale(n) && n.status === 'online' ? 'unreachable' : n.status} />
                     <div class="faint small nowrap" title={Object.entries(n.capabilities ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')}>v{n.version}{n.capabilities?.oci_runtime ? ` · ${n.capabilities.oci_runtime}` : ''}</div>
+                    <div class="faint small nowrap" title={absTime(n.last_seen_at)}>seen {relTime(n.last_seen_at)}</div>
                   </td>
                   <td class="nowrap">
                     <div>{n.cpu_cores} cores · {n.usage.cpu_percent.toFixed(1)}%</div>
@@ -253,10 +253,10 @@
                   <td class="right">{n.instances}</td>
                   <td class="nowrap">
                     <div class="small">{gb(n.usage.disk_used_gb)} / {gb(n.usage.disk_total_gb)}</div>
-                    <span class="bar {level(diskR)}" style="width:90px;min-width:90px"><span style="width:{Math.min(100, diskR * 100)}%"></span></span>
+                    <span class="bar {level(diskR)}" style="width:80px;min-width:80px"><span style="width:{Math.min(100, diskR * 100)}%"></span></span>
                   </td>
-                  <td class="nowrap small" title={absTime(n.last_seen_at)}>{relTime(n.last_seen_at)}</td>
                   <td class="right nowrap">
+                    <div class="acts">
                     {#if n.status === 'online'}
                       <button class="sm" onclick={() => setStatus(n, 'cordoned')} disabled={busy === n.id}>Cordon</button>
                     {:else}
@@ -264,8 +264,9 @@
                     {/if}
                     <button class="sm" onclick={() => edit(n)}>Edit</button>
                     {#if n.status !== 'online'}
-                      <button class="sm danger icon" aria-label="Remove {n.name}" onclick={() => remove(n)}><Icon name="trash" size={12} /></button>
+                      <button class="sm danger" aria-label="Remove {n.name}" onclick={() => remove(n)}><Icon name="trash" size={12} />Remove</button>
                     {/if}
+                    </div>
                   </td>
                 </tr>
               {/each}
@@ -323,7 +324,6 @@
   }
   .cmd .log {
     padding-right: 140px;
-    min-height: 0 !important;
   }
   .copy {
     position: absolute;
@@ -361,7 +361,13 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    min-width: 190px;
+    min-width: 170px;
+  }
+  .acts {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: stretch;
   }
   td {
     vertical-align: top;

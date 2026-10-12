@@ -72,6 +72,10 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pong"})
 		return
 	}
+	if event == "pull_request" {
+		s.handlePullRequest(w, r, svc, body)
+		return
+	}
 	if event != "" && event != "push" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "event": event})
 		return
@@ -161,3 +165,9 @@ func (s *Server) reportCommitStatus(ctx context.Context, svc *store.Service, d *
 }
 
 var _ = model.TypeWeb
+
+func hmacHex(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}

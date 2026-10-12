@@ -22,6 +22,18 @@ type Server struct {
 	AllowLocalGit   bool   // PAAS_ALLOW_LOCAL_GIT, allow file:// repos (dev / testing)
 	ImageRetention  int    // PAAS_IMAGE_RETENTION, deployments kept per service for rollback
 	ClusterBase     string // PAAS_CLUSTER_BASE, first two octets of the container address space (default 10.100)
+	S3              S3     // off-site backups
+}
+
+// S3 configures off-site backup storage (any S3-compatible service).
+type S3 struct {
+	Endpoint    string // PAAS_S3_ENDPOINT
+	Region      string // PAAS_S3_REGION
+	Bucket      string // PAAS_S3_BUCKET
+	AccessKey   string // PAAS_S3_ACCESS_KEY
+	SecretKey   string // PAAS_S3_SECRET_KEY
+	Prefix      string // PAAS_S3_PREFIX
+	VirtualHost bool   // PAAS_S3_VIRTUAL_HOST
 }
 
 type Agent struct {
@@ -52,6 +64,8 @@ type Proxy struct {
 	ACMECA            string // PAAS_ACME_CA, optional custom directory (e.g. staging)
 	DataDir           string // PAAS_DATA_DIR
 	DashboardUpstream string // PAAS_DASHBOARD_UPSTREAM, e.g. 127.0.0.1:8080
+	RateLimit         int    // PAAS_PROXY_RATE_LIMIT, requests per second per client IP (0 = off)
+	RateBurst         int    // PAAS_PROXY_RATE_BURST
 }
 
 func env(key, def string) string {
@@ -102,6 +116,11 @@ func LoadServer() Server {
 		AllowLocalGit:   envBool("PAAS_ALLOW_LOCAL_GIT", false),
 		ImageRetention:  envInt("PAAS_IMAGE_RETENTION", 3),
 		ClusterBase:     env("PAAS_CLUSTER_BASE", "10.100"),
+		S3: S3{
+			Endpoint: env("PAAS_S3_ENDPOINT", ""), Region: env("PAAS_S3_REGION", "auto"), Bucket: env("PAAS_S3_BUCKET", ""),
+			AccessKey: env("PAAS_S3_ACCESS_KEY", ""), SecretKey: env("PAAS_S3_SECRET_KEY", ""),
+			Prefix: env("PAAS_S3_PREFIX", "paas-backups"), VirtualHost: envBool("PAAS_S3_VIRTUAL_HOST", false),
+		},
 	}
 }
 
@@ -144,5 +163,7 @@ func LoadProxy() Proxy {
 		ACMECA:            env("PAAS_ACME_CA", ""),
 		DataDir:           filepath.Join(data, "proxy"),
 		DashboardUpstream: env("PAAS_DASHBOARD_UPSTREAM", "127.0.0.1:8080"),
+		RateLimit:         envInt("PAAS_PROXY_RATE_LIMIT", 0),
+		RateBurst:         envInt("PAAS_PROXY_RATE_BURST", 0),
 	}
 }

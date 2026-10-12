@@ -105,12 +105,14 @@
                 <DeployBadge status={d.status} />
                 {#if d.id === detail.service.current_deployment_id}<span class="badge outline" style="margin-left:4px">current</span>{/if}
               </td>
-              <td class="commit">
+              <td>
+                <div class="commit">
                 <a href={href(`/services/${sid}/deployments/${d.id}`)} onclick={(e) => e.stopPropagation()}>
                   {#if d.commit_sha}<code>{shortSha(d.commit_sha)}</code>{:else}<code>{d.id.slice(0, 8)}</code>{/if}
                 </a>
                 <span class="msg truncate">{d.commit_message || (d.image && !d.commit_sha ? d.image : '')}</span>
                 {#if d.error}<span class="err small truncate">{d.error}</span>{/if}
+                </div>
               </td>
               <td class="hide-sm"><span class="badge">{d.trigger}</span></td>
               <td class="nowrap" title={absTime(d.created_at)}>{relTime(d.created_at)}</td>

@@ -83,6 +83,7 @@ type managed struct {
 	memMB     int
 	running   bool
 	cancel    context.CancelFunc
+	exited    chan struct{} // closed when a run-once container exits
 }
 
 func New(ctx context.Context, sock, ns, dataDir, ociRuntime string, nm *network.Manager) (*Runtime, error) {
@@ -256,9 +257,15 @@ func (r *Runtime) Run(ctx context.Context, req proto.RunRequest) (string, error)
 	r.containers[id] = m
 	r.mu.Unlock()
 
+	if req.Once {
+		m.exited = make(chan struct{})
+	}
 	if err := r.startTask(cctx, id); err != nil {
 		_ = r.Remove(ctx, id, 0)
 		return "", err
+	}
+	if req.Once {
+		return ip, nil
 	}
 	if err := r.waitHealthy(ctx, id, ip, req.Port, req.HealthCheck); err != nil {
 		tail, _ := r.Logs(id, 30)
@@ -272,6 +279,9 @@ func (r *Runtime) writeNetFiles(id string, req proto.RunRequest) error {
 	dir := r.containerDir(id)
 	gw := r.net.Gateway(req.NetIndex)
 	resolv := fmt.Sprintf("nameserver %s\noptions ndots:1 timeout:2\n", gw)
+	if req.DNSSearch != "" {
+		resolv = fmt.Sprintf("nameserver %s\nsearch %s\noptions ndots:1 timeout:2\n", gw, req.DNSSearch)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "resolv.conf"), []byte(resolv), 0o644); err != nil {
 		return err
 	}
@@ -499,6 +509,14 @@ func (r *Runtime) watch(ctx context.Context, id string, exitCh <-chan client.Exi
 	}
 	m.running = false
 	m.ExitCode = int(st.ExitCode())
+	if m.Req.Once {
+		if m.exited != nil {
+			close(m.exited)
+			m.exited = nil
+		}
+		r.mu.Unlock()
+		return
+	}
 	stopped := m.Stopped || m.Evicted
 	m.Restarts++
 	restarts := m.Restarts
@@ -749,7 +767,8 @@ func (r *Runtime) Statuses(ctx context.Context) []proto.ContainerStatus {
 		r.collectMetrics(cctx, id)
 		r.mu.Lock()
 		m := r.containers[id]
-		if m == nil {
+		if m == nil || m.Req.Once {
+			// Jobs are tracked by the request that started them, not as instances.
 			r.mu.Unlock()
 			continue
 		}
@@ -830,4 +849,44 @@ func rotateLog(path string) {
 		return
 	}
 	_ = os.Rename(path, path+".1")
+}
+
+// RunJob runs a container to completion and returns its exit code and output tail.
+func (r *Runtime) RunJob(ctx context.Context, req proto.RunRequest) proto.JobReply {
+	req.Once = true
+	if _, err := r.Run(ctx, req); err != nil {
+		return proto.JobReply{ContainerID: req.ContainerID, ExitCode: -1, Error: err.Error()}
+	}
+	r.mu.Lock()
+	var done <-chan struct{}
+	if m := r.containers[req.ContainerID]; m != nil && m.exited != nil {
+		done = m.exited
+	}
+	r.mu.Unlock()
+	timeout := time.Duration(req.TimeoutSec) * time.Second
+	if timeout <= 0 {
+		timeout = time.Hour
+	}
+	rep := proto.JobReply{ContainerID: req.ContainerID}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			rep.Error = "job timed out after " + timeout.String()
+		case <-ctx.Done():
+			rep.Error = "cancelled"
+		}
+	}
+	r.mu.Lock()
+	if m := r.containers[req.ContainerID]; m != nil {
+		rep.ExitCode = m.ExitCode
+	}
+	r.mu.Unlock()
+	if rep.Error != "" {
+		rep.ExitCode = -1
+	}
+	lines, _ := r.Logs(req.ContainerID, 200)
+	rep.Output = strings.Join(lines, "\n")
+	_ = r.Remove(context.Background(), req.ContainerID, 5*time.Second)
+	return rep
 }
