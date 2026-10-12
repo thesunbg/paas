@@ -10,7 +10,7 @@
 
 | Nguyên tắc | Cụ thể |
 |---|---|
-| **Nhẹ** | Mọi thành phần hệ thống viết bằng Go và đóng gói thành một binary tĩnh. Không bắt buộc Kubernetes. Agent trên mỗi node dùng dưới 50 MB RAM. |
+| **Nhẹ** | Mọi thành phần hệ thống viết bằng Go và đóng gói thành một binary tĩnh. Không bắt buộc Kubernetes, **không dùng Docker daemon**: agent điều khiển thẳng containerd + crun. Agent trên mỗi node dùng dưới 50 MB RAM. |
 | **Nhanh** | Build có cache nhiều tầng. Site tĩnh không cần container. Registry nằm trong cluster. Deploy không downtime. Rollback tức thì vì giữ lại image cũ. |
 | **Cluster từ ngày đầu** | Kể cả khi chỉ có 1 máy, mọi thao tác đều đi qua *Agent API*, nên thêm node mới không phải viết lại gì. |
 | **Control plane không giữ state** | State nằm trong PostgreSQL và NATS, nên chạy nhiều bản control plane để HA rất dễ. |
@@ -39,8 +39,8 @@
    ┌──────▼──────┐      ┌──────────────┐      ┌──────────────┐     ┌──────────────┐
    │ EDGE NODE   │      │ BUILD NODE   │      │ WORKER NODE  │ ... │ WORKER NODE  │
    │ Proxy (TLS) │      │ BuildKit     │      │ Agent        │     │ Agent        │
-   │ Agent       │      │ Agent        │      │ containerd/  │     │ containerd/  │
-   └─────────────┘      └──────────────┘      │ Docker       │     │ Docker       │
+   │ Agent       │      │ Agent        │      │ containerd + │     │ containerd + │
+   └─────────────┘      └──────────────┘      │ crun/gVisor  │     │ crun/gVisor  │
                                               │ App + DB     │     │ App + DB     │
                                               └──────────────┘     └──────────────┘
           Registry nội bộ (Zot) · Object storage (S3: Garage/SeaweedFS)
@@ -62,8 +62,8 @@
 
 | Thành phần | Lựa chọn | Lý do | Phương án khác |
 |---|---|---|---|
-| Ngôn ngữ backend | **Go** | Binary tĩnh, ít RAM, concurrency tốt. Hệ sinh thái container (containerd, BuildKit, Docker SDK) đều viết bằng Go. | Rust: nhanh hơn nhưng phát triển chậm hơn |
-| Container runtime | **Docker Engine** ở MVP, **containerd** ở giai đoạn sau | Docker dễ debug và có sẵn ở mọi nơi. containerd nhẹ hơn và điều khiển được sâu hơn. Code truy cập runtime đi qua một interface `Runtime` nên đổi được. | Podman |
+| Ngôn ngữ backend | **Go** | Binary tĩnh, ít RAM, concurrency tốt. Hệ sinh thái container (containerd, BuildKit, runc, gVisor) đều viết bằng Go. | Rust: nhanh hơn nhưng phát triển chậm hơn |
+| Container runtime | **containerd + crun** ngay từ MVP (không dùng Docker Engine) | Không có dockerd nên mỗi node tiết kiệm khoảng 100 MB RAM. crun viết bằng C, khởi động nhanh hơn runc khoảng 2 lần. Agent gọi containerd trực tiếp qua thư viện Go `containerd/client`. Vẫn chạy được mọi image OCI/Docker. Chi tiết ở mục 3.6. | Docker Engine (dễ debug hơn nhưng nặng hơn), Podman |
 | Điều phối (orchestration) | **Scheduler + Agent tự viết** | Nhẹ hơn k8s rất nhiều và kiểm soát hoàn toàn tốc độ deploy. Scheduler chỉ cần bin-packing, affinity và placement cho volume. | k3s (khi cần hệ sinh thái k8s), Nomad (giấy phép BSL), Docker Swarm (ít được phát triển tiếp) |
 | State store | **PostgreSQL 16+** | Đáng tin cậy, có transaction, LISTEN/NOTIFY. Dùng `sqlc` + `pgx`. | SQLite cho bản single-node "lite" |
 | Message bus | **NATS JetStream** | Một binary Go khoảng 20 MB. Dùng cho pub/sub, hàng đợi build, request/reply tới agent, KV store và stream log realtime. | Redis Streams |
@@ -106,6 +106,38 @@
 | CLI | Go + Cobra: `paas login`, `paas deploy`, `paas logs -f`, `paas env set`, `paas db create`, `paas node join` |
 | API | REST + OpenAPI (sinh SDK tự động), token theo scope |
 | IaC (sau này) | Terraform provider, file `paas.toml` đặt trong repo |
+
+### 3.6. Tầng runtime (chạy container không cần Docker)
+
+Agent điều khiển trực tiếp containerd và tự làm những việc Docker vốn lo sẵn:
+
+```
+paas-agent (Go)
+  ├── containerd/client ──▶ containerd ──▶ shim ──▶ crun   (mặc định)
+  │                                          └──▶ runsc  (gVisor, code không tin cậy)
+  │                                          └──▶ Firecracker (microVM, giai đoạn 4, cần KVM)
+  ├── Snapshotter: overlayfs  → sau thêm stargz/SOCI (lazy pulling)
+  ├── Mạng: CNI (bridge + host-local IPAM) + nftables do agent quản lý
+  │         (không dùng docker-proxy; port mapping bằng DNAT trong kernel)
+  ├── Log: đọc FIFO stdout/stderr từ shim → ring buffer → NATS / VictoriaLogs
+  └── Metrics: đọc cgroup v2 trực tiếp (cpu.stat, memory.current, io.stat)
+```
+
+| Thành phần | Lựa chọn | Ghi chú |
+|---|---|---|
+| Daemon | **containerd 2.x** | Một daemon nhẹ khoảng 20–30 MB RAM. Kubernetes cũng dùng đúng daemon này. |
+| OCI runtime mặc định | **crun** | Viết bằng C, khởi động nhanh, ít RAM, hỗ trợ cgroup v2 đầy đủ. |
+| Runtime cô lập mạnh | **gVisor (`runsc`)** | Dùng cho app của người dùng ngoài (multi-tenant) trên VPS không có KVM. I/O chậm hơn khoảng 10–30%. |
+| microVM (giai đoạn 4) | **Firecracker** (qua `firecracker-containerd` hoặc tự chuyển OCI image thành rootfs) | Boot khoảng 125 ms, mỗi VM tốn khoảng 5 MB RAM. Cần bare metal hoặc máy hỗ trợ nested virtualization. |
+| Mạng container | **CNI plugins** (bridge, host-local, portmap) + **nftables** | Mỗi project một bridge/subnet riêng. nftables chặn traffic giữa các project và DNAT từ proxy vào container. |
+| Image | **Lazy pulling** bằng eStargz/SOCI snapshotter (giai đoạn 2–3) | Container chạy trước khi tải xong image, giảm thời gian start với image lớn. |
+| Edge functions (giai đoạn 4) | **WebAssembly** (Wasmtime/Spin qua `runwasi` shim của containerd) | Khởi động dưới 1 ms, phù hợp scale-to-zero. Không thay thế container cho app thường. |
+
+**Chọn runtime theo từng service.** Trường `runtime_class` trong spec của service nhận các giá trị `standard` (crun), `sandboxed` (gVisor), `microvm` (Firecracker) hoặc `wasm`. Scheduler chỉ đặt service lên node có hỗ trợ runtime đó (node khai báo khả năng khi join, ví dụ `kvm=true`).
+
+**Debug khi không có Docker CLI.** Dùng `nerdctl` (cú pháp giống Docker) và `ctr` để thao tác tay, cùng lệnh `paas exec` / `paas logs` của CLI.
+
+**Môi trường dev.** Trên Linux, chạy containerd trực tiếp. Trên macOS/Windows, dùng Lima hoặc một VM Linux nhỏ.
 
 ---
 
@@ -181,9 +213,9 @@
 - Đa vùng (multi-region) ở giai đoạn sau: edge node ở nhiều nơi, dùng GeoDNS.
 
 ### 4.8. Bảo mật
-- Container chạy non-root với user namespace, seccomp/AppArmor mặc định, filesystem read-only khi có thể.
+- Container chạy bằng crun, non-root với user namespace, seccomp/AppArmor mặc định, filesystem read-only khi có thể.
 - **Cô lập mạng giữa các project** bằng nftables do agent quản lý: service khác project không thấy nhau.
-- Tuỳ chọn **gVisor** hoặc **Kata/Firecracker** cho môi trường multi-tenant chạy code không tin cậy.
+- `runtime_class: sandboxed` (**gVisor**) cho code không tin cậy trên VPS thường. `runtime_class: microvm` (**Firecracker**) khi node có KVM.
 - Giới hạn tốc độ request (rate limit) ở edge, bảo vệ dashboard bằng 2FA, quét image (Trivy) khi build.
 - Secret không bao giờ xuất hiện trong log, bị che khi hiển thị trên UI.
 
@@ -199,7 +231,8 @@
      ─▶ push image lên Zot nội bộ  (log stream qua NATS ─▶ UI)
    * Nếu là site tĩnh: upload dist/ lên S3 ─▶ đổi con trỏ ─▶ XONG
 4. Scheduler chọn node ─▶ gửi lệnh "RunContainer" tới agent (gRPC)
-5. Agent pull image (qua LAN) ─▶ start ─▶ health check
+5. Agent pull image qua LAN vào containerd ─▶ tạo container bằng crun
+   ─▶ gắn mạng CNI + luật nftables ─▶ start ─▶ health check
 6. Pass ─▶ Control plane cập nhật routing table ─▶ edge proxy nhận cấu hình mới
 7. Drain và dừng container cũ ─▶ cập nhật GitHub Check Run ─▶ thông báo
 ```
@@ -211,15 +244,18 @@
 | Deploy site tĩnh, đã có cache | < 15 giây |
 | Deploy Node/Go/Python, đã có cache | < 30–45 giây |
 | Rollback | < 3 giây (chỉ đổi routing nếu bản cũ còn chạy) / < 10 giây (start lại image cũ) |
+| Start container (image đã có sẵn) | < 300 ms |
 | Thêm node mới | < 2 phút |
 | Độ trễ proxy cộng thêm | < 1 ms p50 |
-| RAM của agent | < 50 MB; control plane < 150 MB |
+| RAM của agent | < 50 MB (+ containerd khoảng 25 MB); control plane < 150 MB |
 
 **Kỹ thuật để đạt tốc độ**
 - Shallow clone, chỉ tải code của commit cần build.
 - Cache BuildKit trong registry nội bộ, dùng chung giữa các build node.
 - Giữ sẵn base image phổ biến trên build node và worker node.
-- Pull image qua mạng nội bộ. Giai đoạn sau dùng *lazy pulling* (eStargz/SOCI) để container start trước khi pull xong.
+- Không có Docker daemon: agent gọi thẳng containerd, crun khởi động container nhanh hơn runc.
+- Port mapping bằng DNAT nftables trong kernel, không qua `docker-proxy`.
+- Pull image qua mạng nội bộ. Giai đoạn 2–3 dùng *lazy pulling* (eStargz/SOCI) để container start trước khi pull xong.
 - Image runtime nhỏ (distroless hoặc alpine, multi-stage build).
 - Site tĩnh không cần container. Asset có hash được cache vĩnh viễn ở trình duyệt và CDN.
 - Proxy có connection pooling và HTTP/2 tới upstream.
@@ -262,8 +298,8 @@ paas/
 │   ├── scheduler/        # placement, bin-packing
 │   ├── reconciler/       # desired vs actual state
 │   ├── build/            # orchestrate BuildKit, Railpack
-│   ├── runtime/          # interface Runtime + docker/containerd impl
-│   ├── network/          # WireGuard, nftables, DNS nội bộ
+│   ├── runtime/          # interface Runtime: containerd (crun, gVisor), sau thêm firecracker, wasm
+│   ├── network/          # CNI, nftables, WireGuard, DNS nội bộ
 │   ├── proxy/            # routing table, Caddy client
 │   ├── github/           # GitHub App, webhooks, checks
 │   ├── database/         # template DB, backup/restore
@@ -285,10 +321,12 @@ paas/
 - Dựng monorepo Go, CI (lint, test), Postgres schema và migration (goose), sqlc.
 - Khung API cùng auth cơ bản (email/password, session).
 - Định nghĩa Agent API (proto) và interface `Runtime`.
-- Môi trường dev bằng docker-compose (Postgres, NATS, Zot, Caddy).
+- Script cài containerd + crun + CNI plugins lên node (dùng cho dev và cho `install.sh`).
+- Môi trường dev: chạy Postgres, NATS, Zot, Caddy bằng `nerdctl compose` (hoặc process thường). Máy dev macOS/Windows dùng Lima.
 
-### Giai đoạn 1: MVP single-node (6–8 tuần)
-- Agent điều khiển Docker: run, stop, logs, stats.
+### Giai đoạn 1: MVP single-node (7–10 tuần, thêm thời gian cho tầng runtime containerd)
+- Agent điều khiển containerd + crun: pull, run, stop, exec, logs (đọc FIFO), stats (đọc cgroup v2).
+- Mạng container bằng CNI bridge + nftables (port mapping, chặn traffic giữa các project).
 - GitHub App: chọn repo, nhận webhook push, tự deploy.
 - Build bằng BuildKit, Railpack và Dockerfile, push lên Zot, log realtime.
 - Web service, worker và site tĩnh (qua S3).
@@ -311,12 +349,14 @@ paas/
 - Tự viết proxy Go (certmagic) để thay Caddy, routing nhanh hơn.
 - Tự động thêm và bớt node qua API Hetzner/DO/AWS.
 - HA control plane (3 node).
-- Cron job, Docker Compose, template 1-click, cô lập mạng project bằng nftables.
-- Chuyển sang containerd, lazy pulling, chuẩn hoá image cache.
+- Cron job, Docker Compose, template 1-click.
+- Lazy pulling (stargz/SOCI), chuẩn hoá image cache.
+- `runtime_class: sandboxed` bằng gVisor.
 
 ### Giai đoạn 4: Doanh nghiệp & multi-tenant (liên tục)
 - RBAC chi tiết, SSO/OIDC, audit log, quota và tính phí (Stripe).
-- gVisor hoặc Firecracker cho code không tin cậy.
+- `runtime_class: microvm` bằng Firecracker cho node có KVM.
+- Edge functions bằng WebAssembly (runwasi).
 - HA database (Patroni), read replica, PITR.
 - Đa vùng, GeoDNS, CDN cho site tĩnh.
 - Terraform provider, file cấu hình `paas.toml`, API công khai.
@@ -340,8 +380,9 @@ paas/
 | Tự viết scheduler sẽ phức tạp dần | Giữ phạm vi nhỏ (không cố làm lại k8s). Interface `Runtime` và `Scheduler` cho phép cắm k3s/Nomad backend nếu cần. |
 | Database stateful khó di chuyển giữa node | Ghim DB vào node chứa volume, backup thường xuyên lên S3, có quy trình restore sang node khác. HA ở giai đoạn 4. |
 | Giới hạn rate của Let's Encrypt | Dùng wildcard cert qua DNS-01 cho subdomain hệ thống, chỉ xin cert riêng cho custom domain. Dự phòng ZeroSSL. |
+| Không có Docker nên debug và làm phần mạng/log khó hơn (MVP mất thêm khoảng 1–2 tuần) | Dùng `nerdctl` để debug. Dùng lại CNI plugins chuẩn thay vì tự viết. Viết test tích hợp cho agent ngay từ đầu. |
 | Build ăn hết tài nguyên của app | Tách build node, đặt giới hạn cgroup cho BuildKit, dùng hàng đợi có giới hạn đồng thời. |
-| Bảo mật khi multi-tenant | Bắt đầu với mô hình "single organization". Chỉ mở public multi-tenant khi đã có gVisor/Firecracker và cô lập mạng. |
+| Bảo mật khi multi-tenant | Bắt đầu với mô hình "single organization". Chỉ mở public multi-tenant khi đã có `runtime_class: sandboxed` (gVisor) hoặc microVM (Firecracker) và cô lập mạng. |
 | Control plane là điểm lỗi duy nhất | Workload vẫn chạy khi control plane chết: agent và proxy giữ cấu hình cuối cùng. HA ở giai đoạn 3. |
 
 ---
@@ -350,4 +391,4 @@ paas/
 
 1. Chốt tên dự án, domain và mô hình (tự host cho 1 tổ chức hay public multi-tenant).
 2. Chọn framework dashboard (SvelteKit hay React).
-3. Bắt đầu Giai đoạn 0: khởi tạo monorepo Go, schema Postgres, Agent API proto và docker-compose dev.
+3. Bắt đầu Giai đoạn 0: khởi tạo monorepo Go, schema Postgres, Agent API proto và môi trường dev containerd.
