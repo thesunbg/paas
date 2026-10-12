@@ -1,0 +1,224 @@
+package store
+
+import (
+	"context"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/thesunbg/paas/internal/proto"
+)
+
+type Node struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Address          string            `json:"address"`
+	Roles            []string          `json:"roles"`
+	Labels           map[string]string `json:"labels"`
+	Status           string            `json:"status"`
+	CPUCores         int               `json:"cpu_cores"`
+	MemoryMB         int               `json:"memory_mb"`
+	ReservedMB       int               `json:"reserved_mb"`
+	OvercommitMemory float64           `json:"overcommit_memory"`
+	OvercommitCPU    float64           `json:"overcommit_cpu"`
+	Capabilities     map[string]string `json:"capabilities"`
+	Usage            proto.NodeUsage   `json:"usage"`
+	Version          string            `json:"version"`
+	LastSeenAt       time.Time         `json:"last_seen_at"`
+	CreatedAt        time.Time         `json:"created_at"`
+}
+
+func (n *Node) HasRole(role string) bool {
+	for _, r := range n.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
+const nodeCols = `id, name, address, roles, labels, status, cpu_cores, memory_mb, reserved_mb, overcommit_memory, overcommit_cpu, capabilities, usage, version, last_seen_at, created_at`
+
+func scanNode(row pgx.Row) (*Node, error) {
+	var n Node
+	err := row.Scan(&n.ID, &n.Name, &n.Address, &n.Roles, &n.Labels, &n.Status, &n.CPUCores, &n.MemoryMB, &n.ReservedMB,
+		&n.OvercommitMemory, &n.OvercommitCPU, &n.Capabilities, &n.Usage, &n.Version, &n.LastSeenAt, &n.CreatedAt)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	return &n, nil
+}
+
+// UpsertNode registers a node by name, keeping operator-set fields (status, overcommit) on re-registration.
+func (s *Store) UpsertNode(ctx context.Context, r *proto.RegisterRequest) (*Node, error) {
+	return scanNode(s.DB.QueryRow(ctx, `INSERT INTO nodes (name, address, roles, cpu_cores, memory_mb, capabilities, version, status, last_seen_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,'online',now())
+		ON CONFLICT (name) DO UPDATE SET address=EXCLUDED.address, roles=EXCLUDED.roles, cpu_cores=EXCLUDED.cpu_cores,
+			memory_mb=EXCLUDED.memory_mb, capabilities=EXCLUDED.capabilities, version=EXCLUDED.version, last_seen_at=now(),
+			status = CASE WHEN nodes.status='cordoned' THEN 'cordoned' ELSE 'online' END
+		RETURNING `+nodeCols, r.Name, r.Address, r.Roles, r.CPUCores, r.MemoryMB, r.Capabilities, r.Version))
+}
+
+func (s *Store) NodeByID(ctx context.Context, id string) (*Node, error) {
+	return scanNode(s.DB.QueryRow(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=$1`, id))
+}
+
+func (s *Store) Nodes(ctx context.Context) ([]Node, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+nodeCols+` FROM nodes ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Node, error) {
+		n, err := scanNode(r)
+		if err != nil {
+			return Node{}, err
+		}
+		return *n, nil
+	})
+}
+
+func (s *Store) NodeHeartbeat(ctx context.Context, id string, usage proto.NodeUsage) error {
+	_, err := s.DB.Exec(ctx, `UPDATE nodes SET usage=$2, last_seen_at=now(),
+		status = CASE WHEN status='offline' THEN 'online' ELSE status END WHERE id=$1`, id, usage)
+	return err
+}
+
+// MarkStaleNodesOffline flags nodes without a heartbeat for longer than d and returns their ids.
+func (s *Store) MarkStaleNodesOffline(ctx context.Context, d time.Duration) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `UPDATE nodes SET status='offline' WHERE status='online' AND last_seen_at < now() - $1::interval RETURNING id`,
+		d.String())
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+func (s *Store) UpdateNodeSettings(ctx context.Context, id, status string, overMem, overCPU float64, reservedMB int, labels map[string]string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE nodes SET status=$2, overcommit_memory=$3, overcommit_cpu=$4, reserved_mb=$5, labels=$6 WHERE id=$1`,
+		id, status, overMem, overCPU, reservedMB, labels)
+	return err
+}
+
+func (s *Store) DeleteNode(ctx context.Context, id string) error {
+	_, err := s.DB.Exec(ctx, `DELETE FROM nodes WHERE id=$1`, id)
+	return err
+}
+
+// Instances.
+
+type Instance struct {
+	ID               string    `json:"id"`
+	ServiceID        string    `json:"service_id"`
+	DeploymentID     *string   `json:"deployment_id"`
+	NodeID           string    `json:"node_id"`
+	ContainerID      string    `json:"container_id"`
+	IP               string    `json:"ip"`
+	Port             int       `json:"port"`
+	Status           string    `json:"status"`
+	MemoryRequestMB  int       `json:"memory_request_mb"`
+	CPURequestMillis int       `json:"cpu_request_millis"`
+	MemoryUsageMB    int       `json:"memory_usage_mb"`
+	MemoryPeakMB     int       `json:"memory_peak_mb"`
+	CPUUsageMillis   int       `json:"cpu_usage_millis"`
+	Restarts         int       `json:"restarts"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+const instanceCols = `id, service_id, deployment_id, node_id, container_id, ip, port, status, memory_request_mb, cpu_request_millis, memory_usage_mb, memory_peak_mb, cpu_usage_millis, restarts, created_at, updated_at`
+
+func scanInstance(row pgx.Row) (*Instance, error) {
+	var i Instance
+	err := row.Scan(&i.ID, &i.ServiceID, &i.DeploymentID, &i.NodeID, &i.ContainerID, &i.IP, &i.Port, &i.Status, &i.MemoryRequestMB,
+		&i.CPURequestMillis, &i.MemoryUsageMB, &i.MemoryPeakMB, &i.CPUUsageMillis, &i.Restarts, &i.CreatedAt, &i.UpdatedAt)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	return &i, nil
+}
+
+func collectInstances(rows pgx.Rows, err error) ([]Instance, error) {
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Instance, error) {
+		i, err := scanInstance(r)
+		if err != nil {
+			return Instance{}, err
+		}
+		return *i, nil
+	})
+}
+
+func (s *Store) CreateInstance(ctx context.Context, i *Instance) (*Instance, error) {
+	return scanInstance(s.DB.QueryRow(ctx, `INSERT INTO instances (service_id, deployment_id, node_id, container_id, port, status, memory_request_mb, cpu_request_millis)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+instanceCols,
+		i.ServiceID, i.DeploymentID, i.NodeID, i.ContainerID, i.Port, i.Status, i.MemoryRequestMB, i.CPURequestMillis))
+}
+
+func (s *Store) InstanceByID(ctx context.Context, id string) (*Instance, error) {
+	return scanInstance(s.DB.QueryRow(ctx, `SELECT `+instanceCols+` FROM instances WHERE id=$1`, id))
+}
+
+func (s *Store) SetInstanceRunning(ctx context.Context, id, ip string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE instances SET status='running', ip=$2, updated_at=now() WHERE id=$1`, id, ip)
+	return err
+}
+
+func (s *Store) SetInstanceStatus(ctx context.Context, id, status string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE instances SET status=$2, updated_at=now() WHERE id=$1`, id, status)
+	return err
+}
+
+func (s *Store) DeleteInstance(ctx context.Context, id string) error {
+	_, err := s.DB.Exec(ctx, `DELETE FROM instances WHERE id=$1`, id)
+	return err
+}
+
+func (s *Store) InstancesForService(ctx context.Context, serviceID string) ([]Instance, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+instanceCols+` FROM instances WHERE service_id=$1 ORDER BY created_at`, serviceID)
+	return collectInstances(rows, err)
+}
+
+func (s *Store) InstancesForNode(ctx context.Context, nodeID string) ([]Instance, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+instanceCols+` FROM instances WHERE node_id=$1`, nodeID)
+	return collectInstances(rows, err)
+}
+
+func (s *Store) AllInstances(ctx context.Context) ([]Instance, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+instanceCols+` FROM instances ORDER BY created_at`)
+	return collectInstances(rows, err)
+}
+
+// ApplyContainerStatus records live stats reported by an agent heartbeat.
+func (s *Store) ApplyContainerStatus(ctx context.Context, nodeID string, c proto.ContainerStatus) error {
+	status := "running"
+	if !c.Running {
+		status = "failed"
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE instances SET memory_usage_mb=$3, memory_peak_mb=GREATEST(memory_peak_mb, $3), cpu_usage_millis=$4,
+		restarts=$5, ip=CASE WHEN $6<>'' THEN $6 ELSE ip END,
+		status = CASE WHEN status IN ('running','failed') THEN $7 ELSE status END, updated_at=now()
+		WHERE node_id=$1 AND container_id=$2`, nodeID, c.ContainerID, c.MemoryMB, c.CPUMillis, c.Restarts, c.IP, status)
+	return err
+}
+
+// NodeCommitted sums resource requests of live instances per node.
+func (s *Store) NodeCommitted(ctx context.Context) (map[string][2]int, error) {
+	rows, err := s.DB.Query(ctx, `SELECT node_id, COALESCE(sum(memory_request_mb),0), COALESCE(sum(cpu_request_millis),0)
+		FROM instances WHERE status IN ('starting','running') GROUP BY node_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][2]int{}
+	for rows.Next() {
+		var id string
+		var mem, cpu int
+		if err := rows.Scan(&id, &mem, &cpu); err != nil {
+			return nil, err
+		}
+		out[id] = [2]int{mem, cpu}
+	}
+	return out, rows.Err()
+}
