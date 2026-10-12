@@ -12,6 +12,7 @@
 |---|---|
 | **Nhẹ** | Mọi thành phần hệ thống viết bằng Go và đóng gói thành một binary tĩnh. Không bắt buộc Kubernetes, **không dùng Docker daemon**: agent điều khiển thẳng containerd + crun. Agent trên mỗi node dùng dưới 50 MB RAM. |
 | **Nhanh** | Build có cache nhiều tầng. Site tĩnh không cần container. Registry nằm trong cluster. Deploy không downtime. Rollback tức thì vì giữ lại image cũ. |
+| **Mật độ cao** | Nhồi được nhiều app nhất trên mỗi máy: dùng chung database server, overcommit có kiểm soát, cho app nhàn rỗi ngủ, tự tinh chỉnh runtime theo giới hạn RAM (xem mục 4.9). |
 | **Cluster từ ngày đầu** | Kể cả khi chỉ có 1 máy, mọi thao tác đều đi qua *Agent API*, nên thêm node mới không phải viết lại gì. |
 | **Control plane không giữ state** | State nằm trong PostgreSQL và NATS, nên chạy nhiều bản control plane để HA rất dễ. |
 | **Mặc định an toàn** | Có mTLS giữa các node, mã hoá secret, giới hạn tài nguyên cho mọi container, và cô lập mạng giữa các project. |
@@ -173,6 +174,7 @@ paas-agent (Go)
 ### 4.4. Database được quản lý
 - Hỗ trợ **PostgreSQL, MySQL/MariaDB, Redis/Valkey, MongoDB**, sau đó thêm ClickHouse, RabbitMQ, Meilisearch.
 - Tạo bằng 1 click, tự sinh credential và tự gắn biến `DATABASE_URL` vào app trong cùng project.
+- Có hai chế độ: **shared** (mặc định cho dev, staging và app nhỏ: nhiều database logic chạy trên 1 database server) và **dedicated** (mỗi database một instance riêng, dành cho production). Chi tiết ở mục 4.9.
 - Volume persistent nằm ở ổ local (NVMe) của node, scheduler **ghim DB vào node chứa volume**.
 - **Backup tự động** lên S3 theo lịch (pgBackRest/WAL-G cho Postgres, hỗ trợ PITR), restore bằng 1 click, có retention policy.
 - Mặc định chỉ truy cập qua mạng nội bộ. Có thể bật public qua TCP proxy kèm TLS.
@@ -207,7 +209,7 @@ paas-agent (Go)
 - **Drain / cordon node** để bảo trì: di chuyển workload stateless sang node khác.
 - **Tự phục hồi**: reconciler liên tục so sánh trạng thái mong muốn với trạng thái thực tế. Khi node chết thì lên lịch lại replica stateless sang node khác.
 - **Horizontal autoscaling** theo CPU, RAM hoặc RPS (đo ở proxy), có min/max replica.
-- **Scale-to-zero (tuỳ chọn)** cho app ít truy cập: proxy giữ request lại trong lúc app khởi động.
+- **Scale-to-zero (tuỳ chọn)** cho app ít truy cập: proxy giữ request lại trong lúc app khởi động (xem mục 4.9).
 - **Tự động thêm và bớt node** qua API của nhà cung cấp cloud (Hetzner, DigitalOcean, Vultr, AWS) khi cluster thiếu hoặc thừa tài nguyên.
 - **HA control plane**: 3 node control, gồm NATS cluster 3 node, Postgres primary + replica và nhiều bản control plane đặt sau load balancer.
 - Đa vùng (multi-region) ở giai đoạn sau: edge node ở nhiều nơi, dùng GeoDNS.
@@ -218,6 +220,84 @@ paas-agent (Go)
 - `runtime_class: sandboxed` (**gVisor**) cho code không tin cậy trên VPS thường. `runtime_class: microvm` (**Firecracker**) khi node có KVM.
 - Giới hạn tốc độ request (rate limit) ở edge, bảo vệ dashboard bằng 2FA, quét image (Trivy) khi build.
 - Secret không bao giờ xuất hiện trong log, bị che khi hiển thị trên UI.
+
+### 4.9. Tối ưu mật độ (nhiều app hơn trên mỗi máy)
+
+Trên một máy, RAM gần như luôn là giới hạn trước CPU và ổ đĩa. Các tính năng dưới đây giúp tăng số app chạy được trên cùng một máy lên khoảng 2–3 lần (ước tính ở mục 9).
+
+**1. Database server dùng chung (shared database server)**
+- Mỗi node (hoặc mỗi team) có 1 instance PostgreSQL và 1 instance MySQL dùng chung. Mỗi app nhận một **database logic riêng, user riêng và mật khẩu riêng**.
+- Cô lập giữa các database:
+  - Postgres: `REVOKE CONNECT` giữa các database, đặt `CONNECTION LIMIT` cho từng database, và theo dõi dung lượng từng database để cảnh báo khi vượt quota.
+  - MySQL: phân quyền theo từng schema, đặt `MAX_USER_CONNECTIONS`.
+- Có **PgBouncer** đứng trước Postgres dùng chung, để nhiều app chia sẻ ít kết nối thật.
+- Backup và restore vẫn làm **theo từng database logic** (`pg_dump`/`mysqldump` từng database), cùng với backup toàn instance (pgBackRest/WAL-G).
+- Bấm **"Nâng cấp lên dedicated"** để tách một database ra instance riêng. Hệ thống tự dump/restore hoặc dùng logical replication để ít downtime, rồi tự cập nhật `DATABASE_URL`.
+- Mỗi database logic tiết kiệm khoảng 150–250 MB RAM so với chạy instance riêng.
+- Redis vốn rất nhẹ (10–50 MB) nên vẫn chạy instance riêng cho mỗi app, giúp cô lập dễ hơn.
+
+**2. Request / limit, QoS và overcommit có kiểm soát**
+- Mỗi service có `memory.request` (lượng RAM được đảm bảo, scheduler dùng để xếp chỗ) và `memory.limit` (trần cứng, vượt là bị OOM kill). CPU cũng có cặp tương tự.
+- Hệ thống tự gán **lớp QoS (quality of service)** cho từng service:
+
+  | Lớp | Điều kiện | Áp dụng cho | Thứ tự bị dừng khi máy thiếu RAM |
+  |---|---|---|---|
+  | `guaranteed` | request = limit | Database, app production quan trọng | Dừng sau cùng |
+  | `burstable` | request < limit | Mặc định cho app | Ở giữa |
+  | `best-effort` | Không đặt request | Preview deployment, cron | Dừng đầu tiên |
+
+- **Tỷ lệ overcommit chỉnh được theo node**, ví dụ RAM 1,5×, CPU 4×. Scheduler xếp app theo tổng `request` và không bao giờ để tổng `request` của app `guaranteed` vượt quá RAM thật.
+- Agent cấu hình cgroup v2 như sau:
+  - `memory.high` (ngưỡng mềm, kernel bắt đầu đòi lại RAM từ từ thay vì kill ngay) và `memory.max` (ngưỡng cứng).
+  - `cpu.weight` để chia CPU theo tỷ lệ.
+  - `oom_score_adj` theo lớp QoS, để kernel kill app ít quan trọng trước.
+
+**3. Theo dõi áp lực bộ nhớ và chủ động đẩy app ra (eviction)**
+- Agent đọc **PSI** (`/proc/pressure/memory`, chỉ số cho biết các tiến trình đang phải chờ RAM bao lâu) và mức RAM còn trống của node.
+- Khi vượt ngưỡng, agent làm theo thứ tự:
+  1. Cho app `best-effort` đang nhàn rỗi đi ngủ.
+  2. Dừng các app `best-effort` còn lại.
+  3. Báo scheduler chuyển app `burstable` (không có state) sang node khác.
+- Mục tiêu là tránh để kernel OOM killer giết ngẫu nhiên.
+
+**4. Chế độ ngủ (sleep mode) và scale-to-zero**
+- App không có request trong N phút (mặc định 15 phút cho preview, tắt mặc định cho production) sẽ bị dừng và giải phóng toàn bộ RAM.
+- **Giai đoạn 2, bản đơn giản**: proxy chuyển request của app đang ngủ sang dịch vụ "waker". Waker start lại container và trả về trang "đang khởi động" tự tải lại (hoặc HTTP 503 kèm `Retry-After` với API).
+- **Giai đoạn 3, bản đầy đủ**: proxy Go tự viết **giữ request lại** trong lúc container start (thường dưới 1 giây với Go/Node vì crun và image đã có sẵn trên node), nên người dùng không thấy trang chờ.
+- Hướng nghiên cứu (giai đoạn 4): dùng **CRIU checkpoint/restore** để "đánh thức" các app khởi động chậm (Java, Next.js) trong vài trăm ms thay vì vài giây.
+
+**5. Tự tinh chỉnh runtime theo giới hạn RAM**
+- Lúc khởi động, agent tự thêm các biến môi trường theo ngôn ngữ (Railpack đã nhận diện được) và theo `memory.limit`. Người dùng ghi đè được.
+
+  | Ngôn ngữ | Biến môi trường tự thêm |
+  |---|---|
+  | Node.js | `NODE_OPTIONS=--max-old-space-size=<75% limit>` |
+  | Go | `GOMEMLIMIT=<90% limit>`, `GOMAXPROCS=<số CPU được cấp>` |
+  | Java | `JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75 -XX:+UseSerialGC -XX:TieredStopAtLevel=1` (mức nhẹ) |
+  | Python | `WEB_CONCURRENCY` tính theo RAM/CPU được cấp (gunicorn/uvicorn) |
+  | PHP | php-fpm `pm=ondemand` và `pm.max_children` tính theo RAM |
+
+- Database dùng **preset theo kích thước**: `shared_buffers`, `max_connections`, `work_mem` của Postgres và `innodb_buffer_pool_size` của MySQL được tính theo RAM cấp, thay vì dùng cấu hình mặc định.
+
+**6. Gợi ý chỉnh lại kích thước (right-sizing)**
+- Agent ghi lại mức RAM và CPU thực dùng ở p50/p95/max trong 7 ngày.
+- Dashboard đưa ra gợi ý như "App dùng tối đa 90 MB nhưng limit là 512 MB, giảm xuống 160 MB?", áp dụng bằng 1 click.
+- Dashboard có trang **"Mật độ node"** hiển thị RAM đã cam kết, RAM thực dùng, tỷ lệ overcommit và số app đang ngủ.
+
+**7. zram và swap**
+- `install.sh` bật **zram** (swap nén ngay trong RAM, khoảng 25–50% dung lượng RAM, nén `zstd`) và đặt `vm.swappiness` phù hợp.
+- Database `guaranteed` không được dùng swap (cgroup `memory.swap.max=0`), còn app `burstable`/`best-effort` thì được. Nhờ vậy máy chịu được lúc tải tăng đột biến mà không bị OOM.
+
+**8. Tiết kiệm ổ đĩa và RAM cho build**
+- **Garbage collection (GC) image**: mỗi service giữ N bản gần nhất để rollback (mặc định 3), xoá image không còn dùng trong containerd và Zot, giới hạn tổng dung lượng build cache (ví dụ 25 GB, xoá phần ít dùng nhất).
+- **Base image dùng chung**: Railpack và preset build dùng cùng một bộ base image, nên các app chia sẻ layer với nhau. containerd tự khử trùng lặp layer giống nhau.
+- **Giới hạn build**: `buildkitd` chạy trong cgroup riêng (ví dụ tối đa 3 GB RAM và 4 CPU), chỉ 1–2 build chạy cùng lúc trên máy đơn. Khi cluster có build node riêng thì worker không phải chừa RAM cho build.
+- Log xoay vòng (log rotation) và giới hạn thời gian lưu metrics/log theo team.
+
+**9. Không chạy container khi không cần**
+- Site tĩnh và SPA phục vụ thẳng từ S3 (mục 4.3), không tốn RAM.
+- Asset tĩnh của SSR (Next.js `/_next/static`…) tách ra S3, giảm tải cho container.
+- Cron job chạy bằng container ngắn hạn, chạy xong là dừng.
 
 ---
 
@@ -272,12 +352,15 @@ users ─┬─< memberships >─ teams ─< projects ─< environments ─< ser
 nodes ─< node_resources                                       ├─< domains ─< certificates
   └─< instances (container đang chạy: service_id, node_id,    ├─< volumes (node_id)
        deployment_id, state, ip:port)                         └─< autoscale_policies
-databases ─< backups
+database_servers (shared/dedicated, node_id, engine, size_preset)
+  └─< databases (database logic, owner service) ─< backups
 git_installations ─< repositories
 audit_logs, notifications, webhooks_in
 ```
 
-- `services.spec` (JSONB) lưu **trạng thái mong muốn**: image, số replica, tài nguyên, port, health check.
+- `services.spec` (JSONB) lưu **trạng thái mong muốn**: image, số replica, tài nguyên (`cpu/memory.request`, `cpu/memory.limit`), `qos_class`, `runtime_class`, chính sách ngủ (`sleep.idle_timeout`), port, health check.
+- `nodes` lưu thêm tỷ lệ overcommit, dung lượng zram và các khả năng của node (ví dụ `kvm=true`).
+- `usage_stats` (lưu trong VictoriaMetrics) chứa số liệu p50/p95 dùng cho gợi ý right-sizing.
 - `instances` lưu **trạng thái thực tế** do agent báo về.
 - Reconciler chạy liên tục để đưa trạng thái thực tế về trạng thái mong muốn.
 
@@ -295,7 +378,9 @@ paas/
 ├── internal/
 │   ├── api/              # HTTP handlers, OpenAPI
 │   ├── auth/             # session, OAuth, RBAC, tokens
-│   ├── scheduler/        # placement, bin-packing
+│   ├── scheduler/        # placement, bin-packing, overcommit theo QoS
+│   ├── resources/        # request/limit, QoS, cgroup v2, PSI, eviction, tuning theo ngôn ngữ
+│   ├── sleeper/          # chế độ ngủ, waker, scale-to-zero
 │   ├── reconciler/       # desired vs actual state
 │   ├── build/            # orchestrate BuildKit, Railpack
 │   ├── runtime/          # interface Runtime: containerd (crun, gVisor), sau thêm firecracker, wasm
@@ -332,7 +417,8 @@ paas/
 - Web service, worker và site tĩnh (qua S3).
 - Caddy làm proxy, subdomain tự động và custom domain có TLS tự động.
 - Biến môi trường mã hoá, zero-downtime deploy, rollback.
-- PostgreSQL, MySQL và Redis 1-click, kèm backup lên S3.
+- PostgreSQL, MySQL và Redis 1-click, kèm backup lên S3. **Database server dùng chung** (Postgres/MySQL nhiều database logic, có PgBouncer) là chế độ mặc định, chọn được dedicated.
+- **Mật độ cơ bản**: request/limit và lớp QoS ghi xuống cgroup v2, tự tinh chỉnh runtime theo ngôn ngữ, preset kích thước cho DB, zram trong `install.sh`, giới hạn build (cgroup cho buildkitd, 1–2 build đồng thời), GC image và build cache.
 - Dashboard: project, service, deploy, log, env, domain. CLI cơ bản.
 - **Kết quả**: thay thế được Coolify cho 1 máy chủ.
 
@@ -343,9 +429,11 @@ paas/
 - Tách vai trò edge, build và worker. Drain/cordon node.
 - Metrics (VictoriaMetrics) và logs (VictoriaLogs), biểu đồ trên dashboard, cảnh báo.
 - Preview deployment cho PR, cập nhật GitHub Check Run.
+- **Mật độ nâng cao**: scheduler overcommit theo QoS, agent theo dõi PSI và eviction, **chế độ ngủ bản đơn giản** (waker + trang "đang khởi động") cho preview và app nhàn rỗi, gợi ý right-sizing, trang "Mật độ node".
+- Nâng cấp database shared lên dedicated bằng 1 click.
 
 ### Giai đoạn 3: Mở rộng & tối ưu (6–8 tuần)
-- Horizontal autoscaling (CPU, RAM, RPS) và scale-to-zero.
+- Horizontal autoscaling (CPU, RAM, RPS) và **scale-to-zero đầy đủ** (proxy giữ request trong lúc container start).
 - Tự viết proxy Go (certmagic) để thay Caddy, routing nhanh hơn.
 - Tự động thêm và bớt node qua API Hetzner/DO/AWS.
 - HA control plane (3 node).
@@ -358,18 +446,77 @@ paas/
 - `runtime_class: microvm` bằng Firecracker cho node có KVM.
 - Edge functions bằng WebAssembly (runwasi).
 - HA database (Patroni), read replica, PITR.
+- Nghiên cứu CRIU checkpoint/restore để đánh thức nhanh app khởi động chậm. Bật KSM (gộp trang RAM giống nhau giữa các VM) cho node chạy microVM.
 - Đa vùng, GeoDNS, CDN cho site tĩnh.
 - Terraform provider, file cấu hình `paas.toml`, API công khai.
 
 ---
 
-## 9. Yêu cầu phần cứng tham khảo
+## 9. Ước tính dung lượng & phần cứng
+
+### 9.1. Ví dụ: 1 máy 10 core / 10 GB RAM / 200 GB SSD, giữ tất cả vai trò
+
+Các con số là ước tính cho app ít đến vừa traffic. RAM là giới hạn chính, còn CPU và ổ đĩa dư.
+
+**Phần RAM hệ thống chiếm trước**
+
+| Thành phần | RAM |
+|---|---|
+| Linux, containerd, agent | khoảng 0,5 GB |
+| Control plane, Postgres (state), NATS | khoảng 0,4 GB |
+| Caddy, Zot, Garage (S3), VictoriaMetrics/Logs | khoảng 0,5 GB |
+| Chừa chỗ cho build (giới hạn bằng cgroup) | khoảng 2,5 GB |
+| **Còn lại cho app** | **khoảng 6–6,5 GB** |
+
+**RAM mỗi loại app (khi nhàn rỗi hoặc tải nhẹ)**
+
+| Loại | RAM / app |
+|---|---|
+| Site tĩnh / SPA | 0 (proxy phục vụ thẳng từ S3) |
+| Go | 10–30 MB |
+| Node.js | 60–120 MB |
+| Python | 80–250 MB |
+| PHP Laravel | 60–150 MB |
+| Next.js / Nuxt SSR | 150–300 MB |
+| Java Spring Boot | 300–600 MB (khoảng 150–250 MB với preset JVM nhẹ) |
+| PostgreSQL instance riêng | 100–250 MB |
+| Database logic trên server dùng chung | khoảng 5–20 MB thêm cho mỗi database |
+| Redis | 10–50 MB |
+
+**Số app chạy được trên máy này**
+
+| Cấu hình | Số service |
+|---|---|
+| **Không tối ưu** (mỗi app một DB instance, không overcommit, không ngủ) | khoảng 30–50 app backend nhỏ kèm database |
+| **Bật các tính năng mục 4.9** (DB dùng chung, tinh chỉnh runtime, overcommit 1,5×, zram) | khoảng 80–120 app backend |
+| **Thêm chế độ ngủ** (giả sử 50% app nhàn rỗi, ví dụ preview và side project) | khoảng 150–200 app backend |
+| Site tĩnh | Hàng trăm đến hàng nghìn ở mọi cấu hình (chỉ giới hạn bởi ổ đĩa) |
+
+Ví dụ hỗn hợp **không tối ưu**: 20 site tĩnh, 10 Node, 5 Python, 5 Go, 3 Next.js, 8 Postgres, 2 MySQL, 5 Redis = **58 service, khoảng 4,3 GB RAM**. Riêng việc chuyển 8 Postgres + 2 MySQL sang database server dùng chung đã giảm từ khoảng 1,9 GB xuống khoảng 0,6 GB.
+
+**Ổ đĩa 200 GB** (cần GC image và giới hạn build cache):
+
+| Nội dung | Dung lượng |
+|---|---|
+| Hệ điều hành | khoảng 10 GB |
+| Image (giữ 3 bản để rollback, nằm cả trong Zot và containerd) | khoảng 40–60 GB |
+| Build cache (giới hạn) | khoảng 25 GB |
+| Log và metrics (giữ 7–14 ngày) | khoảng 10 GB |
+| **Còn lại cho dữ liệu DB và volume** | **khoảng 80–100 GB** |
+
+Backup DB nên đẩy ra S3 bên ngoài máy (R2, B2…), để máy hỏng thì backup không mất theo.
+
+**CPU 10 core**: dư cho app ít traffic. Một app Node hay Go đơn giản xử lý được hàng nghìn request/giây trên mỗi core. CPU chủ yếu dùng cho build, nên giới hạn mỗi build tối đa 4 core.
+
+### 9.2. Cấu hình tham khảo theo quy mô
 
 | Quy mô | Cấu hình |
 |---|---|
-| Dev / cá nhân | 1 VPS 2 vCPU / 4 GB RAM, giữ tất cả vai trò |
-| Nhỏ (≈ 50 app) | 1 node control+edge (2 vCPU / 4 GB), 1 build node (4 vCPU / 8 GB), 2 worker (4 vCPU / 8 GB) |
+| Dev / cá nhân | 1 VPS 2 vCPU / 4 GB RAM, giữ tất cả vai trò (khoảng 10–20 app nhỏ khi bật DB dùng chung và chế độ ngủ) |
+| Nhỏ (khoảng 100–150 app) | 1 node control+edge (2 vCPU / 4 GB), 1 build node (4 vCPU / 8 GB), 2 worker (4 vCPU / 8–16 GB) |
 | Vừa (HA) | 3 control, 2 edge sau DNS/LB, 2 build, N worker. Postgres riêng có replica. |
+
+Tách build sang máy riêng giúp mỗi worker có thêm khoảng 2,5 GB RAM cho app.
 
 ---
 
@@ -381,6 +528,8 @@ paas/
 | Database stateful khó di chuyển giữa node | Ghim DB vào node chứa volume, backup thường xuyên lên S3, có quy trình restore sang node khác. HA ở giai đoạn 4. |
 | Giới hạn rate của Let's Encrypt | Dùng wildcard cert qua DNS-01 cho subdomain hệ thống, chỉ xin cert riêng cho custom domain. Dự phòng ZeroSSL. |
 | Không có Docker nên debug và làm phần mạng/log khó hơn (MVP mất thêm khoảng 1–2 tuần) | Dùng `nerdctl` để debug. Dùng lại CNI plugins chuẩn thay vì tự viết. Viết test tích hợp cho agent ngay từ đầu. |
+| Overcommit làm app bị OOM hoặc chậm khi nhiều app cùng tăng tải | Database luôn ở lớp `guaranteed` và không dùng swap. Agent theo dõi PSI và chủ động đẩy app ra theo lớp QoS. Tỷ lệ overcommit mặc định thấp (1,5×), chỉnh được theo node. |
+| Database dùng chung: một app chiếm hết kết nối hoặc tài nguyên của app khác | Đặt `CONNECTION LIMIT` cho từng database, dùng PgBouncer, đặt `statement_timeout`, cảnh báo khi vượt quota dung lượng. Có nút nâng cấp lên dedicated. |
 | Build ăn hết tài nguyên của app | Tách build node, đặt giới hạn cgroup cho BuildKit, dùng hàng đợi có giới hạn đồng thời. |
 | Bảo mật khi multi-tenant | Bắt đầu với mô hình "single organization". Chỉ mở public multi-tenant khi đã có `runtime_class: sandboxed` (gVisor) hoặc microVM (Firecracker) và cô lập mạng. |
 | Control plane là điểm lỗi duy nhất | Workload vẫn chạy khi control plane chết: agent và proxy giữ cấu hình cuối cùng. HA ở giai đoạn 3. |
