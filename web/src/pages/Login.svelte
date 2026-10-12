@@ -92,7 +92,7 @@
             bind:value={code}
             inputmode="numeric"
             autocomplete="one-time-code"
-            pattern="\d{6}"
+            pattern="[0-9]*" minlength="6"
             maxlength="6"
             placeholder="123456"
             required

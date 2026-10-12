@@ -84,7 +84,7 @@
           {#if detail.urls[0]}
             <a href={detail.urls[0]} target="_blank" rel="noreferrer" class="row nowrap" style="gap:4px">{detail.urls[0].replace(/^https?:\/\//, '')}<Icon name="external" size={12} /></a>
           {/if}
-          <span class="mono faint small">{detail.internal_host}</span>
+          {#if s.type !== 'cron'}<span class="mono faint small">{detail.internal_host}</span>{:else}<span class="faint small">Scheduled job · <code>{s.spec.schedule}</code> UTC</span>{/if}
         </p>
       </div>
     </div>

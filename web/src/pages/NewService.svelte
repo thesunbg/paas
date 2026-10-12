@@ -258,7 +258,7 @@
             <label class="field">
               <span>Name</span>
               <input bind:value={name} oninput={() => (nameTouched = true)} placeholder="api" maxlength="40" />
-              <span class="hint">Internal host: <code>{(name || 'name').toLowerCase()}.{project.project.slug}.internal</code></span>
+              {#if type !== 'cron'}<span class="hint">Internal host: <code>{(name || 'name').toLowerCase()}.{project.project.slug}.internal</code></span>{/if}
             </label>
             {#if type === 'web'}
               <label class="field">

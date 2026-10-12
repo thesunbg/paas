@@ -74,7 +74,12 @@ func (s *Server) createDatabase(ctx context.Context, proj *store.Project, in Cre
 	if in.BackupHours != nil {
 		backupHours = *in.BackupHours
 	}
+	// Shared servers host many tenants: a random suffix keeps identifiers unique.
 	ident := dbIdent(proj.Slug, name)
+	if len(ident) > 36 {
+		ident = ident[:36]
+	}
+	ident += "_" + util.RandomToken(3)
 	if in.Mode == "dedicated" {
 		ident = dbIdent(name)
 	}

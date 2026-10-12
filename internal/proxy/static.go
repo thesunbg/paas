@@ -64,6 +64,11 @@ func ServeStatic(w http.ResponseWriter, r *http.Request, root string, spa bool) 
 			return
 		}
 	}
+	// Build output is untrusted: refuse symlinks that resolve outside the site root.
+	if real, err := filepath.EvalSymlinks(full); err != nil || !within(real, root) {
+		errorPage(w, http.StatusNotFound, "Page not found", "")
+		return
+	}
 	f, err := os.Open(full)
 	if err != nil {
 		errorPage(w, http.StatusNotFound, "Page not found", "")
@@ -143,4 +148,14 @@ func errorPage(w http.ResponseWriter, status int, title, detail string) {
 <style>body{font-family:system-ui,sans-serif;background:#0b0d12;color:#e6e8ee;display:grid;place-items:center;min-height:100vh;margin:0}
 main{max-width:32rem;padding:2rem}h1{font-size:1.4rem;margin:0 0 .5rem}p{color:#9aa3b2;line-height:1.5}code{color:#7aa2ff}</style></head>
 <body><main><p><code>%d</code></p><h1>%s</h1><p>%s</p></main></body></html>`, status, html.EscapeString(title), status, html.EscapeString(title), html.EscapeString(detail))
+}
+
+// within reports whether path (already symlink-resolved) is inside root.
+func within(path, root string) bool {
+	r, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	r = filepath.Clean(r)
+	return path == r || strings.HasPrefix(path, r+string(os.PathSeparator))
 }

@@ -63,7 +63,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sig := r.Header.Get("X-Hub-Signature-256")
-	if !(sig != "" && verifyGitHubSignature(svc.WebhookSecret, body, sig)) && !hmac.Equal([]byte(r.URL.Query().Get("secret")), []byte(svc.WebhookSecret)) {
+	if sig == "" || !verifyGitHubSignature(svc.WebhookSecret, body, sig) {
 		writeError(w, http.StatusUnauthorized, "invalid signature")
 		return
 	}
@@ -89,6 +89,10 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	want := svc.Source.Branch
 	if want == "" {
 		want = "main"
+	}
+	if ev.After != "" && !validSHA(ev.After) {
+		writeError(w, http.StatusBadRequest, "invalid commit sha")
+		return
 	}
 	if ev.Deleted || branch != want {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "reason": "branch " + branch})

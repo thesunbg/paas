@@ -74,7 +74,7 @@
         <div>{detail.service.spec.job_timeout_sec ? `${detail.service.spec.job_timeout_sec}s` : 'default'}</div>
       </div>
       <div>
-        <div class="label">Last {stats.total} runs</div>
+        <div class="label">Recent runs ({stats.total})</div>
         <div><span style="color:var(--green)">{stats.ok} succeeded</span> · <span style:color={stats.failed ? 'var(--red)' : undefined}>{stats.failed} failed</span></div>
       </div>
       <div class="spacer"></div>
@@ -99,11 +99,11 @@
             <Icon name={open[r.id] ? 'chevdown' : 'chevron'} size={14} />
             <Status status={st(r)} label={r.status} />
             <span class="badge {r.exit_code === 0 ? 'green' : r.exit_code == null ? '' : 'red'}">{r.exit_code == null ? '—' : `exit ${r.exit_code}`}</span>
-            <span class="badge outline">{r.trigger}</span>
+            <span class="badge outline hide-sm">{r.trigger}</span>
             <span class="muted small truncate out1 hide-sm">{r.output.split('\n').find((l) => l.trim()) ?? ''}</span>
             <span class="spacer"></span>
             <span class="small nowrap" title={absTime(r.started_at)}>{relTime(r.started_at, now)}</span>
-            <span class="faint small mono nowrap dur">{between(r.started_at, r.finished_at, r.status === 'running')}</span>
+            <span class="faint small mono nowrap dur hide-sm">{between(r.started_at, r.finished_at, r.status === 'running')}</span>
           </button>
           {#if open[r.id]}
             <pre class="log out">{r.output || '(no output)'}</pre>
@@ -134,6 +134,8 @@
     padding: 6px 14px;
     border-radius: 0;
     font-weight: 400;
+    flex-wrap: wrap;
+    white-space: normal;
   }
   .out1 {
     max-width: 420px;

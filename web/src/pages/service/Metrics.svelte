@@ -88,9 +88,9 @@
     <div class="charts">
       <Chart title="Memory (sum of instances) · limit {mb(limit)}/instance" points={memory} format={(v) => mb(v)} />
       <Chart title="CPU (sum of instances)" points={cpuS} format={(v) => cpu(Math.round(v))} />
-      <Chart title="Requests per minute" points={reqs} kind="bars" format={n0} />
-      <Chart title="5xx errors per minute" points={errs} kind="bars" color="var(--red)" format={n0} summary={totals.err ? `${totals.err} in ${hours}h` : 'none'} />
-      <Chart title="Running instances" points={inst} format={(v) => String(Math.round(v))} max={Math.max(1, ...inst.map((p) => p.v))} />
+      <Chart title="Requests per minute" points={reqs} kind="bars" format={n0} minTop={2} />
+      <Chart title="5xx errors per minute" points={errs} kind="bars" color="var(--red)" format={n0} minTop={2} summary={totals.err ? `${totals.err} in ${hours}h` : 'none'} />
+      <Chart title="Running instances" points={inst} format={(v) => String(Math.round(v))} minTop={2} />
     </div>
     <p class="hint">One point per minute, recorded by the control plane. Hover or use the arrow keys on a chart to read values.</p>
   {/if}

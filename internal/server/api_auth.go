@@ -2,9 +2,11 @@ package server
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -50,6 +52,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "password must be at least 8 characters")
 		return
 	}
+	release := s.store.AdvisoryLock(r.Context(), "register")
+	defer release()
 	n, err := s.store.CountUsers(r.Context())
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -101,14 +105,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	key := strings.ToLower(strings.TrimSpace(in.Email))
+	if !loginGuard.allowed(key) || !loginGuard.allowed(clientAddr(r)) {
+		writeError(w, 429, "too many failed attempts; try again in 15 minutes")
+		return
+	}
+	failed := func() { loginGuard.fail(key); loginGuard.fail(clientAddr(r)) }
 	u, err := s.store.UserByEmail(r.Context(), strings.TrimSpace(in.Email))
 	if err != nil {
 		// Spend comparable time to avoid user enumeration.
 		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(in.Password))
+		failed()
 		writeError(w, 401, "invalid email or password")
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)) != nil {
+		failed()
 		writeError(w, 401, "invalid email or password")
 		return
 	}
@@ -123,6 +135,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !totp.Verify(secret, in.Code, time.Now()) {
+			failed()
 			writeJSON(w, 401, map[string]any{"error": "invalid two-factor code", "two_factor": true})
 			return
 		}
@@ -283,6 +296,12 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{}
+	if existing, err := s.store.UserByEmail(r.Context(), in.Email); err == nil {
+		if role, err := s.store.MemberRole(r.Context(), team, existing.ID); err == nil && role == "owner" {
+			writeError(w, 403, "the team owner's role cannot be changed")
+			return
+		}
+	}
 	u, err := s.store.UserByEmail(r.Context(), in.Email)
 	if errors.Is(err, store.ErrNotFound) {
 		if _, perr := mail.ParseAddress(in.Email); perr != nil {
@@ -312,6 +331,10 @@ func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.PathValue("user") == currentUser(r).ID {
 		writeError(w, 400, "you cannot remove yourself")
+		return
+	}
+	if role, err := s.store.MemberRole(r.Context(), team, r.PathValue("user")); err == nil && role == "owner" {
+		writeError(w, 403, "the team owner cannot be removed")
 		return
 	}
 	if err := s.store.RemoveMember(r.Context(), team, r.PathValue("user")); err != nil {
@@ -385,4 +408,51 @@ func (s *Server) handle2FADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "disabled"})
+}
+
+// attemptGuard locks out a key (email or client IP) after repeated failures.
+type attemptGuard struct {
+	mu       sync.Mutex
+	failures map[string][]time.Time
+}
+
+var loginGuard = &attemptGuard{failures: map[string][]time.Time{}}
+
+const (
+	maxFailures   = 10
+	failureWindow = 15 * time.Minute
+)
+
+func (g *attemptGuard) recent(key string) []time.Time {
+	var keep []time.Time
+	for _, t := range g.failures[key] {
+		if time.Since(t) < failureWindow {
+			keep = append(keep, t)
+		}
+	}
+	g.failures[key] = keep
+	return keep
+}
+
+func (g *attemptGuard) allowed(key string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.recent(key)) < maxFailures
+}
+
+func (g *attemptGuard) fail(key string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.failures[key] = append(g.recent(key), time.Now())
+	if len(g.failures) > 100000 {
+		g.failures = map[string][]time.Time{}
+	}
+}
+
+func clientAddr(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }

@@ -84,7 +84,7 @@
       <div>
         <h1>{p.name}</h1>
         <p class="sub">
-          <span class="mono">{p.slug}</span> · {plural(data.services.length, 'service')} · {plural(data.databases.length, 'database')} · created {relTime(p.created_at)}
+          <span class="mono">{p.slug}</span> · {plural(topLevel.length, 'service')}{data.services.length > topLevel.length ? ` (+${plural(data.services.length - topLevel.length, 'preview')})` : ''} · {plural(data.databases.length, 'database')} · created {relTime(p.created_at)}
         </p>
       </div>
       <div class="row">

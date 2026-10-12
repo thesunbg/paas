@@ -236,6 +236,8 @@ func (r *Runtime) Run(ctx context.Context, req proto.RunRequest) (string, error)
 		return "", fmt.Errorf("create netns: %w", err)
 	}
 	m.NetNS = nsh.GetPath()
+	// Release any address left behind by an earlier attempt with the same container id.
+	_ = r.net.Detach(ctx, req.NetIndex, id, m.NetNS)
 	ip, err := r.net.Attach(ctx, req.NetIndex, id, m.NetNS)
 	if err != nil {
 		_ = nsh.Remove()
@@ -318,7 +320,7 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 		if err := os.MkdirAll(host, 0o755); err != nil {
 			return err
 		}
-		mounts = append(mounts, specs.Mount{Destination: v.Path, Type: "bind", Source: host, Options: []string{"rbind", "rw"}})
+		mounts = append(mounts, specs.Mount{Destination: v.Path, Type: "bind", Source: host, Options: []string{"rbind", "rw", "nosuid", "nodev"}})
 	}
 
 	specOpts := []oci.SpecOpts{
@@ -330,6 +332,7 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 		oci.WithMounts(mounts),
 		oci.WithLinuxNamespace(specs.LinuxNamespace{Type: specs.NetworkNamespace, Path: m.NetNS}),
 		oci.WithNoNewPrivileges,
+		oci.WithDroppedCapabilities([]string{"CAP_NET_RAW", "CAP_MKNOD", "CAP_AUDIT_WRITE"}),
 		oci.WithPidsLimit(4096),
 		seccomp.WithDefaultProfile(),
 		withResources(req.Resources, req.QoS, r.cgroupV2, r.negOOM),

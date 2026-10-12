@@ -300,6 +300,15 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 			nextRun = &n
 		}
 	}
+	role, _ := s.teamRole(r, p.TeamID)
+	webhookSecret := svc.WebhookSecret
+	if roleRank[role] < roleRank["developer"] {
+		webhookSecret = ""
+		if svc.Type == model.TypeDatabase {
+			// Database servers carry credentials in their spec.
+			svc.Spec.Env, svc.Spec.Command = nil, nil
+		}
+	}
 	urls := []string{}
 	for _, d := range domains {
 		urls = append(urls, s.urlFor(d.Hostname))
@@ -319,7 +328,7 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		"deployments":    deps,
 		"databases":      linked,
 		"webhook_url":    s.webhookURL(svc),
-		"webhook_secret": svc.WebhookSecret,
+		"webhook_secret": webhookSecret,
 		"internal_host":  internalHost(svc.Slug, p.Slug),
 		"recommendation": resources.Recommend(svc.Spec.Resources, peak),
 		"tuning_env":     resources.TuningEnv(svc.Spec.Language, svc.Spec.Resources),
@@ -393,6 +402,10 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		CommitSHA string `json:"commit_sha"`
 	}
 	_ = decode(r, &in)
+	if in.CommitSHA != "" && !validSHA(in.CommitSHA) {
+		writeError(w, 400, "commit_sha must be a hex commit id")
+		return
+	}
 	u := currentUser(r)
 	d, err := s.QueueDeployment(r.Context(), svc, "manual", in.CommitSHA, "", &u.ID)
 	if err != nil {

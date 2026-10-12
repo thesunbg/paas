@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/thesunbg/paas/internal/store"
@@ -18,6 +21,30 @@ import (
 var notificationEvents = []string{"deploy.succeeded", "deploy.failed", "instance.crashloop", "instance.evicted", "node.offline", "backup.failed", "job.failed", "autoscale"}
 
 var notifyClient = &http.Client{Timeout: 10 * time.Second}
+
+// AllowPrivateNotifyTargets disables the SSRF guard (tests / trusted networks).
+var AllowPrivateNotifyTargets = os.Getenv("PAAS_NOTIFY_ALLOW_PRIVATE") == "true"
+
+func init() {
+	dialer := &net.Dialer{Timeout: 5 * time.Second, Control: func(network, address string, _ syscall.RawConn) error {
+		if AllowPrivateNotifyTargets {
+			return nil
+		}
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			ip.IsUnspecified() || ip.IsMulticast() || cgnat.Contains(ip) {
+			return fmt.Errorf("notification target %s is not a public address", host)
+		}
+		return nil
+	}}
+	notifyClient.Transport = &http.Transport{DialContext: dialer.DialContext, Proxy: http.ProxyFromEnvironment, TLSHandshakeTimeout: 5 * time.Second}
+}
+
+var _, cgnat, _ = net.ParseCIDR("100.64.0.0/10")
 
 // notify delivers an event to the team's channels that subscribed to it (best effort, async).
 func (s *Server) notify(ctx context.Context, teamID, event, text string, data map[string]any) {

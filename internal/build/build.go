@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -130,8 +131,15 @@ func (b *Builder) Build(ctx context.Context, req proto.BuildRequest, log Logger)
 		"--opt", "filename=" + dfName,
 		"--secret", "id=paasenv,src=" + envFile,
 	}
-	for _, k := range keys {
-		args = append(args, "--opt", "build-arg:"+k+"="+req.BuildEnv[k])
+	if plan.UserDockerfile != "" {
+		// Generated Dockerfiles read env through the secret mount only; for user Dockerfiles pass
+		// just the variables they declare with ARG.
+		declared := declaredArgs(filepath.Join(root, plan.UserDockerfile))
+		for _, k := range keys {
+			if declared[k] {
+				args = append(args, "--opt", "build-arg:"+k+"="+req.BuildEnv[k])
+			}
+		}
 	}
 	if plan.Static {
 		dest := filepath.Join(b.StaticDir, req.ServiceID, req.DeploymentID)
@@ -153,6 +161,7 @@ func (b *Builder) Build(ctx context.Context, req proto.BuildRequest, log Logger)
 		return proto.BuildReply{Error: "build failed: " + err.Error(), CommitSHA: sha, CommitMessage: msg, Detected: rep.Detected}
 	}
 	if plan.Static {
+		removeSymlinks(rep.StaticPath, log)
 		if _, err := os.Stat(filepath.Join(rep.StaticPath, "index.html")); err != nil {
 			log("warning: build output has no index.html")
 		}
@@ -195,6 +204,9 @@ func (b *Builder) checkout(ctx context.Context, req proto.BuildRequest, dest str
 	args = append(args, cloneURL, dest)
 	if err := runStreaming(ctx, logR, "", env, "git", args...); err != nil {
 		return "", "", fmt.Errorf("git clone failed: %s", redact(err.Error()))
+	}
+	if req.CommitSHA != "" && !shaRe.MatchString(req.CommitSHA) {
+		return "", "", errors.New("invalid commit sha")
 	}
 	if req.CommitSHA != "" {
 		head, _ := gitOut(ctx, dest, "rev-parse", "HEAD")
@@ -293,4 +305,29 @@ func firstNonEmpty(v ...string) string {
 // ImageName returns the local image reference for a deployment.
 func ImageName(serviceID, deploymentID string) string {
 	return fmt.Sprintf("paas.local/%s:%s", serviceID, deploymentID)
+}
+
+var shaRe = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// removeSymlinks deletes symbolic links from a static build output so the edge
+// proxy can never be tricked into serving files outside the site.
+func removeSymlinks(root string, log Logger) {
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.Type()&os.ModeSymlink != 0 {
+			_ = os.Remove(p)
+			log("removed symlink from static output: " + strings.TrimPrefix(p, root))
+		}
+		return nil
+	})
+}
+
+var argRe = regexp.MustCompile(`(?im)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)`)
+
+func declaredArgs(dockerfile string) map[string]bool {
+	out := map[string]bool{}
+	data, _ := os.ReadFile(dockerfile)
+	for _, m := range argRe.FindAllStringSubmatch(string(data), -1) {
+		out[m[1]] = true
+	}
+	return out
 }

@@ -127,8 +127,12 @@ func (s *Server) handleLinkDatabase(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnlinkDatabase(w http.ResponseWriter, r *http.Request) {
-	db, _ := s.databaseFor(w, r, "developer")
+	db, p := s.databaseFor(w, r, "developer")
 	if db == nil {
+		return
+	}
+	if svc, err := s.store.ServiceByID(r.Context(), r.PathValue("service")); err != nil || svc.ProjectID != p.ID {
+		writeError(w, 404, "service not found in this project")
 		return
 	}
 	if err := s.store.UnlinkDatabase(r.Context(), r.PathValue("service"), db.ID); err != nil {

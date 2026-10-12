@@ -615,7 +615,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (!res.ok) {
     const msg =
-      data && typeof data === 'object' && 'error' in data ? String((data as { error: unknown }).error) : res.statusText || `HTTP ${res.status}`;
+      data && typeof data === 'object' && 'error' in data
+        ? String((data as { error: unknown }).error)
+        : res.status >= 502
+          ? `The control plane is unavailable (HTTP ${res.status}); try again shortly`
+          : `${res.statusText || 'Request failed'} (HTTP ${res.status})`;
     if (res.status === 401 && !path.startsWith('/auth/') && onUnauthorized) onUnauthorized();
     throw new ApiError(res.status, msg, data && typeof data === 'object' ? (data as Record<string, unknown>) : null);
   }

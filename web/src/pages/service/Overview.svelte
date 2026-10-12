@@ -157,6 +157,7 @@
       <div class="card-head"><h3>Service</h3></div>
       <dl class="kv card-body">
         <dt>Status</dt><dd><Status status={s.status} /></dd>
+        {#if !isCron}
         <dt>URLs</dt>
         <dd>
           {#if detail.urls.length}
@@ -164,6 +165,7 @@
           {:else}<span class="faint">none</span>{/if}
         </dd>
         <dt>Internal host</dt><dd class="row nowrap"><code class="truncate">{detail.internal_host}{s.spec.port ? `:${s.spec.port}` : ''}</code><CopyButton text={detail.internal_host} /></dd>
+        {/if}
         <dt>Source</dt>
         <dd class="mono small break">{s.source.kind === 'image' ? s.source.image : `${s.source.repo}@${s.source.branch ?? 'main'}${s.source.root_dir ? ' /' + s.source.root_dir : ''}`}</dd>
         <dt>Resources</dt>

@@ -97,6 +97,9 @@ func (s *DNSServer) ListenOn(ip string) error {
 		select {
 		case <-started:
 		case err := <-errc:
+			// Tear down the half that started so a later call can retry cleanly.
+			_ = udp.Shutdown()
+			_ = tcp.Shutdown()
 			s.mu.Lock()
 			delete(s.listening, ip)
 			s.mu.Unlock()

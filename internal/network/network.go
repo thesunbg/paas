@@ -213,6 +213,19 @@ func (m *Manager) Restore(idx int) {
 	}
 }
 
+// EnsureDNS (re)starts DNS listeners on the gateways of all known networks.
+func (m *Manager) EnsureDNS() {
+	m.mu.Lock()
+	idxs := make([]int, 0, len(m.networks))
+	for i := range m.networks {
+		idxs = append(idxs, i)
+	}
+	m.mu.Unlock()
+	for _, i := range idxs {
+		_ = m.DNS.ListenOn(m.Gateway(i))
+	}
+}
+
 // Detach releases the container's address.
 func (m *Manager) Detach(ctx context.Context, idx int, id, nsPath string) error {
 	n, err := m.network(idx)
@@ -248,8 +261,11 @@ func (m *Manager) Ruleset() string {
 	for _, i := range idxs {
 		br := BridgeName(i)
 		if i == shared {
-			// Shared database servers accept connections from every project.
-			fmt.Fprintf(&b, "    oifname %q ip saddr @cluster accept\n", br)
+			// Shared services: tenants may only reach the shared database ports; the internal
+			// registry and anything else there is reachable from infrastructure addresses only.
+			fmt.Fprintf(&b, "    oifname %q ip saddr & 0.0.255.192 == 0.0.255.192 ip saddr @cluster accept\n", br)
+			fmt.Fprintf(&b, "    oifname %q tcp dport { 3306, 5432 } ip saddr @cluster accept\n", br)
+			fmt.Fprintf(&b, "    oifname %q ip saddr @cluster drop\n", br)
 			continue
 		}
 		t, f := projectOffset(i)

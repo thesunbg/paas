@@ -159,6 +159,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.net.DNS.Shutdown()
 			return nil
 		case <-tick.C:
+			a.net.EnsureDNS()
 			a.heartbeat(ctx)
 			a.checkMemoryPressure(ctx)
 		}

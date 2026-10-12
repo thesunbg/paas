@@ -16,6 +16,7 @@
     kind = 'line',
     height = 150,
     max: fixedMax,
+    minTop = 0,
     summary,
   }: {
     points: Pt[];
@@ -25,6 +26,8 @@
     kind?: 'line' | 'bars';
     height?: number;
     max?: number;
+    /** Smallest axis maximum (e.g. 2 for integer counts so the mid tick stays whole). */
+    minTop?: number;
     summary?: string;
   } = $props();
 
@@ -40,7 +43,7 @@
   const t1 = $derived(points.length ? points[points.length - 1].t : 1);
   const vmax = $derived.by(() => {
     const m = Math.max(0, ...points.map((p) => p.v));
-    const top = fixedMax ?? m;
+    const top = Math.max(fixedMax ?? m, minTop);
     return niceCeil(top || 1);
   });
   const innerW = $derived(Math.max(10, width - padL - padR));
@@ -51,7 +54,8 @@
   function niceCeil(v: number): number {
     const p = Math.pow(10, Math.floor(Math.log10(v)));
     const n = v / p;
-    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
+    // Steps whose halves are also round, so the middle grid label is exact.
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 4 : n <= 6 ? 6 : n <= 8 ? 8 : 10) * p;
   }
 
   const linePath = $derived(points.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(''));

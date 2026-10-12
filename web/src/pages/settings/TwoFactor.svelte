@@ -87,7 +87,7 @@
         <label class="field"><span>Password</span><input type="password" bind:value={password} required autocomplete="current-password" /></label>
         <label class="field">
           <span>Authentication code</span>
-          <input class="mono code" bind:value={code} inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" placeholder="123456" required />
+          <input class="mono code" bind:value={code} inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]*" minlength="6" placeholder="123456" required />
         </label>
         <ErrorMsg {error} />
         <div><button class="danger" type="submit" disabled={busy || !codeOK || !password}>{#if busy}<span class="spinner"></span>{/if}Disable two-factor</button></div>

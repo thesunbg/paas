@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -50,6 +51,15 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request, svc *
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "reason": "pull request targets " + ev.PullRequest.Base.Ref})
 		return
 	}
+	if u := ev.PullRequest.Head.Repo.CloneURL; u != "" && !sameRepo(u, svc.Source.Repo) {
+		// Never run code from forks with this service's secrets and git token.
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "reason": "pull requests from forks do not get previews"})
+		return
+	}
+	if !validSHA(ev.PullRequest.Head.SHA) {
+		writeError(w, http.StatusBadRequest, "invalid head sha")
+		return
+	}
 	ctx := context.WithoutCancel(r.Context())
 	switch ev.Action {
 	case "opened", "reopened", "synchronize", "ready_for_review":
@@ -86,9 +96,6 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request, svc *
 // ensurePreview returns the preview service of a pull request, creating it from the parent.
 func (s *Server) ensurePreview(ctx context.Context, parent *store.Service, ev pullRequestEvent) (*store.Service, bool, error) {
 	repo := parent.Source.Repo
-	if u := ev.PullRequest.Head.Repo.CloneURL; u != "" {
-		repo = u // pull requests from forks build the fork
-	}
 	if existing, err := s.store.PreviewFor(ctx, parent.ID, ev.Number); err == nil {
 		existing.Source.Repo, existing.Source.Branch = repo, ev.PullRequest.Head.Ref
 		if err := s.store.UpdateServiceConfig(ctx, existing); err != nil {
@@ -163,4 +170,23 @@ func (s *Server) commentPreview(parent, preview *store.Service, pr int) {
 	if resp, err := http.DefaultClient.Do(req); err == nil {
 		resp.Body.Close()
 	}
+}
+
+var shaRe = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+func validSHA(s string) bool { return shaRe.MatchString(s) }
+
+// sameRepo compares two git URLs ignoring scheme, credentials, case and a .git suffix.
+func sameRepo(a, b string) bool {
+	norm := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if i := strings.Index(s, "://"); i >= 0 {
+			s = s[i+3:]
+		}
+		if i := strings.LastIndex(s, "@"); i >= 0 {
+			s = s[i+1:]
+		}
+		return strings.TrimSuffix(strings.TrimSuffix(s, "/"), ".git")
+	}
+	return norm(a) == norm(b)
 }

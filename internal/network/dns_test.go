@@ -65,7 +65,8 @@ func TestRulesetIsolation(t *testing.T) {
 	m := &Manager{base: [2]int{10, 100}, node: 1, shared: 1, networks: map[int]gocni.CNI{1: nil, 2: nil}}
 	r := m.Ruleset()
 	for _, want := range []string{
-		`oifname "pn1" ip saddr @cluster accept`,
+		`oifname "pn1" tcp dport { 3306, 5432 } ip saddr @cluster accept`,
+		`oifname "pn1" ip saddr @cluster drop`,
 		`oifname "pn2" ip saddr & 0.0.255.192 == 0.0.0.128 ip saddr @cluster accept`,
 		`oifname "pn2" ip saddr @cluster drop`,
 		`iifname "pn*" oifname "paaswg0" drop`,
