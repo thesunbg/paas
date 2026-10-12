@@ -9,6 +9,9 @@
   import Loading from '../components/Loading.svelte';
   import Icon from '../components/Icon.svelte';
   import EnvEditor from '../components/EnvEditor.svelte';
+  import CronField from '../components/CronField.svelte';
+  import AutoscaleFields from '../components/AutoscaleFields.svelte';
+  import { parseCron } from '../lib/cron';
 
   let { projectId }: { projectId: string } = $props();
 
@@ -34,6 +37,11 @@
   let envRows = $state<EnvRow[]>([]);
   let domain = $state('');
   let autoDeploy = $state(true);
+  let schedule = $state('*/15 * * * *');
+  let jobCommand = $state('');
+  let jobTimeout = $state(3600);
+  let previews = $state(false);
+  let autoscale = $state({ enabled: false, min: 1, max: 3, target_cpu_percent: 70, target_rps: 0 });
 
   let busy = $state(false);
   let error = $state('');
@@ -74,7 +82,19 @@
     if (i === 1) {
       if (!name.trim()) return 'Service name is required';
       if (type === 'web' && (port < 1 || port > 65535)) return 'Port must be between 1 and 65535';
-      if (sleepEnabled && idleMinutes < 1) return 'Idle minutes must be at least 1';
+      if (type === 'web' && sleepEnabled && idleMinutes < 1) return 'Idle minutes must be at least 1';
+      if (type === 'cron') {
+        try {
+          parseCron(schedule);
+        } catch (err) {
+          return 'Schedule: ' + (err as Error).message;
+        }
+        if (jobTimeout < 1) return 'Timeout must be at least 1 second';
+      }
+      if (type === 'web' && autoscale.enabled) {
+        if (autoscale.min < 1 || autoscale.max < autoscale.min || autoscale.max > 50) return 'Autoscaling needs 1 ≤ min ≤ max ≤ 50';
+        if (!autoscale.target_cpu_percent && !autoscale.target_rps) return 'Set a CPU or request-rate target for autoscaling';
+      }
     }
     if (i === 2) {
       const v = validateRows(envRows);
@@ -112,14 +132,30 @@
           ? { repo: repo.trim(), branch: branch.trim() || 'main', root_dir: rootDir.trim() || undefined }
           : { image: image.trim() },
       size,
-      sleep: type === 'web' && sleepEnabled ? { enabled: true, idle_minutes: idleMinutes } : { enabled: false },
+      sleep: type === 'web' && sleepEnabled && !autoscale.enabled ? { enabled: true, idle_minutes: idleMinutes } : { enabled: false },
       env: rowsToMap(envRows),
       auto_deploy: sourceKind === 'git' ? autoDeploy : undefined,
       deploy: true,
     };
-    if (type === 'web') input.port = port;
+    if (type === 'web') {
+      input.port = port;
+      if (autoscale.enabled)
+        input.autoscale = {
+          enabled: true,
+          min: autoscale.min,
+          max: autoscale.max,
+          target_cpu_percent: autoscale.target_cpu_percent || undefined,
+          target_rps: autoscale.target_rps || undefined,
+        };
+      if (sourceKind === 'git' && previews) input.previews = true;
+    }
+    if (type === 'cron') {
+      input.schedule = schedule.trim();
+      input.job_timeout_sec = jobTimeout;
+      if (jobCommand.trim()) input.command = [jobCommand.trim()];
+    }
     if (sourceKind === 'git' && gitToken.trim()) input.git_token = gitToken.trim();
-    if (type !== 'worker' && domain.trim()) input.domain = domain.trim().toLowerCase();
+    if ((type === 'web' || type === 'static') && domain.trim()) input.domain = domain.trim().toLowerCase();
     busy = true;
     try {
       const res = await api.createService(projectId, input);
@@ -137,6 +173,7 @@
     { id: 'web', label: 'Web service', desc: 'HTTP server on a port, gets a public URL', icon: 'box' },
     { id: 'worker', label: 'Worker', desc: 'Background process, no public URL', icon: 'zap' },
     { id: 'static', label: 'Static site', desc: 'Built files served from the edge', icon: 'globe' },
+    { id: 'cron', label: 'Cron job', desc: 'Runs a command on a schedule', icon: 'clock' },
   ];
 </script>
 
@@ -250,7 +287,30 @@
               </p>
             {/if}
           </fieldset>
+          {#if type === 'cron'}
+            <div class="sleep stack">
+              <CronField bind:value={schedule} />
+              <label class="field">
+                <span>Command <span class="faint">(optional)</span></span>
+                <input class="mono" bind:value={jobCommand} placeholder="node scripts/report.js" spellcheck="false" />
+                <span class="hint">Runs with <code>/bin/sh -c</code>. Leave empty to use the image's default command.</span>
+              </label>
+              <label class="field" style="max-width:220px">
+                <span>Timeout (seconds)</span>
+                <input type="number" min="1" max="86400" bind:value={jobTimeout} />
+              </label>
+            </div>
+          {/if}
           {#if type === 'web'}
+            <AutoscaleFields bind:value={autoscale} />
+            {#if sourceKind === 'git'}
+              <div class="sleep">
+                <label class="check"><input type="checkbox" bind:checked={previews} />Preview deployments for pull requests</label>
+                <p class="hint">Each PR targeting <code>{branch || 'main'}</code> gets its own service and URL, sleeps when idle and is deleted when the PR closes. Requires the GitHub webhook with the <code>pull_request</code> event.</p>
+              </div>
+            {/if}
+          {/if}
+          {#if type === 'web' && !autoscale.enabled}
             <div class="sleep">
               <label class="check"><input type="checkbox" bind:checked={sleepEnabled} />Sleep when idle</label>
               <p class="hint">Stops instances after a period without requests and wakes on the next request (a cold start of a few seconds).</p>
@@ -270,7 +330,7 @@
             </div>
             <EnvEditor bind:rows={envRows} masked />
           </div>
-          {#if type !== 'worker'}
+          {#if type === 'web' || type === 'static'}
             <hr style="margin:0" />
             <label class="field">
               <span>Custom domain <span class="faint">(optional)</span></span>
@@ -285,7 +345,12 @@
               <dt>Type</dt><dd>{type}</dd>
               <dt>Name</dt><dd>{name}</dd>
               <dt>Size</dt><dd>{size}{selectedSize ? ` (${mb(selectedSize.memory_limit_mb)}, ${cpu(selectedSize.cpu_limit_millis)})` : ''}</dd>
-              {#if type === 'web'}<dt>Port</dt><dd>{port}</dd><dt>Sleep</dt><dd>{sleepEnabled ? `after ${idleMinutes} min idle` : 'off'}</dd>{/if}
+              {#if type === 'web'}
+                <dt>Port</dt><dd>{port}</dd>
+                <dt>Scaling</dt><dd>{autoscale.enabled ? `autoscale ${autoscale.min}–${autoscale.max}` : sleepEnabled ? `sleep after ${idleMinutes} min idle` : '1 replica'}</dd>
+                {#if previews && sourceKind === 'git'}<dt>PR previews</dt><dd>on</dd>{/if}
+              {/if}
+              {#if type === 'cron'}<dt>Schedule</dt><dd class="mono small">{schedule} (UTC)</dd>{/if}
               <dt>Variables</dt><dd>{Object.keys(rowsToMap(envRows)).length}</dd>
             </dl>
           </div>
@@ -400,7 +465,7 @@
   }
   .types {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 8px;
   }
   .type {
@@ -456,10 +521,12 @@
     background: var(--bg-elev-2);
     border-radius: 0 0 var(--radius) var(--radius);
   }
-  @media (max-width: 680px) {
+  @media (max-width: 760px) {
     .types {
-      grid-template-columns: 1fr;
+      grid-template-columns: 1fr 1fr;
     }
+  }
+  @media (max-width: 680px) {
     .sizes {
       grid-template-columns: repeat(3, 1fr);
     }

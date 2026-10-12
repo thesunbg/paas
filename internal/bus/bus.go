@@ -8,15 +8,24 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
+// ClusterOptions joins embedded servers of several control planes into one NATS cluster.
+type ClusterOptions struct {
+	Name   string   // unique server name
+	Listen string   // host:port for cluster routes, empty disables clustering
+	Routes []string // nats://host:port of the other control planes
+}
+
 // StartServer runs an embedded NATS server listening on addr, protected by token.
-func StartServer(addr, token, storeDir string) (*server.Server, error) {
+func StartServer(addr, token, storeDir string, cluster ...ClusterOptions) (*server.Server, error) {
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -33,6 +42,31 @@ func StartServer(addr, token, storeDir string) (*server.Server, error) {
 		NoSigs:        true,
 		MaxPayload:    8 << 20,
 		StoreDir:      storeDir,
+	}
+	if len(cluster) > 0 && cluster[0].Listen != "" {
+		c := cluster[0]
+		ch, cp, err := net.SplitHostPort(c.Listen)
+		if err != nil {
+			return nil, err
+		}
+		port, err := strconv.Atoi(cp)
+		if err != nil {
+			return nil, err
+		}
+		opts.ServerName = c.Name
+		opts.Cluster = server.ClusterOpts{Name: "paas", Host: ch, Port: port, Username: "paas", Password: token}
+		for _, r := range c.Routes {
+			r = strings.TrimSpace(r)
+			if r == "" {
+				continue
+			}
+			u, err := url.Parse(r)
+			if err != nil {
+				return nil, fmt.Errorf("route %q: %w", r, err)
+			}
+			u.User = url.UserPassword("paas", token)
+			opts.Routes = append(opts.Routes, u)
+		}
 	}
 	ns, err := server.NewServer(opts)
 	if err != nil {
@@ -111,6 +145,25 @@ func Handle[Req any, Rep any](nc *nats.Conn, subject string, fn func(context.Con
 				return
 			}
 			_ = m.Respond(data)
+		}()
+	})
+}
+
+// HandleQueue is Handle with a queue group: one member of the group answers each request.
+func HandleQueue[Req any, Rep any](nc *nats.Conn, subject, queue string, fn func(context.Context, *Req) *Rep) (*nats.Subscription, error) {
+	return nc.QueueSubscribe(subject, queue, func(m *nats.Msg) {
+		go func() {
+			var req Req
+			if err := json.Unmarshal(m.Data, &req); err != nil {
+				return
+			}
+			rep := fn(context.Background(), &req)
+			if m.Reply == "" || rep == nil {
+				return
+			}
+			if data, err := json.Marshal(rep); err == nil {
+				_ = m.Respond(data)
+			}
 		}()
 	})
 }

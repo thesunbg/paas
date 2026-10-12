@@ -8,6 +8,9 @@
   import CopyField from '../../components/CopyField.svelte';
   import Secret from '../../components/Secret.svelte';
   import Icon from '../../components/Icon.svelte';
+  import CronField from '../../components/CronField.svelte';
+  import AutoscaleFields from '../../components/AutoscaleFields.svelte';
+  import { parseCron } from '../../lib/cron';
 
   let { detail, reload, canEdit }: { detail: ServiceDetail; reload: () => Promise<void>; canEdit: boolean } = $props();
 
@@ -15,6 +18,8 @@
   const s0 = untrack(() => detail.service);
   const isStatic = s0.type === 'static';
   const isWeb = s0.type === 'web';
+  const isCron = s0.type === 'cron';
+  const isPreview = !!s0.parent_id;
 
   let sizes = $state<Size[]>([]);
 
@@ -50,7 +55,21 @@
   let runtimeClass = $state(s0.spec.runtime_class || 'standard');
   let volumes = $state<Volume[]>((s0.spec.volumes ?? []).map((v) => ({ ...v })));
   let spa = $state(s0.spec.spa ?? false);
-  let command = $state((s0.spec.command ?? []).join(' '));
+  // A single-element command runs through /bin/sh -c (internal/runtime withCommand).
+  const cmdString = (c: string[] | undefined) =>
+    !c?.length ? '' : c.length === 1 ? c[0] : c.length === 3 && c[0] === '/bin/sh' && c[1] === '-c' ? c[2] : c.join(' ');
+  let command = $state(cmdString(s0.spec.command));
+  let previews = $state(!!s0.spec.previews);
+  const a0 = s0.spec.autoscale;
+  let autoscale = $state({
+    enabled: !!a0?.enabled,
+    min: a0?.min ?? 1,
+    max: a0?.max ?? 3,
+    target_cpu_percent: a0?.target_cpu_percent ?? (a0?.enabled ? 0 : 70),
+    target_rps: a0?.target_rps ?? 0,
+  });
+  let schedule = $state(s0.spec.schedule ?? '*/15 * * * *');
+  let jobTimeout = $state<number | undefined>(s0.spec.job_timeout_sec || undefined);
 
   let saving = $state(false);
   let error = $state('');
@@ -134,21 +153,32 @@
     }
 
     if (isWeb && port !== s.spec.port) p.port = port;
-    if (!isStatic && replicas !== s.spec.replicas) p.replicas = replicas;
+    if (!isStatic && !isCron && !autoscale.enabled && replicas !== s.spec.replicas) p.replicas = replicas;
+    if (isWeb && !isPreview && kind === 'git' && previews !== !!s.spec.previews) p.previews = previews;
+    if (isWeb) {
+      const a = autoscale.enabled
+        ? { enabled: true, min: autoscale.min, max: autoscale.max, target_cpu_percent: autoscale.target_cpu_percent || undefined, target_rps: autoscale.target_rps || undefined }
+        : { enabled: false };
+      const ca = s.spec.autoscale?.enabled
+        ? { enabled: true, min: s.spec.autoscale.min, max: s.spec.autoscale.max, target_cpu_percent: s.spec.autoscale.target_cpu_percent || undefined, target_rps: s.spec.autoscale.target_rps || undefined }
+        : { enabled: false };
+      if (!same(a, ca)) p.autoscale = a;
+    }
+    if (isCron) {
+      if (schedule.trim() !== (s.spec.schedule ?? '')) p.schedule = schedule.trim();
+      if ((jobTimeout || 0) !== (s.spec.job_timeout_sec || 0)) p.job_timeout_sec = jobTimeout || 0;
+    }
     const hc: HealthCheck = { type: (hcType || undefined) as HealthCheck['type'], path: hcPath.trim() || undefined, timeout_sec: hcTimeout || undefined };
     const chc = { type: s.spec.health_check.type || undefined, path: s.spec.health_check.path || undefined, timeout_sec: s.spec.health_check.timeout_sec || undefined };
-    if (!isStatic && !same(hc, chc)) p.health_check = hc;
-    const sl = sleepEnabled ? { enabled: true, idle_minutes: idleMinutes } : { enabled: false };
+    if (!isStatic && !isCron && !same(hc, chc)) p.health_check = hc;
+    const sl = sleepEnabled && !(isWeb && autoscale.enabled) ? { enabled: true, idle_minutes: idleMinutes } : { enabled: false };
     const csl = s.spec.sleep.enabled ? { enabled: true, idle_minutes: s.spec.sleep.idle_minutes ?? 15 } : { enabled: false };
     if (isWeb && !same(sl, csl)) p.sleep = sl;
     if (!isStatic && runtimeClass !== (s.spec.runtime_class || 'standard')) p.runtime_class = runtimeClass;
     const vols = volumes.filter((v) => v.name.trim() || v.path.trim()).map((v) => ({ name: v.name.trim(), path: v.path.trim() }));
     if (!isStatic && !same(vols, s.spec.volumes ?? [])) p.volumes = vols;
     if (isStatic && spa !== (s.spec.spa ?? false)) p.spa = spa;
-    const cmd = command.trim() ? ['/bin/sh', '-c', command.trim()] : [];
-    const curCmd = s.spec.command ?? [];
-    const curCmdStr = curCmd.length === 3 && curCmd[0] === '/bin/sh' && curCmd[1] === '-c' ? curCmd[2] : curCmd.join(' ');
-    if (!isStatic && command.trim() !== curCmdStr) p.command = cmd;
+    if (!isStatic && command.trim() !== cmdString(s.spec.command)) p.command = command.trim() ? [command.trim()] : [];
     return p;
   }
 
@@ -161,7 +191,16 @@
     if (kind === 'git' && !repo.trim()) return void (error = 'Repository URL is required');
     if (kind === 'image' && !image.trim()) return void (error = 'Image is required');
     if (volumes.some((v) => (v.name || v.path) && (!v.name.trim() || !v.path.startsWith('/')))) return void (error = 'Volumes need a name and an absolute path');
-    if (volumes.filter((v) => v.name).length && replicas > 1) return void (error = 'Services with volumes cannot run more than one replica');
+    if (volumes.filter((v) => v.name).length && replicas > 1 && !isCron) return void (error = 'Services with volumes cannot run more than one replica');
+    if (isWeb && autoscale.enabled && (autoscale.min < 1 || autoscale.max < autoscale.min || autoscale.max > 50))
+      return void (error = 'Autoscaling needs 1 ≤ min ≤ max ≤ 50');
+    if (isCron) {
+      try {
+        parseCron(schedule);
+      } catch (err) {
+        return void (error = 'Schedule: ' + (err as Error).message);
+      }
+    }
     saving = true;
     try {
       const r = await api.updateService(detail.service.id, patch);
@@ -281,9 +320,28 @@
       <fieldset class="card" disabled={!canEdit}>
         <legend class="card-head"><h3>Runtime</h3></legend>
         <div class="card-body stack">
+          {#if isCron}
+            <CronField bind:value={schedule} />
+            <label class="field" style="max-width:220px">
+              <span>Job timeout (seconds)</span>
+              <input type="number" min="1" max="86400" bind:value={jobTimeout} placeholder="default" />
+            </label>
+          {/if}
+          {#if isWeb}
+            <AutoscaleFields bind:value={autoscale} disabled={!canEdit} />
+            {#if !isPreview && kind === 'git'}
+              <label class="check"><input type="checkbox" bind:checked={previews} />Preview deployments for pull requests</label>
+              <p class="hint" style="margin-top:-6px">Needs the GitHub webhook with the <code>pull_request</code> event (see the webhook panel).</p>
+            {/if}
+          {/if}
           <div class="grid-3">
             {#if isWeb}<label class="field"><span>Port</span><input type="number" min="1" max="65535" bind:value={port} /></label>{/if}
-            <label class="field"><span>Replicas</span><input type="number" min="1" max="50" bind:value={replicas} /></label>
+            {#if !isCron}
+              <label class="field">
+                <span>Replicas</span>
+                <input type="number" min="1" max="50" bind:value={replicas} disabled={autoscale.enabled} title={autoscale.enabled ? 'Managed by autoscaling' : ''} />
+              </label>
+            {/if}
             <label class="field">
               <span>Runtime class</span>
               <select bind:value={runtimeClass}>
@@ -293,10 +351,11 @@
             </label>
           </div>
           <label class="field">
-            <span>Start command override <span class="faint">(optional)</span></span>
+            <span>{isCron ? 'Job command' : 'Start command override'} <span class="faint">(optional)</span></span>
             <input class="mono" bind:value={command} placeholder="run with the image's default command" />
             <span class="hint">Runs as <code>/bin/sh -c "…"</code>.</span>
           </label>
+          {#if !isCron}
           <div class="grid-3">
             <label class="field">
               <span>Health check</span>
@@ -312,7 +371,8 @@
             {/if}
             <label class="field"><span>Timeout (s)</span><input type="number" min="1" max="600" bind:value={hcTimeout} placeholder="90" /></label>
           </div>
-          {#if isWeb}
+          {/if}
+          {#if isWeb && !autoscale.enabled}
             <div>
               <label class="check"><input type="checkbox" bind:checked={sleepEnabled} />Sleep when idle</label>
               {#if sleepEnabled}
@@ -367,7 +427,7 @@
             <li>Paste the <b>Payload URL</b> above.</li>
             <li>Content type: <code>application/json</code>.</li>
             <li>Secret: the value above.</li>
-            <li>Events: <b>Just the push event</b>. Save.</li>
+            <li>Events: <b>Pushes</b>{previews ? ' and ' : ''}{#if previews}<b>Pull requests</b>{/if} (“Let me select individual events”). Save.</li>
           </ol>
           <p class="hint">Pushes to <code>{s0.source.branch || 'main'}</code>{s0.source.root_dir ? ` touching ${s0.source.root_dir}/` : ''} deploy automatically{detail.service.source.auto_deploy ? '' : ' (auto-deploy is currently off)'}.</p>
         </div>

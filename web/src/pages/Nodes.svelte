@@ -13,6 +13,8 @@
   import CopyButton from '../components/CopyButton.svelte';
   import Modal from '../components/Modal.svelte';
   import Secret from '../components/Secret.svelte';
+  import Sparkline from '../components/Sparkline.svelte';
+  import type { NodeMetricPoint } from '../lib/api';
 
   let data = $state<NodesResponse | null>(null);
   let error = $state('');
@@ -28,10 +30,19 @@
   let reserved = $state(1024);
   let editError = $state('');
 
+  let metrics = $state<Record<string, NodeMetricPoint[]>>({});
+  let lastMetrics = 0;
+  async function loadMetrics(ids: string[]) {
+    lastMetrics = Date.now();
+    const res = await Promise.all(ids.map((id) => api.nodeMetrics(id).then((m) => [id, m ?? []] as const).catch(() => [id, null] as const)));
+    for (const [id, m] of res) if (m) metrics[id] = m;
+  }
+
   async function load() {
     try {
       data = await api.nodes();
       error = '';
+      if (Date.now() - lastMetrics > 60000) loadMetrics(data.nodes.map((n) => n.id));
     } catch (e) {
       error = errorMessage(e);
     }
@@ -194,9 +205,9 @@
               <tr>
                 <th>Node</th>
                 <th>Status</th>
-                <th>CPU</th>
+                <th>CPU <span class="faint">· 24h</span></th>
                 <th>Memory</th>
-                <th style="min-width:180px">Committed / capacity</th>
+                <th style="min-width:180px">Committed / capacity <span class="faint">· 24h</span></th>
                 <th class="right">Used by apps</th>
                 <th class="right">Overcommit</th>
                 <th class="right">Instances</th>
@@ -225,6 +236,12 @@
                   <td class="nowrap">
                     <div>{n.cpu_cores} cores · {n.usage.cpu_percent.toFixed(1)}%</div>
                     <div class="faint small">load {n.usage.load1.toFixed(2)}</div>
+                    {#if metrics[n.id]}
+                      {@const m = metrics[n.id]}
+                      <div class="trend" title="CPU %, last 24 h">
+                        <Sparkline values={m.map((p) => p.cpu_percent)} times={m.map((p) => Date.parse(p.ts))} label="{n.name} CPU, 24 h" max={100} width={96} format={(v) => `${v.toFixed(0)}%`} />
+                      </div>
+                    {/if}
                   </td>
                   <td class="nowrap">
                     <div>{mb(n.memory_mb)}</div>
@@ -239,6 +256,12 @@
                       </span>
                       <div class="between small nowrap"><span>CPU {cpu(n.committed_cpu_millis)} / {cpu(n.capacity_cpu_millis)}</span><span class="faint">{pct(cpuR)}</span></div>
                       <span class="bar {level(cpuR)}"><span style="width:{Math.min(100, cpuR * 100)}%"></span></span>
+                      {#if metrics[n.id]}
+                        {@const m = metrics[n.id]}
+                        <div class="trend" title="Committed memory, last 24 h">
+                          <Sparkline values={m.map((p) => p.memory_committed_mb)} times={m.map((p) => Date.parse(p.ts))} label="{n.name} committed memory, 24 h" width={110} format={(v) => mb(v)} />
+                        </div>
+                      {/if}
                     </div>
                   </td>
                   <td class="right nowrap">
@@ -356,6 +379,9 @@
   }
   .name {
     font-weight: 600;
+  }
+  .trend {
+    margin-top: 6px;
   }
   .dens {
     display: flex;

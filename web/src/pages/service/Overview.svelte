@@ -9,6 +9,7 @@
   import Status from '../../components/Status.svelte';
   import DeployBadge from '../../components/DeployBadge.svelte';
   import CopyButton from '../../components/CopyButton.svelte';
+  import { describeCron } from '../../lib/cron';
 
   let { detail, reload, canEdit }: { detail: ServiceDetail; reload: () => Promise<void>; canEdit: boolean } = $props();
 
@@ -18,6 +19,18 @@
   const inProgress = $derived(detail.deployments.find((d) => ['queued', 'building', 'deploying'].includes(d.status)));
   const canDelete = $derived(can('admin', detail.project.team_id));
   const isStatic = $derived(s.type === 'static');
+  const isCron = $derived(s.type === 'cron');
+  const auto = $derived(s.spec.autoscale?.enabled ? s.spec.autoscale : null);
+  const runningInst = $derived(detail.instances.filter((i) => i.status === 'running').length);
+  const previews = $derived(detail.previews ?? []);
+  // Preview services are returned without domains; their generated host follows the parent's
+  // pattern <slug>-<project>.<base> (docs/API.md), so derive it from the parent's generated domain.
+  function previewUrl(slug: string): string {
+    const g = detail.domains.find((d) => d.is_generated && d.hostname.startsWith(s.slug + '-'));
+    if (!g) return '';
+    const scheme = (detail.urls[0] ?? 'http://').split('://')[0];
+    return `${scheme}://${slug}${g.hostname.slice(s.slug.length)}`;
+  }
   const stopped = $derived(s.status === 'stopped' || s.status === 'failed' || s.status === 'created');
 
   let busy = $state<string | null>(null);
@@ -45,10 +58,12 @@
     act('deploy', () => api.deploy(s.id), 'Deployment queued', (d) => navigate(`/services/${s.id}/deployments/${(d as { id: string }).id}`));
   const restart = () => act('restart', () => api.restart(s.id), 'Restart started');
   const stop = async () => {
-    if (await confirmDialog({ title: 'Stop service', message: `Stop all instances of ${s.name}? It will be unreachable until started again.`, confirmLabel: 'Stop', danger: true }))
-      act('stop', () => api.stop(s.id), 'Service stopped');
+    const msg = isCron ? `Pause the schedule of ${s.name}? No runs start until it is resumed.` : `Stop all instances of ${s.name}? It will be unreachable until started again.`;
+    if (await confirmDialog({ title: isCron ? 'Pause schedule' : 'Stop service', message: msg, confirmLabel: isCron ? 'Pause' : 'Stop', danger: true }))
+      act('stop', () => api.stop(s.id), isCron ? 'Schedule paused' : 'Service stopped');
   };
   const start = () => act('start', () => api.start(s.id), 'Service starting');
+  const runNow = () => act('run', () => api.runJob(s.id), 'Job started', () => navigate(`/services/${s.id}/runs`));
   const scale = () =>
     act('scale', () => api.scale(s.id, replicas), `Scaled to ${replicas} replica${replicas === 1 ? '' : 's'}`, () => (replicasDirty = false));
 
@@ -85,17 +100,25 @@
     <div class="row actions">
       <button class="primary" onclick={deploy} disabled={!!busy}>{#if busy === 'deploy'}<span class="spinner"></span>{:else}<Icon name="rocket" size={14} />{/if}Deploy</button>
       {#if !isStatic}
-        <button onclick={restart} disabled={!!busy || !s.current_deployment_id}>{#if busy === 'restart'}<span class="spinner"></span>{:else}<Icon name="refresh" size={14} />{/if}Restart</button>
-        {#if stopped}
-          <button onclick={start} disabled={!!busy || !s.current_deployment_id}>{#if busy === 'start'}<span class="spinner"></span>{:else}<Icon name="play" size={14} />{/if}Start</button>
+        {#if isCron}
+          <button onclick={runNow} disabled={!!busy || !s.current_deployment_id}>{#if busy === 'run'}<span class="spinner"></span>{:else}<Icon name="play" size={14} />{/if}Run now</button>
         {:else}
-          <button onclick={stop} disabled={!!busy}>{#if busy === 'stop'}<span class="spinner"></span>{:else}<Icon name="stop" size={14} />{/if}Stop</button>
+          <button onclick={restart} disabled={!!busy || !s.current_deployment_id}>{#if busy === 'restart'}<span class="spinner"></span>{:else}<Icon name="refresh" size={14} />{/if}Restart</button>
         {/if}
-        <form class="scale" onsubmit={(e) => (e.preventDefault(), scale())}>
-          <label for="replicas" class="small muted">Replicas</label>
-          <input id="replicas" type="number" min="1" max="50" bind:value={replicas} oninput={() => (replicasDirty = true)} />
-          <button type="submit" disabled={!!busy || replicas === s.spec.replicas || replicas < 1}>{#if busy === 'scale'}<span class="spinner"></span>{/if}Scale</button>
-        </form>
+        {#if stopped}
+          <button onclick={start} disabled={!!busy || !s.current_deployment_id}>{#if busy === 'start'}<span class="spinner"></span>{:else}<Icon name="play" size={14} />{/if}{isCron ? 'Resume schedule' : 'Start'}</button>
+        {:else}
+          <button onclick={stop} disabled={!!busy}>{#if busy === 'stop'}<span class="spinner"></span>{:else}<Icon name="stop" size={14} />{/if}{isCron ? 'Pause schedule' : 'Stop'}</button>
+        {/if}
+        {#if !isCron && !auto}
+          <form class="scale" onsubmit={(e) => (e.preventDefault(), scale())}>
+            <label for="replicas" class="small muted">Replicas</label>
+            <input id="replicas" type="number" min="1" max="50" bind:value={replicas} oninput={() => (replicasDirty = true)} />
+            <button type="submit" disabled={!!busy || replicas === s.spec.replicas || replicas < 1}>{#if busy === 'scale'}<span class="spinner"></span>{/if}Scale</button>
+          </form>
+        {:else if auto}
+          <span class="small muted">Replicas managed by autoscaling</span>
+        {/if}
       {/if}
       <div class="spacer"></div>
       {#if canDelete}<button class="danger" onclick={del}><Icon name="trash" size={14} />Delete</button>{/if}
@@ -145,7 +168,27 @@
         <dd class="mono small break">{s.source.kind === 'image' ? s.source.image : `${s.source.repo}@${s.source.branch ?? 'main'}${s.source.root_dir ? ' /' + s.source.root_dir : ''}`}</dd>
         <dt>Resources</dt>
         <dd>{mb(s.spec.resources.memory_limit_mb)} · {cpu(s.spec.resources.cpu_limit_millis)} <span class="badge">{s.spec.qos}</span></dd>
-        {#if !isStatic}<dt>Replicas</dt><dd>{s.spec.replicas}</dd>{/if}
+        {#if isCron}
+          <dt>Schedule</dt><dd><code>{s.spec.schedule}</code> <span class="faint small">{describeCron(s.spec.schedule ?? '')} UTC</span></dd>
+          <dt>Next run</dt><dd>{s.status === 'stopped' ? 'paused' : detail.next_run ? `${relTime(detail.next_run)} (${new Date(detail.next_run).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })})` : '—'}</dd>
+          {#if s.spec.command?.length}<dt>Command</dt><dd class="mono small break">{s.spec.command.join(' ')}</dd>{/if}
+        {:else if !isStatic}
+          <dt>Replicas</dt>
+          <dd>
+            {#if auto}
+              <span class="as">
+                <b>{runningInst}</b> running · desired {s.spec.replicas} <span class="faint">(autoscale {auto.min ?? 1}–{auto.max ?? 3}{auto.target_cpu_percent ? `, CPU ${auto.target_cpu_percent}%` : ''}{auto.target_rps ? `, ${auto.target_rps} req/s` : ''})</span>
+              </span>
+              <span class="asbar" aria-hidden="true">
+                {#each Array(auto.max ?? 3) as _, i (i)}
+                  <span class:on={i < s.spec.replicas} class:min={i < (auto.min ?? 1)}></span>
+                {/each}
+              </span>
+            {:else}
+              {s.spec.replicas}
+            {/if}
+          </dd>
+        {/if}
         {#if s.spec.sleep.enabled}<dt>Sleep</dt><dd>after {s.spec.sleep.idle_minutes ?? 15} min idle · last request {relTime(s.last_request_at)}</dd>{/if}
         {#if detail.databases.length}
           <dt>Databases</dt>
@@ -183,7 +226,35 @@
     </div>
   </div>
 
-  {#if !isStatic}
+  {#if previews.length || (s.spec.previews && !s.parent_id)}
+    <div class="card">
+      <div class="card-head"><h3>Pull request previews</h3><span class="faint small">{previews.length} active</span></div>
+      {#if previews.length === 0}
+        <div class="card-body muted small">Previews are on. Open a pull request against <code>{s.source.branch ?? 'main'}</code> to get a preview deployment (the GitHub webhook needs the <code>pull_request</code> event).</div>
+      {:else}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>PR</th><th>Service</th><th>Status</th><th>URL</th><th class="hide-sm">Updated</th></tr></thead>
+            <tbody>
+              {#each previews as pv (pv.id)}
+                <tr>
+                  <td><span class="badge purple">#{pv.preview_pr}</span></td>
+                  <td><a href={href(`/services/${pv.id}`)}>{pv.name}</a></td>
+                  <td><Status status={pv.status} /></td>
+                  <td class="small">
+                    {#if previewUrl(pv.slug)}<a href={previewUrl(pv.slug)} target="_blank" rel="noreferrer">{previewUrl(pv.slug).replace(/^https?:\/\//, '')}</a>{:else}—{/if}
+                  </td>
+                  <td class="hide-sm faint small">{relTime(pv.updated_at)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if !isStatic && !isCron}
     <div class="card">
       <div class="card-head"><h3>Instances</h3><span class="faint small">{detail.instances.length} total</span></div>
       {#if detail.instances.length === 0}
@@ -257,6 +328,25 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
+  }
+  .as {
+    display: block;
+  }
+  .asbar {
+    display: inline-flex;
+    gap: 3px;
+    margin-top: 4px;
+  }
+  .asbar span {
+    width: 14px;
+    height: 6px;
+    border-radius: 2px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-strong);
+  }
+  .asbar span.on {
+    background: var(--accent);
+    border-color: var(--accent);
   }
   .restarts {
     color: var(--orange);

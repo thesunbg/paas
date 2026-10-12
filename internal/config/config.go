@@ -23,6 +23,11 @@ type Server struct {
 	ImageRetention  int    // PAAS_IMAGE_RETENTION, deployments kept per service for rollback
 	ClusterBase     string // PAAS_CLUSTER_BASE, first two octets of the container address space (default 10.100)
 	S3              S3     // off-site backups
+
+	// High availability: several control planes share PostgreSQL and form a NATS cluster.
+	ServerName    string   // PAAS_SERVER_NAME (unique per control plane)
+	ClusterAddr   string   // PAAS_NATS_CLUSTER_ADDR, e.g. 0.0.0.0:6222
+	ClusterRoutes []string // PAAS_NATS_ROUTES, comma separated nats://host:6222
 }
 
 // S3 configures off-site backup storage (any S3-compatible service).
@@ -116,6 +121,9 @@ func LoadServer() Server {
 		AllowLocalGit:   envBool("PAAS_ALLOW_LOCAL_GIT", false),
 		ImageRetention:  envInt("PAAS_IMAGE_RETENTION", 3),
 		ClusterBase:     env("PAAS_CLUSTER_BASE", "10.100"),
+		ServerName:      env("PAAS_SERVER_NAME", hostname()),
+		ClusterAddr:     env("PAAS_NATS_CLUSTER_ADDR", ""),
+		ClusterRoutes:   splitList(env("PAAS_NATS_ROUTES", "")),
 		S3: S3{
 			Endpoint: env("PAAS_S3_ENDPOINT", ""), Region: env("PAAS_S3_REGION", "auto"), Bucket: env("PAAS_S3_BUCKET", ""),
 			AccessKey: env("PAAS_S3_ACCESS_KEY", ""), SecretKey: env("PAAS_S3_SECRET_KEY", ""),
@@ -166,4 +174,22 @@ func LoadProxy() Proxy {
 		RateLimit:         envInt("PAAS_PROXY_RATE_LIMIT", 0),
 		RateBurst:         envInt("PAAS_PROXY_RATE_BURST", 0),
 	}
+}
+
+func hostname() string {
+	h, _ := os.Hostname()
+	if h == "" {
+		h = "paas"
+	}
+	return h
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

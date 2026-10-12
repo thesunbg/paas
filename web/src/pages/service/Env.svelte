@@ -8,7 +8,7 @@
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import Loading from '../../components/Loading.svelte';
 
-  let { serviceId, detail, reload }: { serviceId: string; detail: ServiceDetail; reload: () => Promise<void> } = $props();
+  let { serviceId, detail, reload, canEdit }: { serviceId: string; detail: ServiceDetail; reload: () => Promise<void>; canEdit: boolean } = $props();
 
   let rows = $state<EnvRow[]>([]);
   let original = $state('');
@@ -78,15 +78,18 @@
         {#if dirty}<span class="badge yellow">unsaved changes</span>{/if}
       </div>
       <div class="card-body stack">
-        <EnvEditor bind:rows masked />
+        {#if !canEdit}<p class="hint">You have read-only access: values are hidden.</p>{/if}
+        <EnvEditor bind:rows masked disabled={!canEdit} />
         <ErrorMsg error={saveError} />
       </div>
+      {#if canEdit}
       <div class="foot">
         <label class="check small"><input type="checkbox" bind:checked={restart} />Restart the service to apply</label>
         <div class="spacer"></div>
         <button onclick={load} disabled={saving || !dirty}>Discard</button>
         <button class="primary" onclick={save} disabled={saving || !dirty}>{#if saving}<span class="spinner"></span>{/if}Save</button>
       </div>
+      {/if}
     </div>
 
     {#if linkedEntries.length || tuning.length}

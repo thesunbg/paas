@@ -16,16 +16,21 @@
   import Domains from './service/Domains.svelte';
   import SettingsTab from './service/Settings.svelte';
   import Console from './service/Console.svelte';
+  import Runs from './service/Runs.svelte';
+  import Metrics from './service/Metrics.svelte';
 
   let { id, tab = 'overview', sub }: { id: string; tab?: string; sub?: string } = $props();
 
   let detail = $state<ServiceDetail | null>(null);
   let error = $state('');
 
+  let parentName = $state('');
   async function load() {
     try {
       detail = await api.service(id);
       error = '';
+      const pid = detail.service.parent_id;
+      if (pid && !parentName) api.service(pid).then((p) => (parentName = p.service.name)).catch(() => {});
     } catch (e) {
       error = errorMessage(e);
     }
@@ -38,19 +43,22 @@
 
   const isDev = $derived(detail ? can('developer', detail.project.team_id) : false);
 
+  const kind = $derived(detail?.service.type);
   const tabs = $derived(
     [
       { id: 'overview', label: 'Overview' },
+      { id: 'runs', label: 'Runs', hide: kind !== 'cron' },
       { id: 'deployments', label: 'Deployments' },
-      { id: 'logs', label: 'Logs', hide: detail?.service.type === 'static' },
-      { id: 'env', label: 'Environment', hide: !isDev },
-      { id: 'domains', label: 'Domains', hide: detail?.service.type === 'worker' },
+      { id: 'metrics', label: 'Metrics', hide: kind === 'static' || kind === 'cron' },
+      { id: 'logs', label: 'Logs', hide: kind === 'static' || kind === 'cron' },
+      { id: 'env', label: 'Environment' },
+      { id: 'domains', label: 'Domains', hide: kind === 'worker' || kind === 'cron' },
       { id: 'settings', label: 'Settings' },
-      { id: 'console', label: 'Console', hide: !isDev || detail?.service.type === 'static' },
+      { id: 'console', label: 'Console', hide: !isDev || kind === 'static' || kind === 'cron' },
     ].filter((t) => !t.hide),
   );
 
-  const typeBadge: Record<string, string> = { web: 'blue', worker: 'purple', static: 'green' };
+  const typeBadge: Record<string, string> = { web: 'blue', worker: 'purple', static: 'green', cron: 'yellow' };
 </script>
 
 <div class="page">
@@ -81,6 +89,13 @@
       </div>
     </div>
     {#if error}<div style="margin-bottom:12px"><ErrorMsg {error} /></div>{/if}
+    {#if s.parent_id}
+      <a class="alert info preview" href={href(`/services/${s.parent_id}`)}>
+        <Icon name="branch" />
+        <span style="flex:1">Preview of <b>{parentName || 'parent service'}</b> · PR #{s.preview_pr}. Sleeps when idle and is deleted when the pull request closes.</span>
+        <span class="nowrap">Open parent →</span>
+      </a>
+    {/if}
 
     <div class="tabs" role="tablist" aria-label="Service sections">
       {#each tabs as t (t.id)}
@@ -97,10 +112,14 @@
         {/key}
       {:else if tab === 'deployments'}
         <Deployments {detail} reload={load} canEdit={isDev} />
+      {:else if tab === 'runs'}
+        <Runs {detail} reload={load} canEdit={isDev} />
+      {:else if tab === 'metrics'}
+        <Metrics {detail} />
       {:else if tab === 'logs'}
         <Logs serviceId={id} />
       {:else if tab === 'env'}
-        <Env serviceId={id} {detail} reload={load} />
+        <Env serviceId={id} {detail} reload={load} canEdit={isDev} />
       {:else if tab === 'domains'}
         <Domains {detail} reload={load} canEdit={isDev} />
       {:else if tab === 'settings'}
@@ -117,6 +136,14 @@
 <style>
   .head {
     margin-bottom: 14px;
+  }
+  .preview {
+    margin-bottom: 14px;
+    color: var(--text);
+    align-items: center;
+  }
+  .preview:hover {
+    text-decoration: none;
   }
   .tabs {
     display: flex;

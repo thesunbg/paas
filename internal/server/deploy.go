@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/thesunbg/paas/internal/build"
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/proto"
@@ -394,11 +396,36 @@ func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *st
 	}
 	var rep proto.RunReply
 	err = s.requestAgent(ctx, node.ID, proto.CmdRun, req, &rep, 11*time.Minute)
+	for attempt := 1; attempt <= 3 && errors.Is(err, nats.ErrNoResponders); attempt++ {
+		// The agent may be reconnecting after a control-plane failover.
+		time.Sleep(time.Duration(attempt) * time.Second)
+		err = s.requestAgent(ctx, node.ID, proto.CmdRun, req, &rep, 11*time.Minute)
+	}
+	if err == nil && rep.Error != "" && d.PushedImage != "" && image == d.PushedImage && strings.Contains(rep.Error, "image") {
+		// The cached registry copy is gone (registry moved or was wiped): push again and retry.
+		if image, plainRegistry, err = s.imageFor(ctx, d, node, logID, true); err == nil {
+			req.Image, req.PlainHTTPRegistry = image, plainRegistry
+			rep = proto.RunReply{}
+			err = s.requestAgent(ctx, node.ID, proto.CmdRun, req, &rep, 11*time.Minute)
+		}
+	}
 	if err == nil && rep.Error != "" {
 		err = errors.New(rep.Error)
 	}
 	if err != nil {
 		_ = s.store.DeleteInstance(ctx, inst.ID)
+		if errors.Is(err, nats.ErrNoResponders) {
+			// The agent is unreachable (dead or reconnecting): try another node. Heartbeats decide
+			// when the node is really offline.
+			slog.Warn("agent not responding, trying another node", "node", node.Name)
+			if len(exclude) < 8 {
+				ex := map[string]bool{node.ID: true}
+				for k := range exclude {
+					ex[k] = true
+				}
+				return s.startInstance(ctx, svc, proj, d, logID, ex)
+			}
+		}
 		return nil, fmt.Errorf("instance on %s: %w", node.Name, err)
 	}
 	if err := s.store.SetInstanceRunning(ctx, inst.ID, rep.IP); err != nil {

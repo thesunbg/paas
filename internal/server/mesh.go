@@ -120,16 +120,20 @@ func (s *Server) registryService(ctx context.Context, pinNode string) (*store.Se
 
 // imageFor returns the image reference a node should run for a deployment,
 // pushing locally built images to the internal registry when the node is not the build node.
-func (s *Server) imageFor(ctx context.Context, d *store.Deployment, node *store.Node, logID string) (ref string, plainRegistry string, err error) {
+func (s *Server) imageFor(ctx context.Context, d *store.Deployment, node *store.Node, logID string, force ...bool) (ref string, plainRegistry string, err error) {
 	if !strings.HasPrefix(d.Image, "paas.local/") || d.BuildNodeID == nil || *d.BuildNodeID == node.ID {
 		return d.Image, "", nil
+	}
+	if d.PushedImage != "" && len(force) == 0 {
+		// Already distributed: most nodes have it cached; a cold node pulls it from the registry.
+		return d.PushedImage, strings.SplitN(d.PushedImage, "/", 2)[0], nil
 	}
 	reg, err := s.ensureRegistry(ctx, *d.BuildNodeID)
 	if err != nil {
 		return "", "", err
 	}
 	target := reg + "/" + strings.TrimPrefix(d.Image, "paas.local/")
-	if d.PushedImage != target {
+	if d.PushedImage != target || len(force) > 0 {
 		if logID != "" {
 			s.hub.Log(logID, "==> pushing image to the internal registry for node "+node.Name)
 		}

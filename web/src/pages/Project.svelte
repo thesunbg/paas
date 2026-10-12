@@ -12,12 +12,20 @@
   import Icon from '../components/Icon.svelte';
   import Status from '../components/Status.svelte';
   import NewDatabaseDialog from '../components/NewDatabaseDialog.svelte';
+  import TemplatesDialog from '../components/TemplatesDialog.svelte';
+  import ComposeDialog from '../components/ComposeDialog.svelte';
 
   let { id }: { id: string } = $props();
 
   let data = $state<ProjectDetail | null>(null);
   let error = $state('');
   let dbOpen = $state(false);
+  let tplOpen = $state(false);
+  let composeOpen = $state(false);
+
+  // Preview services are grouped under their parent instead of being top-level cards.
+  const topLevel = $derived((data?.services ?? []).filter((s) => !s.parent_id || !data?.services.some((p) => p.id === s.parent_id)));
+  const previewsOf = (id: string) => (data?.services ?? []).filter((s) => s.parent_id === id).sort((a, b) => (b.preview_pr ?? 0) - (a.preview_pr ?? 0));
 
   async function load() {
     try {
@@ -53,7 +61,8 @@
     }
   }
 
-  const typeBadge: Record<string, string> = { web: 'blue', worker: 'purple', static: 'green' };
+  const typeBadge: Record<string, string> = { web: 'blue', worker: 'purple', static: 'green', cron: 'yellow' };
+  const typeIcon: Record<string, string> = { web: 'box', worker: 'zap', static: 'globe', cron: 'clock' };
   const engineLabel: Record<string, string> = { postgres: 'PostgreSQL', mysql: 'MySQL', redis: 'Redis', mongo: 'MongoDB' };
 
   function source(s: ProjectDetail['services'][number]): string {
@@ -80,6 +89,8 @@
       </div>
       <div class="row">
         {#if can('developer', p.team_id)}
+          <button onclick={() => (tplOpen = true)}><Icon name="grid" />Templates</button>
+          <button onclick={() => (composeOpen = true)}><Icon name="upload" />Import compose</button>
           <button onclick={() => (dbOpen = true)}><Icon name="database" />New database</button>
           <a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />New service</a>
         {/if}
@@ -95,17 +106,24 @@
       {#if data.services.length === 0}
         <div class="card empty">
           <Icon name="box" size={28} />
-          <p>No services yet. Deploy from a Git repository or a Docker image.</p>
-          {#if can('developer', p.team_id)}<a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />New service</a>{/if}
+          <p>No services yet. Deploy from a Git repository or a Docker image, start from a template, or import a docker-compose file.</p>
+          {#if can('developer', p.team_id)}
+            <div class="row" style="justify-content:center">
+              <a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />New service</a>
+              <button onclick={() => (tplOpen = true)}><Icon name="grid" />From template</button>
+              <button onclick={() => (composeOpen = true)}><Icon name="upload" />Import compose</button>
+            </div>
+          {/if}
         </div>
       {:else}
         <div class="svc-grid">
-          {#each data.services as s (s.id)}
+          {#each topLevel as s (s.id)}
+            {@const pvs = previewsOf(s.id)}
             <div class="card svc">
               <a class="cover" href={href(`/services/${s.id}`)} aria-label="Open {s.name}"></a>
               <div class="between nowrap">
                 <div class="row nowrap" style="min-width:0">
-                  <span class="sic"><Icon name={s.type === 'static' ? 'globe' : s.type === 'worker' ? 'zap' : 'box'} /></span>
+                  <span class="sic"><Icon name={typeIcon[s.type] ?? 'box'} /></span>
                   <h3 class="truncate">{s.name}</h3>
                 </div>
                 <span class="badge {typeBadge[s.type] ?? ''}">{s.type}</span>
@@ -113,19 +131,38 @@
               <div class="faint small mono truncate" title={source(s)}><Icon name={s.source.kind === 'image' ? 'layers' : 'git'} size={12} /> {source(s)}</div>
               {#if s.url}
                 <a class="url small truncate" href={s.url} target="_blank" rel="noreferrer">{s.url.replace(/^https?:\/\//, '')}<Icon name="external" size={12} /></a>
+              {:else if s.type === 'cron'}
+                <span class="faint small mono"><Icon name="clock" size={12} /> {s.spec.schedule} UTC</span>
               {:else}
                 <span class="faint small">{s.type === 'worker' ? 'No public URL (worker)' : 'No domain'}</span>
               {/if}
               <div class="between small foot">
                 <Status status={s.status} />
                 <span class="muted">
-                  {#if s.type !== 'static'}
-                    {s.instances}/{s.spec.replicas} inst · {mb(s.memory_mb)} / {mb(s.spec.resources.memory_limit_mb)}
+                  {#if s.type === 'cron'}
+                    cron job
+                  {:else if s.type !== 'static'}
+                    {s.instances}/{s.spec.replicas}{s.spec.autoscale?.enabled ? ` (auto ${s.spec.autoscale.min ?? 1}–${s.spec.autoscale.max ?? 3})` : ''} inst · {mb(s.memory_mb)} / {mb(s.spec.resources.memory_limit_mb)}
                   {:else}
                     static
                   {/if}
                 </span>
               </div>
+              {#if pvs.length}
+                <ul class="pvs" aria-label="Pull request previews of {s.name}">
+                  {#each pvs as pv (pv.id)}
+                    <li>
+                      <a href={href(`/services/${pv.id}`)} class="pv">
+                        <span class="dot {pv.status}"></span>
+                        <span class="badge purple">PR #{pv.preview_pr}</span>
+                        <span class="truncate small">{pv.name}</span>
+                        <span class="spacer"></span>
+                        <span class="faint small">{pv.status}</span>
+                      </a>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
             </div>
           {/each}
         </div>
@@ -162,6 +199,8 @@
     </section>
 
     <NewDatabaseDialog bind:open={dbOpen} projectId={p.id} services={data.services} />
+    <TemplatesDialog bind:open={tplOpen} projectId={p.id} ondone={load} />
+    <ComposeDialog bind:open={composeOpen} projectId={p.id} ondone={load} />
   {/if}
 </div>
 
@@ -212,6 +251,30 @@
     justify-content: center;
     color: var(--text-dim);
     flex: none;
+  }
+  .pvs {
+    list-style: none;
+    margin: 0;
+    padding: 6px 0 0;
+    border-top: 1px dashed var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .svc .pvs {
+    pointer-events: auto;
+  }
+  .pv {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 4px;
+    border-radius: 4px;
+    color: var(--text);
+  }
+  .pv:hover {
+    background: var(--bg-hover);
+    text-decoration: none;
   }
   .foot {
     border-top: 1px solid var(--border);

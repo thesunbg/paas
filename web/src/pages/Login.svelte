@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, errorMessage, type SetupStatus } from '../lib/api';
+  import { api, ApiError, errorMessage, type SetupStatus } from '../lib/api';
   import ErrorMsg from '../components/ErrorMsg.svelte';
 
   let { setup, onauthed }: { setup: SetupStatus; onauthed: () => Promise<void> } = $props();
@@ -11,6 +11,9 @@
   let confirmPw = $state('');
   let name = $state('');
   let busy = $state(false);
+  let needCode = $state(false);
+  let code = $state('');
+  let codeInput: HTMLInputElement | undefined = $state();
   let error = $state('');
 
   const isSetup = $derived(setup.needs_setup);
@@ -29,9 +32,17 @@
     busy = true;
     try {
       if (mode === 'register') await api.register(email.trim(), password, name.trim());
-      else await api.login(email.trim(), password);
+      else await api.login(email.trim(), password, needCode ? code.trim() : undefined);
       await onauthed();
     } catch (err) {
+      if (err instanceof ApiError && err.data?.two_factor) {
+        // First step accepted the password; ask for the authenticator code.
+        if (needCode) error = errorMessage(err);
+        needCode = true;
+        code = '';
+        queueMicrotask(() => codeInput?.focus());
+        return;
+      }
       error = errorMessage(err);
     } finally {
       busy = false;
@@ -66,12 +77,29 @@
       {/if}
       <label class="field">
         <span>Email</span>
-        <input type="email" bind:value={email} required autocomplete="email" placeholder="you@example.com" />
+        <input type="email" bind:value={email} required autocomplete="email" placeholder="you@example.com" readonly={needCode} />
       </label>
       <label class="field">
         <span>Password</span>
         <input type="password" bind:value={password} required autocomplete={mode === 'login' ? 'current-password' : 'new-password'} minlength={mode === 'register' ? 8 : undefined} />
       </label>
+      {#if needCode && mode === 'login'}
+        <label class="field">
+          <span>Authentication code</span>
+          <input
+            bind:this={codeInput}
+            class="mono code"
+            bind:value={code}
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            pattern="\d{6}"
+            maxlength="6"
+            placeholder="123456"
+            required
+          />
+          <span class="hint">Two-factor authentication is on. Enter the 6-digit code from your authenticator app.</span>
+        </label>
+      {/if}
       {#if mode === 'register'}
         <label class="field">
           <span>Confirm password</span>
@@ -82,8 +110,9 @@
       <ErrorMsg {error} />
       <button class="primary" type="submit" disabled={busy}>
         {#if busy}<span class="spinner"></span>{/if}
-        {#if isSetup}Create administrator{:else if mode === 'register'}Create account{:else}Sign in{/if}
+        {#if isSetup}Create administrator{:else if mode === 'register'}Create account{:else if needCode}Verify{:else}Sign in{/if}
       </button>
+      {#if needCode}<button type="button" class="ghost sm" onclick={() => ((needCode = false), (code = ''), (error = ''))}>Use a different account</button>{/if}
     </form>
 
     {#if !isSetup && setup.allow_signup}
@@ -136,6 +165,10 @@
   .sub {
     text-align: center;
     margin-bottom: 12px;
+  }
+  .code {
+    letter-spacing: 0.3em;
+    font-size: 16px;
   }
   .switch {
     text-align: center;

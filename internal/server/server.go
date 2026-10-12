@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
@@ -100,7 +101,8 @@ func New(ctx context.Context, cfg config.Server) (*Server, error) {
 	if err := s.bootstrap(ctx); err != nil {
 		return nil, err
 	}
-	s.ns, err = bus.StartServer(cfg.NATSAddr, s.ClusterToken, filepath.Join(cfg.DataDir, "nats"))
+	s.ns, err = bus.StartServer(cfg.NATSAddr, s.ClusterToken, filepath.Join(cfg.DataDir, "nats"),
+		bus.ClusterOptions{Name: cfg.ServerName, Listen: cfg.ClusterAddr, Routes: cfg.ClusterRoutes})
 	if err != nil {
 		return nil, fmt.Errorf("start nats: %w", err)
 	}
@@ -152,8 +154,7 @@ func (s *Server) bootstrap(ctx context.Context) error {
 	}
 	s.systemProjectID = proj.ID
 	s.sharedNetIndex = proj.NetIndex
-	_ = s.store.FailInterruptedJobs(ctx)
-	return s.store.FailStuckDeployments(ctx)
+	return nil
 }
 
 // Run serves HTTP and background loops until ctx is cancelled.
@@ -164,12 +165,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.hub.Start(); err != nil {
 		return err
 	}
-	go s.deployWorker(ctx)
-	go s.resumeProvisioning(ctx)
-	go s.cronLoop(ctx)
-	go s.metricsLoop(ctx)
-	go s.reconcileLoop(ctx)
-	go s.maintenanceLoop(ctx)
+	go s.leaderLoop(ctx)
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
@@ -203,7 +199,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// lock serializes operations (deploy, scale, sleep, wake) on one service.
+// lock serializes operations (deploy, scale, sleep, wake) on one service, across
+// every control plane: an in-process mutex plus a PostgreSQL advisory lock.
 func (s *Server) lock(serviceID string) func() {
 	s.locksMu.Lock()
 	m, ok := s.locks[serviceID]
@@ -213,7 +210,11 @@ func (s *Server) lock(serviceID string) func() {
 	}
 	s.locksMu.Unlock()
 	m.Lock()
-	return m.Unlock
+	release := s.store.AdvisoryLock(context.Background(), "service:"+serviceID)
+	return func() {
+		release()
+		m.Unlock()
+	}
 }
 
 func (s *Server) validToken(tok string) bool {
@@ -221,13 +222,14 @@ func (s *Server) validToken(tok string) bool {
 }
 
 func (s *Server) registerBusHandlers() error {
-	if _, err := bus.Handle(s.nc, proto.SubjRegister, s.onRegister); err != nil {
+	const q = "control"
+	if _, err := bus.HandleQueue(s.nc, proto.SubjRegister, q, s.onRegister); err != nil {
 		return err
 	}
-	if _, err := s.nc.Subscribe(proto.SubjHeartbeat, s.onHeartbeat); err != nil {
+	if _, err := s.nc.QueueSubscribe(proto.SubjHeartbeat, q, s.onHeartbeat); err != nil {
 		return err
 	}
-	if _, err := s.nc.Subscribe(proto.SubjRoutesGet, func(m *nats.Msg) {
+	if _, err := s.nc.QueueSubscribe(proto.SubjRoutesGet, q, func(m *nats.Msg) {
 		t, err := s.routeTable(context.Background())
 		if err == nil {
 			_ = respondJSON(m, t)
@@ -235,7 +237,7 @@ func (s *Server) registerBusHandlers() error {
 	}); err != nil {
 		return err
 	}
-	if _, err := s.nc.Subscribe(proto.SubjDNSGet, func(m *nats.Msg) {
+	if _, err := s.nc.QueueSubscribe(proto.SubjDNSGet, q, func(m *nats.Msg) {
 		t, err := s.dnsTable(context.Background())
 		if err == nil {
 			_ = respondJSON(m, t)
@@ -243,7 +245,7 @@ func (s *Server) registerBusHandlers() error {
 	}); err != nil {
 		return err
 	}
-	if _, err := s.nc.Subscribe(proto.SubjMeshGet, func(m *nats.Msg) {
+	if _, err := s.nc.QueueSubscribe(proto.SubjMeshGet, q, func(m *nats.Msg) {
 		t, err := s.meshTable(context.Background())
 		if err == nil {
 			_ = respondJSON(m, t)
@@ -254,7 +256,7 @@ func (s *Server) registerBusHandlers() error {
 	if _, err := s.nc.Subscribe(proto.SubjProxyStats, s.onProxyStats); err != nil {
 		return err
 	}
-	if _, err := bus.Handle(s.nc, proto.SubjWake, s.onWake); err != nil {
+	if _, err := bus.HandleQueue(s.nc, proto.SubjWake, q, s.onWake); err != nil {
 		return err
 	}
 	return nil
@@ -310,4 +312,48 @@ func (s *Server) resumeProvisioning(ctx context.Context) {
 		}
 	}
 	_ = model.TypeWeb
+}
+
+// leaderLoop runs the background controllers on exactly one control plane at a time.
+// Leadership is a PostgreSQL session advisory lock held on a dedicated connection.
+func (s *Server) leaderLoop(ctx context.Context) {
+	for ctx.Err() == nil {
+		conn, err := pgx.Connect(ctx, s.cfg.DatabaseURL)
+		if err != nil {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		var leader bool
+		if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(7313001)`).Scan(&leader); err != nil || !leader {
+			_ = conn.Close(context.Background())
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+		slog.Info("this control plane is now the leader", "server", s.cfg.ServerName)
+		lctx, cancel := context.WithCancel(ctx)
+		_ = s.store.FailInterruptedJobs(lctx)
+		_ = s.store.FailStuckDeployments(lctx)
+		go s.deployWorker(lctx)
+		go s.resumeProvisioning(lctx)
+		go s.cronLoop(lctx)
+		go s.metricsLoop(lctx)
+		go s.reconcileLoop(lctx)
+		go s.maintenanceLoop(lctx)
+		for lctx.Err() == nil {
+			time.Sleep(5 * time.Second)
+			pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)
+			err := conn.Ping(pctx)
+			pcancel()
+			if err != nil {
+				slog.Warn("lost leadership (database connection)", "err", err)
+				break
+			}
+		}
+		cancel()
+		_ = conn.Close(context.Background())
+	}
 }

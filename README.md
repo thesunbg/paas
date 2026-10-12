@@ -72,6 +72,22 @@ paas logs api -f
 
 Then add the webhook URL shown on the service page to the GitHub repository (events: `push`, plus `pull_request` for previews). Every push deploys automatically.
 
+## High availability
+
+Run several control planes against the same (highly available) PostgreSQL:
+
+```bash
+# on cp1 and cp2 (and cp3), in /etc/paas/paasd.env
+PAAS_SERVER_NAME=cp1
+PAAS_DATABASE_URL=postgres://paas:…@db.internal:5432/paas
+PAAS_MASTER_KEY=<same hex key on every control plane>
+PAAS_CLUSTER_TOKEN=<same token on every control plane>
+PAAS_NATS_CLUSTER_ADDR=0.0.0.0:6222
+PAAS_NATS_ROUTES=nats://cp2:6222,nats://cp3:6222
+```
+
+Agents and proxies list every control plane: `PAAS_NATS_URL=nats://cp1:4222,nats://cp2:4222,nats://cp3:4222`. Every control plane serves the API and the bus. One elected leader (a PostgreSQL advisory lock) runs the deploy queue, reconciler, cron, autoscaler and maintenance. When the leader dies, another one takes over within seconds, and running apps are never affected.
+
 ## Configuration
 
 `paasd` is configured through environment variables (`/etc/paas/paasd.env`):
@@ -94,6 +110,7 @@ Then add the webhook URL shown on the service page to the GitHub repository (eve
 | `PAAS_IMAGE_RETENTION` | `3` | deployments kept per service for rollback |
 | `PAAS_S3_ENDPOINT`, `PAAS_S3_BUCKET`, `PAAS_S3_ACCESS_KEY`, `PAAS_S3_SECRET_KEY`, `PAAS_S3_REGION`, `PAAS_S3_PREFIX` | | off-site database backups |
 | `PAAS_EVICT_PSI` / `PAAS_EVICT_MIN_FREE_MB` | `40` / `256` | memory-pressure eviction thresholds |
+| `PAAS_SERVER_NAME`, `PAAS_NATS_CLUSTER_ADDR`, `PAAS_NATS_ROUTES`, `PAAS_MASTER_KEY`, `PAAS_CLUSTER_TOKEN` | | high availability (see above) |
 
 ## Development
 

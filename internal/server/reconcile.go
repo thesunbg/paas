@@ -115,7 +115,7 @@ func (s *Server) reconcileLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		if ids, err := s.store.MarkStaleNodesOffline(ctx, 30*time.Second); err == nil && len(ids) > 0 {
+		if ids, err := s.store.MarkStaleNodesOffline(ctx, 20*time.Second); err == nil && len(ids) > 0 {
 			for _, id := range ids {
 				slog.Warn("node offline", "id", id)
 				if n, err := s.store.NodeByID(ctx, id); err == nil {

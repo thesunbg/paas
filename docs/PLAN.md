@@ -22,7 +22,7 @@ Mã nguồn đã chạy end-to-end trong môi trường thử nghiệm (2 node, 
 | Mật độ: QoS, overcommit, ngủ/đánh thức, tinh chỉnh runtime, eviction PSI, right-sizing, zram | ✅ | |
 | Cluster: join 1 lệnh, WireGuard mesh, cách ly nftables xuyên node, registry nội bộ, drain/cordon | ✅ | Dùng WireGuard userspace (wireguard-go), không cần module kernel |
 | Preview cho mỗi PR, cron job, autoscaling, thông báo, metrics, 2FA, template, import Compose | ✅ | |
-| HA control plane (3 node) | ⏳ | Chưa làm. Khi control plane dừng, workload vẫn chạy |
+| HA control plane | ✅ | Nhiều `paasd server` dùng chung PostgreSQL, NATS chạy thành cluster, bầu leader bằng advisory lock, khoá phân tán theo service. Đã thử: tắt hẳn control plane chính thì bản còn lại lên leader trong khoảng 1 giây. PostgreSQL HA (Patroni/managed) thì tự lo |
 | Tự động thêm node qua API cloud (Hetzner/DO/AWS) | ⏳ | Chưa làm |
 | Lazy pulling, Firecracker, Wasm, CRIU | ⏳ | Giai đoạn 4 |
 | SSO/OIDC, tính phí, đa vùng/GeoDNS, quét image | ⏳ | Giai đoạn 4 |

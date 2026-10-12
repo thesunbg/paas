@@ -9,13 +9,17 @@
   import Loading from '../components/Loading.svelte';
   import Icon from '../components/Icon.svelte';
   import CopyField from '../components/CopyField.svelte';
+  import Notifications from './settings/Notifications.svelte';
+  import TwoFactor from './settings/TwoFactor.svelte';
 
   let { tab = 'tokens' }: { tab?: string } = $props();
 
   const tabs = [
     { id: 'tokens', label: 'API tokens' },
     { id: 'password', label: 'Password' },
+    { id: 'security', label: 'Two-factor auth' },
     { id: 'members', label: 'Team members' },
+    { id: 'notifications', label: 'Notifications' },
   ];
 
   // Tokens
@@ -280,6 +284,10 @@
             </div>
           {/if}
         </div>
+      {:else if tab === 'security'}
+        <TwoFactor />
+      {:else if tab === 'notifications'}
+        <Notifications />
       {:else}
         <p class="muted">Unknown section.</p>
       {/if}

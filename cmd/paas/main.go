@@ -892,7 +892,7 @@ func cmdAction(action string, args []string) error {
 	if id, ok := out["id"].(string); ok && action == "restart" {
 		return followDeployment(id)
 	}
-	fmt.Println(s.Slug, action+"ed")
+	fmt.Println(s.Slug, map[string]string{"stop": "stopped", "start": "started", "restart": "restarted"}[action])
 	return nil
 }
 

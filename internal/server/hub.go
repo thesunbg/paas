@@ -28,28 +28,39 @@ func NewLogHub(st *store.Store, nc *nats.Conn) *LogHub {
 }
 
 func (h *LogHub) Start() error {
-	_, err := h.nc.Subscribe(proto.DeployLogSubject("*"), func(m *nats.Msg) {
-		id := strings.TrimPrefix(m.Subject, proto.DeployLogSubject(""))
+	decode := func(m *nats.Msg) (string, []string, bool) {
 		var lines []string
 		if err := json.Unmarshal(m.Data, &lines); err != nil {
-			return
+			return "", nil, false
 		}
-		h.deliver(id, lines)
+		for i, l := range lines {
+			if len(l) > 4000 {
+				lines[i] = l[:4000] + "…"
+			}
+		}
+		return strings.TrimPrefix(m.Subject, proto.DeployLogSubject("")), lines, true
+	}
+	// One control plane stores each batch…
+	if _, err := h.nc.QueueSubscribe(proto.DeployLogSubject("*"), "log-store", func(m *nats.Msg) {
+		if id, lines, ok := decode(m); ok {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := h.store.AppendDeploymentLogs(ctx, id, lines); err != nil {
+				slog.Warn("store deployment logs", "deployment", id, "err", err)
+			}
+			_ = h.nc.Publish("paas.logs.stored."+id, nil)
+		}
+	}); err != nil {
+		return err
+	}
+	// …and every control plane wakes its live viewers once it is stored.
+	_, err := h.nc.Subscribe("paas.logs.stored.*", func(m *nats.Msg) {
+		h.deliver(strings.TrimPrefix(m.Subject, "paas.logs.stored."), nil)
 	})
 	return err
 }
 
 func (h *LogHub) deliver(id string, lines []string) {
-	for i, l := range lines {
-		if len(l) > 4000 {
-			lines[i] = l[:4000] + "…"
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := h.store.AppendDeploymentLogs(ctx, id, lines); err != nil {
-		slog.Warn("store deployment logs", "deployment", id, "err", err)
-	}
 	h.mu.Lock()
 	for ch := range h.subs[id] {
 		select {

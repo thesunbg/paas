@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,7 +30,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.MaxConns = 20
+	cfg.MaxConns = 32
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -114,4 +115,25 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 
 func (s *Store) Audit(ctx context.Context, userID, teamID *string, action, target string) {
 	_, _ = s.DB.Exec(ctx, `INSERT INTO audit_logs (user_id, team_id, action, target) VALUES ($1,$2,$3,$4)`, userID, teamID, action, target)
+}
+
+// AdvisoryLock takes a session advisory lock for key, polling so that waiters do not
+// hold pool connections. The returned function releases it.
+func (s *Store) AdvisoryLock(ctx context.Context, key string) func() {
+	for {
+		conn, err := s.DB.Acquire(ctx)
+		if err != nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		var ok bool
+		if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtext($1))`, key).Scan(&ok); err == nil && ok {
+			return func() {
+				_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext($1))`, key)
+				conn.Release()
+			}
+		}
+		conn.Release()
+		time.Sleep(100 * time.Millisecond)
+	}
 }
