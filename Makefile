@@ -18,6 +18,9 @@ paas:
 web:
 	cd web && npm ci && npm run build
 
+# DB-backed tests skip unless PAAS_TEST_DATABASE_URL is set. Locally:
+#   podman run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
+#   export PAAS_TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable'
 test:
 	go test ./...
 
