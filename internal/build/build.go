@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -97,7 +98,7 @@ func (b *Builder) Build(ctx context.Context, req proto.BuildRequest, log Logger)
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	plan, err := detect.Detect(root, detect.Options{ServiceType: req.ServiceType, Build: req.Build, Dockerfile: req.Dockerfile, BuildEnvKeys: keys})
+	plan, err := detect.Detect(root, detect.Options{ServiceType: req.ServiceType, Build: req.Build, Dockerfile: req.Dockerfile, BuildEnvKeys: keys, CacheScope: req.ProjectID})
 	if err != nil {
 		return proto.BuildReply{Error: err.Error()}
 	}
@@ -180,12 +181,9 @@ func (b *Builder) checkout(ctx context.Context, req proto.BuildRequest, dest str
 	if repo == "" {
 		return "", "", errors.New("repository url is empty")
 	}
-	if strings.HasPrefix(repo, "file://") || strings.HasPrefix(repo, "/") {
-		if !b.AllowLocalGit {
-			return "", "", errors.New("local repositories are disabled (set PAAS_ALLOW_LOCAL_GIT=true)")
-		}
-	} else if !strings.HasPrefix(repo, "https://") && !strings.HasPrefix(repo, "http://") {
-		return "", "", errors.New("repository must be an https:// URL")
+	guard, err := b.vetRepo(ctx, repo)
+	if err != nil {
+		return "", "", err
 	}
 	cloneURL := repo
 	redact := func(s string) string { return s }
@@ -202,7 +200,7 @@ func (b *Builder) checkout(ctx context.Context, req proto.BuildRequest, dest str
 	branch := req.Branch
 	log(fmt.Sprintf("==> cloning %s (branch %s)", repo, firstNonEmpty(branch, "default")))
 	env := []string{"GIT_TERMINAL_PROMPT=0"}
-	args := []string{"clone", "--depth", "1", "--single-branch", "--no-tags"}
+	args := append(guard, "clone", "--depth", "1", "--single-branch", "--no-tags")
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
@@ -216,7 +214,7 @@ func (b *Builder) checkout(ctx context.Context, req proto.BuildRequest, dest str
 	if req.CommitSHA != "" {
 		head, _ := gitOut(ctx, dest, "rev-parse", "HEAD")
 		if !strings.HasPrefix(head, req.CommitSHA) {
-			if err := runStreaming(ctx, logR, dest, env, "git", "fetch", "--depth", "1", "origin", req.CommitSHA); err != nil {
+			if err := runStreaming(ctx, logR, dest, env, "git", append(slices.Clone(guard), "fetch", "--depth", "1", "origin", req.CommitSHA)...); err != nil {
 				return "", "", fmt.Errorf("fetch commit %s: %s", req.CommitSHA, redact(err.Error()))
 			}
 			if err := runStreaming(ctx, logR, dest, env, "git", "checkout", "--quiet", "FETCH_HEAD"); err != nil {
@@ -230,6 +228,10 @@ func (b *Builder) checkout(ctx context.Context, req proto.BuildRequest, dest str
 		log(fmt.Sprintf("==> commit %s %s", sha[:7], msg))
 	}
 	_ = os.RemoveAll(filepath.Join(dest, ".git"))
+	// After this, nothing under dest resolves outside dest.
+	if err := sanitizeSymlinks(dest, log); err != nil {
+		return "", "", err
+	}
 	return sha, msg, nil
 }
 

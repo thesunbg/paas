@@ -84,6 +84,35 @@ func TestTokenAndRepos(t *testing.T) {
 	}
 }
 
+func TestRepoToken(t *testing.T) {
+	app, _ := testApp(t)
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var in struct {
+			Repositories []string          `json:"repositories"`
+			Permissions  map[string]string `json:"permissions"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if len(in.Repositories) != 1 || in.Permissions["contents"] != "read" || len(in.Permissions) != 1 {
+			t.Errorf("bad mint body %+v", in)
+		}
+		w.Write([]byte(`{"token":"ghs_` + in.Repositories[0] + `","expires_at":"2099-01-01T00:00:00Z"}`))
+	}))
+	defer srv.Close()
+	API = srv.URL
+	c, _ := NewClient(app)
+	for _, tc := range []struct{ repo, want string }{{"app", "ghs_app"}, {"other", "ghs_other"}, {"app", "ghs_app"}} {
+		tok, err := c.RepoToken(t.Context(), 7, tc.repo)
+		if err != nil || tok != tc.want {
+			t.Fatalf("RepoToken(%s) = %q, %v", tc.repo, tok, err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("want 2 mints (one per repo, second app cached), got %d", calls)
+	}
+}
+
 func TestUserInstallationIDs(t *testing.T) {
 	app, _ := testApp(t)
 	app.ClientID, app.ClientSecret = "cid", "csecret"

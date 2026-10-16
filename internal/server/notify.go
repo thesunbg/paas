@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/thesunbg/paas/internal/netguard"
 	"github.com/thesunbg/paas/internal/store"
 )
 
@@ -35,16 +36,13 @@ func init() {
 			return err
 		}
 		ip := net.ParseIP(host)
-		if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			ip.IsUnspecified() || ip.IsMulticast() || cgnat.Contains(ip) {
+		if !netguard.Public(ip) {
 			return fmt.Errorf("notification target %s is not a public address", host)
 		}
 		return nil
 	}}
 	notifyClient.Transport = &http.Transport{DialContext: dialer.DialContext, Proxy: http.ProxyFromEnvironment, TLSHandshakeTimeout: 5 * time.Second}
 }
-
-var _, cgnat, _ = net.ParseCIDR("100.64.0.0/10")
 
 // notify delivers an event to the team's channels that subscribed to it (best effort, async).
 func (s *Server) notify(ctx context.Context, teamID, event, text string, data map[string]any) {

@@ -159,6 +159,7 @@ type GenericReply struct {
 type BuildRequest struct {
 	DeploymentID string            `json:"deployment_id"`
 	ServiceID    string            `json:"service_id"`
+	ProjectID    string            `json:"project_id"`
 	ServiceType  string            `json:"service_type"`
 	Repo         string            `json:"repo"`
 	Branch       string            `json:"branch"`

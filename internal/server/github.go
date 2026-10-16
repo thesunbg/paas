@@ -12,10 +12,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/thesunbg/paas/internal/github"
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/store"
 )
@@ -200,13 +202,43 @@ func (s *Server) gitToken(ctx context.Context, svc *store.Service) (string, erro
 		if err != nil {
 			return "", err
 		}
-		return c.Token(ctx, svc.Source.InstallationID)
+		inst, err := s.store.GitHubInstallation(ctx, svc.Source.InstallationID)
+		if err != nil {
+			return "", err
+		}
+		return repoToken(ctx, c, inst, svc.Source.Repo)
 	}
 	token, err := s.box.Decrypt(svc.GitTokenEnc)
 	if err != nil {
 		return "", fmt.Errorf("decrypt git token: %w", err)
 	}
 	return token, nil
+}
+
+// repoToken mints a token limited to repoURL, which must belong to the
+// installation's own account; builds run untrusted code and must not receive
+// access to the account's other repositories.
+func repoToken(ctx context.Context, c *github.Client, inst *store.GitHubInstallation, repoURL string) (string, error) {
+	name, err := githubRepo(repoURL, inst.AccountLogin)
+	if err != nil {
+		return "", err
+	}
+	return c.RepoToken(ctx, inst.InstallationID, name)
+}
+
+// githubRepo returns the repository name of an https://github.com/<account>/<name>
+// URL, rejecting any other host or owner.
+func githubRepo(repoURL, account string) (string, error) {
+	bad := fmt.Errorf("repository must be github.com/%s/…", account)
+	u, err := url.Parse(repoURL)
+	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Host, "github.com") {
+		return "", bad
+	}
+	owner, name, ok := strings.Cut(strings.Trim(strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git"), "/"), "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") || !strings.EqualFold(owner, account) {
+		return "", bad
+	}
+	return name, nil
 }
 
 var _ = model.TypeWeb

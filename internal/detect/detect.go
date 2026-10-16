@@ -49,10 +49,24 @@ type Options struct {
 	Build        model.BuildConfig
 	Dockerfile   string // explicit Dockerfile path
 	BuildEnvKeys []string
+	CacheScope   string // build cache namespace (project id); empty = shared cache
+}
+
+// cache returns a BuildKit cache mount for target. Scoping the id keeps one
+// project's cache from being read or poisoned by another's build.
+func (o Options) cache(target string) string {
+	if o.CacheScope == "" {
+		// paasd older than this change sends no project_id; drop this branch once all control planes do.
+		return "--mount=type=cache,target=" + target
+	}
+	return "--mount=type=cache,id=" + o.CacheScope + target + ",target=" + target
 }
 
 // Detect inspects dir and returns a plan.
 func Detect(dir string, opt Options) (*Plan, error) {
+	if opt.Dockerfile != "" && !filepath.IsLocal(opt.Dockerfile) {
+		return nil, fmt.Errorf("dockerfile %s is outside the repository", opt.Dockerfile)
+	}
 	if opt.Build.Builder != "auto" {
 		df := opt.Dockerfile
 		if df == "" {
@@ -312,7 +326,7 @@ func (d *detector) node() (*Plan, error) {
 		df.WriteString("RUN apk add --no-cache openssl\n") // Prisma's query engine needs libssl
 	}
 	df.WriteString("COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* bun.lockb* bun.lock* .npmrc* ./\n")
-	fmt.Fprintf(&df, "RUN --mount=type=cache,target=%s --mount=type=secret,id=paasenv sh -c %s\n", cache, shQuote(secretEnv+" "+install))
+	fmt.Fprintf(&df, "RUN %s --mount=type=secret,id=paasenv sh -c %s\n", d.opt.cache(cache), shQuote(secretEnv+" "+install))
 	df.WriteString("COPY . .\n")
 	if prisma {
 		df.WriteString(runWithEnv("npx prisma generate") + "\n")
@@ -494,9 +508,9 @@ func (d *detector) golang() (*Plan, error) {
 FROM golang:%s-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum* ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN %s go mod download
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build --mount=type=secret,id=paasenv sh -c %s
+RUN %s %s --mount=type=secret,id=paasenv sh -c %s
 FROM alpine:3.20
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /usr/local/go/lib/time/zoneinfo.zip /usr/local/share/zoneinfo.zip
@@ -507,7 +521,7 @@ COPY --from=build /src /src-assets
 ENV PORT=%d
 EXPOSE %d
 %s
-`, ver, shQuote(secretEnv+" mkdir -p /paas-bin && "+build), DefaultPort, DefaultPort, cmd)
+`, ver, d.opt.cache("/go/pkg/mod"), d.opt.cache("/go/pkg/mod"), d.opt.cache("/root/.cache/go-build"), shQuote(secretEnv+" mkdir -p /paas-bin && "+build), DefaultPort, DefaultPort, cmd)
 	// Keep only runtime assets that commonly sit next to the binary (templates, static files).
 	df = strings.Replace(df, "COPY --from=build /src /src-assets\n", d.goAssetCopies(), 1)
 	return plan.withDockerfile(df), nil
@@ -654,7 +668,7 @@ func (d *detector) python() (*Plan, error) {
 	fmt.Fprintf(&df, "# syntax=docker/dockerfile:1\nFROM python:%s-slim\n", ver)
 	df.WriteString("ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_DISABLE_PIP_VERSION_CHECK=1\nWORKDIR /app\n")
 	df.WriteString(copyDeps)
-	fmt.Fprintf(&df, "RUN --mount=type=cache,target=/root/.cache/pip --mount=type=secret,id=paasenv sh -c %s\n", shQuote(secretEnv+" "+install))
+	fmt.Fprintf(&df, "RUN %s --mount=type=secret,id=paasenv sh -c %s\n", d.opt.cache("/root/.cache/pip"), shQuote(secretEnv+" "+install))
 	df.WriteString("COPY . .\n")
 	if d.opt.Build.BuildCmd != "" {
 		df.WriteString(runWithEnv(d.opt.Build.BuildCmd) + "\n")
@@ -706,7 +720,7 @@ func (d *detector) php() (*Plan, error) {
 	hasComposer := exists(filepath.Join(d.dir, "composer.json"))
 	if hasComposer {
 		df.WriteString("FROM composer:2 AS vendor\nWORKDIR /app\nCOPY composer.json composer.lock* ./\n")
-		df.WriteString("RUN --mount=type=cache,target=/tmp/cache composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-interaction --ignore-platform-reqs\n")
+		df.WriteString("RUN " + d.opt.cache("/tmp/cache") + " composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-interaction --ignore-platform-reqs\n")
 		df.WriteString("COPY . .\nRUN composer dump-autoload --optimize --no-dev --ignore-platform-reqs\n")
 	}
 	df.WriteString("FROM dunglas/frankenphp:1-php8.3-alpine\n")
@@ -751,7 +765,7 @@ func (d *detector) rust() (*Plan, error) {
 FROM rust:1-slim AS build
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/src/target --mount=type=secret,id=paasenv sh -c %s
+RUN %s %s --mount=type=secret,id=paasenv sh -c %s
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -759,7 +773,7 @@ COPY --from=build /paas-bin/server /app/server
 ENV PORT=%d
 EXPOSE %d
 %s
-`, shQuote(secretEnv+" cargo build --release && mkdir -p /paas-bin && cp target/release/"+name+" /paas-bin/server"), DefaultPort, DefaultPort, start)
+`, d.opt.cache("/usr/local/cargo/registry"), d.opt.cache("/src/target"), shQuote(secretEnv+" cargo build --release && mkdir -p /paas-bin && cp target/release/"+name+" /paas-bin/server"), DefaultPort, DefaultPort, start)
 	return plan.withDockerfile(df), nil
 }
 
@@ -793,14 +807,14 @@ func (d *detector) java() (*Plan, error) {
 FROM %s AS build
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,target=%s --mount=type=secret,id=paasenv sh -c %s
+RUN %s --mount=type=secret,id=paasenv sh -c %s
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY --from=build /paas-app.jar /app/app.jar
 ENV PORT=%d
 EXPOSE %d
 CMD ["sh", "-c", %s]
-`, builder, jar, shQuote(secretEnv+" "+build), DefaultPort, DefaultPort, strconv.Quote(start))
+`, builder, d.opt.cache(jar), shQuote(secretEnv+" "+build), DefaultPort, DefaultPort, strconv.Quote(start))
 	return plan.withDockerfile(df), nil
 }
 
@@ -830,12 +844,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 ENV RAILS_ENV=production RACK_ENV=production BUNDLE_WITHOUT=development:test RAILS_LOG_TO_STDOUT=1 RAILS_SERVE_STATIC_FILES=1
 WORKDIR /app
 COPY Gemfile Gemfile.lock* ./
-RUN --mount=type=cache,target=/usr/local/bundle/cache bundle install
+RUN %s bundle install
 COPY . .
 ENV PORT=%d
 EXPOSE %d
 CMD ["sh", "-c", %s]
-`, DefaultPort, DefaultPort, strconv.Quote(start))
+`, d.opt.cache("/usr/local/bundle/cache"), DefaultPort, DefaultPort, strconv.Quote(start))
 	return plan.withDockerfile(df), nil
 }
 

@@ -358,7 +358,7 @@ func (s *Server) inspectRepo(ctx context.Context, p *store.Project, req proto.De
 		if err := s.checkInstallation(ctx, p.TeamID, installationID); err != nil {
 			return nil, 400, err
 		}
-		tok, err := s.gitToken(ctx, &store.Service{Source: model.ServiceSource{InstallationID: installationID}})
+		tok, err := s.gitToken(ctx, &store.Service{Source: model.ServiceSource{InstallationID: installationID, Repo: req.Repo}})
 		if err != nil {
 			return nil, 502, err
 		}

@@ -143,6 +143,24 @@ func TestDetect(t *testing.T) {
 			if tc.lang == "dockerfile" && p.Port != 9000 {
 				t.Errorf("expected EXPOSE port 9000, got %d", p.Port)
 			}
+
+			scoped, err := Detect(dir, Options{ServiceType: tc.svcType, CacheScope: "p1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, line := range strings.Split(scoped.Dockerfile, "\n") {
+				if n := strings.Count(line, "type=cache"); n != strings.Count(line, "type=cache,id=p1/") {
+					t.Errorf("cache mount without project id (%d mounts): %s", n, line)
+				}
+			}
+			for _, line := range strings.Split(p.Dockerfile, "\n") {
+				if strings.Contains(line, "type=cache") && strings.Contains(line, "id=p1") {
+					t.Errorf("unscoped build leaked a cache id: %s", line)
+				}
+				if strings.Contains(line, "type=cache") && strings.Contains(line, "type=cache,id=") {
+					t.Errorf("empty scope must not set a cache id: %s", line)
+				}
+			}
 		})
 	}
 }
@@ -184,5 +202,14 @@ func TestPrismaInfo(t *testing.T) {
 	p, _ = Detect(dir, Options{ServiceType: model.TypeWeb})
 	if strings.Contains(p.Dockerfile, "migrate deploy") || !strings.Contains(p.Dockerfile, "npx prisma db push --skip-generate || ") {
 		t.Fatalf("expected db push:\n%s", p.Dockerfile)
+	}
+}
+
+func TestDockerfileOutsideRepo(t *testing.T) {
+	dir := t.TempDir()
+	for _, df := range []string{"../Dockerfile", "/etc/passwd", "a/../../x"} {
+		if _, err := Detect(dir, Options{Dockerfile: df}); err == nil || !strings.Contains(err.Error(), "outside the repository") {
+			t.Errorf("Dockerfile %q: err = %v", df, err)
+		}
 	}
 }

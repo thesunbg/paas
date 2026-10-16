@@ -131,7 +131,13 @@ type Client struct {
 	key *rsa.PrivateKey
 
 	mu     sync.Mutex
-	tokens map[int64]cachedToken
+	tokens map[tokenKey]cachedToken
+}
+
+// tokenKey identifies a cached token: repo is empty for the installation-wide one.
+type tokenKey struct {
+	installation int64
+	repo         string
 }
 
 type cachedToken struct {
@@ -156,7 +162,7 @@ func NewClient(app *App) (*Client, error) {
 	} else {
 		return nil, fmt.Errorf("parse app key: %w", err)
 	}
-	return &Client{app: app, key: key, tokens: map[int64]cachedToken{}}, nil
+	return &Client{app: app, key: key, tokens: map[tokenKey]cachedToken{}}, nil
 }
 
 func (c *Client) App() *App { return c.app }
@@ -199,8 +205,19 @@ func (c *Client) GetInstallation(ctx context.Context, id int64) (*Installation, 
 
 // Token returns an installation access token (valid one hour, cached).
 func (c *Client) Token(ctx context.Context, installationID int64) (string, error) {
+	return c.mint(ctx, tokenKey{installation: installationID}, nil)
+}
+
+// RepoToken returns a read-only token limited to one repository (name without
+// owner), for handing to untrusted build code. Cached per installation and repo.
+func (c *Client) RepoToken(ctx context.Context, installationID int64, repo string) (string, error) {
+	body := map[string]any{"repositories": []string{repo}, "permissions": map[string]string{"contents": "read"}}
+	return c.mint(ctx, tokenKey{installation: installationID, repo: repo}, body)
+}
+
+func (c *Client) mint(ctx context.Context, k tokenKey, body any) (string, error) {
 	c.mu.Lock()
-	if t, ok := c.tokens[installationID]; ok && time.Until(t.expires) > 5*time.Minute {
+	if t, ok := c.tokens[k]; ok && time.Until(t.expires) > 5*time.Minute {
 		c.mu.Unlock()
 		return t.token, nil
 	}
@@ -213,11 +230,11 @@ func (c *Client) Token(ctx context.Context, installationID int64) (string, error
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	if err := do(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", API, installationID), "Bearer "+jwt, nil, &out); err != nil {
+	if err := do(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", API, k.installation), "Bearer "+jwt, body, &out); err != nil {
 		return "", err
 	}
 	c.mu.Lock()
-	c.tokens[installationID] = cachedToken{token: out.Token, expires: out.ExpiresAt}
+	c.tokens[k] = cachedToken{token: out.Token, expires: out.ExpiresAt}
 	c.mu.Unlock()
 	return out.Token, nil
 }
