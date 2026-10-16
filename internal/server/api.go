@@ -29,6 +29,7 @@ func (s *Server) routes() http.Handler {
 	h := func(pattern string, fn http.HandlerFunc) { mux.HandleFunc(pattern, s.authed(fn)) }
 
 	mux.HandleFunc("GET /install.sh", installer.Handler)
+	mux.HandleFunc("GET /download/{file}", installer.BinaryHandler)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /api/v1/setup", s.handleSetupStatus)
 	mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)

@@ -45,6 +45,7 @@ CNI_VERSION="${CNI_VERSION:-1.8.0}"
 BUILDKIT_VERSION="${BUILDKIT_VERSION:-0.25.1}"
 PAAS_REPO="${PAAS_REPO:-thesunbg/paas}"
 
+trap 'rc=$?; if [ $rc -ne 0 ]; then printf "\033[1;31merror:\033[0m installation failed (exit %s); rerun with sh -x to see where\n" "$rc" >&2; fi' EXIT
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -70,10 +71,10 @@ install_packages() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     apt-get install -y -qq curl ca-certificates git nftables iptables tar >/dev/null
-    [ "$MODE" = server ] && apt-get install -y -qq postgresql >/dev/null
+    if [ "$MODE" = server ]; then apt-get install -y -qq postgresql >/dev/null; fi
   elif command -v dnf >/dev/null; then
     dnf install -y -q curl ca-certificates git nftables iptables tar
-    [ "$MODE" = server ] && { dnf install -y -q postgresql-server; postgresql-setup --initdb || true; systemctl enable --now postgresql; }
+    if [ "$MODE" = server ]; then dnf install -y -q postgresql-server; postgresql-setup --initdb || true; systemctl enable --now postgresql; fi
   else
     die "unsupported distribution (need apt or dnf)"
   fi
@@ -204,6 +205,8 @@ install_paasd() {
   if [ -z "$BINARY" ]; then
     BINARY="https://github.com/${PAAS_REPO}/releases/latest/download/paasd-linux-${ARCH}"
   fi
+  # A control plane serves its own binary at <url>/download/paasd-linux-<arch>.
+  case "$BINARY" in */download/paasd) BINARY="$BINARY-linux-$ARCH";; esac
   case "$BINARY" in
     http*) fetch "$BINARY" /tmp/paasd.new ;;
     *) cp "$BINARY" /tmp/paasd.new ;;
@@ -258,7 +261,7 @@ EOF
   chmod 600 /etc/paas/paasd.env
   AFTER="containerd.service"
   case ",$ROLES," in *,build,*) AFTER="$AFTER buildkit.service";; esac
-  [ "$MODE" = server ] && AFTER="$AFTER postgresql.service"
+  if [ "$MODE" = server ]; then AFTER="$AFTER postgresql.service"; fi
   cat > /etc/systemd/system/paasd.service <<EOF
 [Unit]
 Description=paas (${ARGS})
@@ -305,14 +308,14 @@ install_packages
 install_runtime
 tune_kernel
 install_paasd
-[ "$MODE" = server ] && setup_postgres
+if [ "$MODE" = server ]; then setup_postgres; fi
 write_units
 systemctl daemon-reload
 systemctl enable --now containerd >/dev/null
 case ",$ROLES," in *,build,*) systemctl enable --now buildkit >/dev/null;; esac
 systemctl enable paasd >/dev/null
 systemctl restart paasd
-[ -e /etc/systemd/system/paasd-proxy.service ] && systemctl restart paasd-proxy
+if [ -e /etc/systemd/system/paasd-proxy.service ]; then systemctl restart paasd-proxy; fi
 
 if [ "$MODE" = server ]; then
   log "done. Open ${SCHEME}://${DASH} (or http://$(hostname -I | awk '{print $1}'):8080) to create the administrator account."

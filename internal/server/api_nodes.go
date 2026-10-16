@@ -144,7 +144,7 @@ func (s *Server) handleJoinInfo(w http.ResponseWriter, r *http.Request) {
 	host = strings.SplitN(host, "/", 2)[0]
 	host = strings.SplitN(host, ":", 2)[0]
 	natsURL := fmt.Sprintf("nats://%s:%s", host, port)
-	cmd := fmt.Sprintf("curl -fsSL %s/install.sh | sudo sh -s -- join --server %s --token %s --roles worker", s.cfg.PublicURL, natsURL, s.ClusterToken)
+	cmd := fmt.Sprintf("curl -fsSL %s/install.sh | sudo sh -s -- join --server %s --token %s --binary %s/download/paasd --roles worker", s.cfg.PublicURL, natsURL, s.ClusterToken, s.cfg.PublicURL)
 	writeJSON(w, 200, map[string]string{"nats_url": natsURL, "token": s.ClusterToken, "command": cmd})
 }
 
