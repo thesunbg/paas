@@ -264,7 +264,7 @@ func (s *Server) handlePITRRestore(w http.ResponseWriter, r *http.Request) {
 		name = util.Slugify(in.Name)
 	}
 	db, err := s.store.CreateDatabase(r.Context(), &store.Database{
-		ProjectID: src.ProjectID, Name: name, Engine: src.Engine, Mode: "dedicated", DBName: src.DBName, Username: src.Username,
+		ProjectID: src.ProjectID, Name: name, Engine: src.Engine, Version: src.Version, Mode: "dedicated", DBName: src.DBName, Username: src.Username,
 		PasswordEnc: src.PasswordEnc, SizePreset: src.SizePreset, BackupScheduleHours: src.BackupScheduleHours,
 	})
 	if err != nil {

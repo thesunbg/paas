@@ -212,3 +212,31 @@ func (s *Server) handleDatabaseQuota(w http.ResponseWriter, r *http.Request) {
 	db.Options = o
 	writeJSON(w, 200, map[string]int{"quota_mb": quotaMB(db)})
 }
+
+var versionCache sync.Map // database id -> cachedVersion
+
+type cachedVersion struct {
+	v  string
+	at time.Time
+}
+
+// serverVersion is the exact version the database server reports (cached 10 minutes).
+func (s *Server) serverVersion(ctx context.Context, db *store.Database) string {
+	if db.Status != "ready" || db.ServerServiceID == nil {
+		return ""
+	}
+	if c, ok := versionCache.Load(db.ID); ok && time.Since(c.(cachedVersion).at) < 10*time.Minute {
+		return c.(cachedVersion).v
+	}
+	cr, srv, err := s.dbCreds(ctx, db)
+	if err != nil {
+		return ""
+	}
+	out, err := s.execOutput(ctx, srv.ID, databases.VersionCommand(db.Engine, db.Mode == "shared", cr), 5*time.Second)
+	if err != nil {
+		return ""
+	}
+	v := databases.ParseVersion(out)
+	versionCache.Store(db.ID, cachedVersion{v: v, at: time.Now()})
+	return v
+}

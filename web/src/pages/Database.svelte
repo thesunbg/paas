@@ -177,7 +177,7 @@
       <div>
         <div class="row">
           <h1>{db.name}</h1>
-          <span class="badge">{engineLabel[db.engine] ?? db.engine}</span>
+          <span class="badge">{engineLabel[db.engine] ?? db.engine} {detail.version ?? ''}</span>
           <span class="badge {db.mode === 'dedicated' ? 'blue' : ''}">{db.mode}</span>
           <Status status={db.status} />
         </div>
@@ -229,7 +229,8 @@
       <div class="card">
         <div class="card-head"><h3>Details</h3></div>
         <dl class="kv card-body">
-          <dt>Engine</dt><dd>{engineLabel[db.engine] ?? db.engine}</dd>
+          <dt>Engine</dt><dd>{engineLabel[db.engine] ?? db.engine} {detail.version ?? ''}</dd>
+          {#if detail.server_version}<dt>Server version</dt><dd class="mono small">{detail.server_version}</dd>{/if}
           <dt>Mode</dt><dd>{db.mode === 'shared' ? 'Shared server (logical database)' : 'Dedicated server'}</dd>
           <dt>Size</dt><dd>{db.mode === 'shared' ? 'shared' : `${db.size_preset}${sizePreset ? ` — ${mb(sizePreset.memory_mb)}, ${cpu(sizePreset.cpu_millis)}, ${sizePreset.max_connections} connections` : ''}`}</dd>
           {#if detail.server}

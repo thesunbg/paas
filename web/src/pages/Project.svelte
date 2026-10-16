@@ -185,7 +185,7 @@
               {#each data.databases as d (d.id)}
                 <tr class="clickable" onclick={() => navigate(`/databases/${d.id}`)}>
                   <td><a href={href(`/databases/${d.id}`)}><Icon name="database" size={14} /> {d.name}</a></td>
-                  <td>{engineLabel[d.engine] ?? d.engine}</td>
+                  <td>{engineLabel[d.engine] ?? d.engine} <span class="faint small">{d.version ?? ""}</span></td>
                   <td><span class="badge {d.mode === 'dedicated' ? 'blue' : ''}">{d.mode}</span></td>
                   <td class="hide-sm mono small">{d.mode === 'dedicated' ? d.size_preset : '—'}</td>
                   <td><Status status={d.status} /></td>

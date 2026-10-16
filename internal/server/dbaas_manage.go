@@ -31,7 +31,7 @@ func (s *Server) dedicatedSpec(db *store.Database, c databases.Credentials) (mod
 	if !ok {
 		return model.ServiceSpec{}, fmt.Errorf("unknown size %q", db.SizePreset)
 	}
-	spec, err := databases.ServerSpec(db.Engine, preset, false, c)
+	spec, err := databases.ServerSpec(db.Engine, db.Version, preset, false, c)
 	if err != nil {
 		return spec, err
 	}

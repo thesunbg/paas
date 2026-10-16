@@ -12,6 +12,7 @@ type Database struct {
 	ProjectID           string     `json:"project_id"`
 	Name                string     `json:"name"`
 	Engine              string     `json:"engine"`
+	Version             string     `json:"version"` // engine version ("" = created before versions were selectable)
 	Mode                string     `json:"mode"`
 	ServerServiceID     *string    `json:"server_service_id"`
 	DBName              string     `json:"db_name"`
@@ -45,11 +46,11 @@ type DBOptions struct {
 	ReplicaServiceID string `json:"replica_service_id,omitempty"`
 }
 
-const databaseCols = `id, project_id, name, engine, mode, server_service_id, db_name, username, password_enc, size_preset, status, error, backup_schedule_hours, last_backup_at, options, created_at`
+const databaseCols = `id, project_id, name, engine, version, mode, server_service_id, db_name, username, password_enc, size_preset, status, error, backup_schedule_hours, last_backup_at, options, created_at`
 
 func scanDatabase(row pgx.Row) (*Database, error) {
 	var d Database
-	err := row.Scan(&d.ID, &d.ProjectID, &d.Name, &d.Engine, &d.Mode, &d.ServerServiceID, &d.DBName, &d.Username, &d.PasswordEnc,
+	err := row.Scan(&d.ID, &d.ProjectID, &d.Name, &d.Engine, &d.Version, &d.Mode, &d.ServerServiceID, &d.DBName, &d.Username, &d.PasswordEnc,
 		&d.SizePreset, &d.Status, &d.Error, &d.BackupScheduleHours, &d.LastBackupAt, &d.Options, &d.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
@@ -71,9 +72,9 @@ func collectDatabases(rows pgx.Rows, err error) ([]Database, error) {
 }
 
 func (s *Store) CreateDatabase(ctx context.Context, d *Database) (*Database, error) {
-	return scanDatabase(s.DB.QueryRow(ctx, `INSERT INTO databases (project_id, name, engine, mode, db_name, username, password_enc, size_preset, backup_schedule_hours)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING `+databaseCols,
-		d.ProjectID, d.Name, d.Engine, d.Mode, d.DBName, d.Username, d.PasswordEnc, d.SizePreset, d.BackupScheduleHours))
+	return scanDatabase(s.DB.QueryRow(ctx, `INSERT INTO databases (project_id, name, engine, mode, db_name, username, password_enc, size_preset, backup_schedule_hours, version)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+databaseCols,
+		d.ProjectID, d.Name, d.Engine, d.Mode, d.DBName, d.Username, d.PasswordEnc, d.SizePreset, d.BackupScheduleHours, d.Version))
 }
 
 func (s *Store) DatabaseByID(ctx context.Context, id string) (*Database, error) {

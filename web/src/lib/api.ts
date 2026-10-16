@@ -187,6 +187,7 @@ export interface Database {
   project_id: string;
   name: string;
   engine: Engine;
+  version?: string;
   mode: 'shared' | 'dedicated';
   server_service_id: string | null;
   db_name: string;
@@ -434,6 +435,8 @@ export interface DatabaseServer {
 
 export interface DatabaseDetail {
   database: Database;
+  version?: string;
+  server_version?: string;
   connection?: Connection;
   external?: ExternalAccess;
   server?: DatabaseServer;
@@ -443,6 +446,7 @@ export interface DatabaseDetail {
 export interface CreateDatabaseInput {
   name: string;
   engine: Engine;
+  version?: string;
   mode?: 'shared' | 'dedicated';
   size?: string;
   link_services?: string[];
@@ -541,6 +545,8 @@ export interface EngineInfo {
   shared: boolean;
   default_env: string;
   min_memory_mb: number;
+  versions?: string[];
+  default_version?: string;
 }
 
 export interface SizesResponse {

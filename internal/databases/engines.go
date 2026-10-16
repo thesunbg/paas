@@ -5,6 +5,7 @@ package databases
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -27,13 +28,63 @@ type Engine struct {
 	SharedOK    bool   `json:"shared"`      // supports many logical databases on one server
 	DefaultEnv  string `json:"default_env"` // env var name injected into linked services
 	MinMemoryMB int    `json:"min_memory_mb"`
+	// Versions offered for new databases (newest first) and the default one.
+	Versions       []string `json:"versions"`
+	DefaultVersion string   `json:"default_version"`
+	// LegacyVersion is what Image runs, for databases created before versions existed.
+	LegacyVersion string `json:"legacy_version"`
 }
 
 var Engines = map[string]Engine{
-	Postgres: {Name: Postgres, Image: "docker.io/library/postgres:17-alpine", Port: 5432, DataPath: "/var/lib/postgresql/data", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 128},
-	MySQL:    {Name: MySQL, Image: "docker.io/library/mariadb:11", Port: 3306, DataPath: "/var/lib/mysql", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 192},
-	Redis:    {Name: Redis, Image: "docker.io/library/redis:7-alpine", Port: 6379, DataPath: "/data", DefaultEnv: "REDIS_URL", MinMemoryMB: 32},
-	Mongo:    {Name: Mongo, Image: "docker.io/library/mongo:7", Port: 27017, DataPath: "/data/db", DefaultEnv: "MONGODB_URL", MinMemoryMB: 256},
+	Postgres: {Name: Postgres, Image: "docker.io/library/postgres:17-alpine", Port: 5432, DataPath: "/var/lib/postgresql/data", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 128,
+		Versions: []string{"18", "17", "16", "15", "14"}, DefaultVersion: "17", LegacyVersion: "17"},
+	MySQL: {Name: MySQL, Image: "docker.io/library/mariadb:11", Port: 3306, DataPath: "/var/lib/mysql", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 192,
+		Versions: []string{"11.8", "11.4", "10.11", "10.6"}, DefaultVersion: "11.8", LegacyVersion: "11"},
+	Redis: {Name: Redis, Image: "docker.io/library/redis:7-alpine", Port: 6379, DataPath: "/data", DefaultEnv: "REDIS_URL", MinMemoryMB: 32,
+		Versions: []string{"8", "7.4", "7.2"}, DefaultVersion: "7.4", LegacyVersion: "7"},
+	Mongo: {Name: Mongo, Image: "docker.io/library/mongo:7", Port: 27017, DataPath: "/data/db", DefaultEnv: "MONGODB_URL", MinMemoryMB: 256,
+		Versions: []string{"8.0", "7.0", "6.0"}, DefaultVersion: "7.0", LegacyVersion: "7"},
+}
+
+// ImageFor returns the image of an engine version ("" = the legacy image).
+func ImageFor(engine, version string) (string, error) {
+	e, ok := Engines[engine]
+	if !ok {
+		return "", fmt.Errorf("unknown engine %q", engine)
+	}
+	if version == "" || version == e.LegacyVersion && !contains(e.Versions, version) {
+		return e.Image, nil
+	}
+	if !contains(e.Versions, version) {
+		return "", fmt.Errorf("%s %s is not available (choose one of %s)", engine, version, strings.Join(e.Versions, ", "))
+	}
+	switch engine {
+	case Postgres:
+		return "docker.io/library/postgres:" + version + "-alpine", nil
+	case MySQL:
+		return "docker.io/library/mariadb:" + version, nil
+	case Redis:
+		return "docker.io/library/redis:" + version + "-alpine", nil
+	default:
+		return "docker.io/library/mongo:" + version, nil
+	}
+}
+
+// DisplayVersion is the version shown for a database ("" = legacy).
+func DisplayVersion(engine, version string) string {
+	if version != "" {
+		return version
+	}
+	return Engines[engine].LegacyVersion
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // Preset is a sizing preset: container limit plus engine tuning derived from it.
@@ -78,10 +129,14 @@ type Credentials struct {
 
 // ServerSpec builds the service spec of a database server container.
 // For dedicated servers creds are the app credentials; for shared servers only RootPass is used.
-func ServerSpec(engine string, preset Preset, shared bool, c Credentials) (model.ServiceSpec, error) {
+func ServerSpec(engine, version string, preset Preset, shared bool, c Credentials) (model.ServiceSpec, error) {
 	e, ok := Engines[engine]
 	if !ok {
 		return model.ServiceSpec{}, fmt.Errorf("unknown engine %q", engine)
+	}
+	image, err := ImageFor(engine, version)
+	if err != nil {
+		return model.ServiceSpec{}, err
 	}
 	mem := preset.MemoryMB
 	if mem < e.MinMemoryMB {
@@ -90,7 +145,7 @@ func ServerSpec(engine string, preset Preset, shared bool, c Credentials) (model
 	spec := model.ServiceSpec{
 		Port:     e.Port,
 		Replicas: 1,
-		Image:    e.Image,
+		Image:    image,
 		Resources: model.Resources{
 			MemoryLimitMB: mem, MemoryRequestMB: mem,
 			CPULimitMillis: preset.CPU, CPURequestMillis: preset.CPU / 4,
@@ -271,6 +326,32 @@ func Stats(engine string, shared bool, c Credentials) (Command, error) {
 	}
 	return Command{}, fmt.Errorf("unknown engine %q", engine)
 }
+
+// VersionCommand prints the exact server version.
+func VersionCommand(engine string, shared bool, c Credentials) Command {
+	switch engine {
+	case Postgres:
+		user := c.Username
+		if shared {
+			user = "postgres"
+		}
+		return Command{Cmd: []string{"psql", "-At", "-U", user, "-d", "postgres", "-c", "SHOW server_version"}}
+	case MySQL:
+		return Command{Cmd: []string{"mariadb", "-uroot", "-N", "-B", "-e", "SELECT VERSION()"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}
+	case Redis:
+		return Command{Cmd: []string{"redis-server", "--version"}}
+	default:
+		return Command{Cmd: []string{"mongod", "--version"}}
+	}
+}
+
+// ParseVersion extracts the version number from VersionCommand's output.
+func ParseVersion(out string) string {
+	m := versionRe.FindString(out)
+	return m
+}
+
+var versionRe = regexp.MustCompile(`\d+\.\d+(\.\d+)?`)
 
 // ParseStats reads the output of Stats.
 func ParseStats(out string) (size int64, conns int, err error) {

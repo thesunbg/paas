@@ -25,6 +25,13 @@
   let name = $state('main');
   let engine = $state<Engine>('postgres');
   let mode = $state<'shared' | 'dedicated'>('shared');
+  let version = $state('');
+  const versions = $derived(cat?.engines?.[engine]?.versions ?? []);
+  const defaultVersion = $derived(cat?.engines?.[engine]?.default_version ?? '');
+  $effect(() => {
+    // Reset to the engine's default when the engine changes.
+    if (!versions.includes(version)) version = defaultVersion;
+  });
   let size = $state('micro');
   let link = $state<string[]>([]);
   let envName = $state('');
@@ -47,6 +54,7 @@
       const db = await api.createDatabase(projectId, {
         name: name.trim(),
         engine,
+        version: version || undefined,
         mode,
         size: mode === 'dedicated' ? size : undefined,
         link_services: link.length ? link : undefined,
@@ -78,6 +86,15 @@
         </select>
       </label>
     </div>
+    {#if versions.length}
+      <label class="field">
+        <span>Version</span>
+        <select bind:value={version}>
+          {#each versions as v (v)}<option value={v}>{v}{v === defaultVersion ? ' (recommended)' : ''}</option>{/each}
+        </select>
+        <span class="hint">{engine === 'mysql' ? 'MariaDB (MySQL-compatible). ' : ''}Shared databases of the same version share one server; minor updates are applied on restart.</span>
+      </label>
+    {/if}
     <fieldset class="field">
       <legend class="label">Mode</legend>
       <div class="modes">

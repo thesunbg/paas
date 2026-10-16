@@ -38,6 +38,7 @@ type CreateDatabaseInput struct {
 	Engine      string   `json:"engine"`
 	Mode        string   `json:"mode"` // shared | dedicated
 	Size        string   `json:"size"`
+	Version     string   `json:"version"` // engine version; empty = default
 	Link        []string `json:"link_services"`
 	EnvName     string   `json:"env_name"`
 	BackupHours *int     `json:"backup_schedule_hours"`
@@ -59,6 +60,12 @@ func (s *Server) createDatabase(ctx context.Context, proj *store.Project, in Cre
 	}
 	if in.Mode != "shared" && in.Mode != "dedicated" {
 		return nil, errors.New("mode must be shared or dedicated")
+	}
+	if in.Version == "" {
+		in.Version = eng.DefaultVersion
+	}
+	if _, err := databases.ImageFor(in.Engine, in.Version); err != nil {
+		return nil, err
 	}
 	if in.Size == "" {
 		in.Size = "micro"
@@ -84,7 +91,7 @@ func (s *Server) createDatabase(ctx context.Context, proj *store.Project, in Cre
 		ident = dbIdent(name)
 	}
 	db, err := s.store.CreateDatabase(ctx, &store.Database{
-		ProjectID: proj.ID, Name: name, Engine: in.Engine, Mode: in.Mode, DBName: ident, Username: ident,
+		ProjectID: proj.ID, Name: name, Engine: in.Engine, Version: in.Version, Mode: in.Mode, DBName: ident, Username: ident,
 		PasswordEnc: s.box.MustEncrypt(util.RandomPassword(24)), SizePreset: in.Size, BackupScheduleHours: backupHours,
 	})
 	if err != nil {
@@ -171,7 +178,7 @@ func (s *Server) provisionDatabase(ctx context.Context, dbID string) {
 	}
 	var srv *store.Service
 	if db.Mode == "shared" {
-		srv, err = s.ensureSharedServer(ctx, db.Engine)
+		srv, err = s.ensureSharedServer(ctx, db.Engine, db.Version)
 		if err != nil {
 			fail(err)
 			return
@@ -209,9 +216,17 @@ func (s *Server) provisionDatabase(ctx context.Context, dbID string) {
 }
 
 // ensureSharedServer returns the shared server for an engine, creating and deploying it on first use.
-func (s *Server) ensureSharedServer(ctx context.Context, engine string) (*store.Service, error) {
+// Each engine version has its own shared server; the default (and legacy) one keeps "shared-<engine>".
+func (s *Server) ensureSharedServer(ctx context.Context, engine, version string) (*store.Service, error) {
 	slug := "shared-" + engine
-	unlock := s.lock("shared-server-" + engine)
+	e := databases.Engines[engine]
+	if version != "" && version != e.DefaultVersion && version != e.LegacyVersion {
+		slug += "-" + strings.ReplaceAll(version, ".", "-")
+	}
+	if version == e.LegacyVersion && version != e.DefaultVersion && !contains(e.Versions, version) {
+		version = "" // created before versions: keep the legacy image
+	}
+	unlock := s.lock("shared-server-" + slug)
 	defer unlock()
 	services, err := s.store.ServicesForProject(ctx, s.systemProjectID)
 	if err != nil {
@@ -237,12 +252,12 @@ func (s *Server) ensureSharedServer(ctx context.Context, engine string) (*store.
 		return nil, err
 	}
 	preset, _ := databases.PresetByName("small")
-	spec, err := databases.ServerSpec(engine, preset, true, databases.Credentials{RootPass: root})
+	spec, err := databases.ServerSpec(engine, version, preset, true, databases.Credentials{RootPass: root})
 	if err != nil {
 		return nil, err
 	}
 	srv, err := s.store.CreateService(ctx, &store.Service{
-		ProjectID: s.systemProjectID, Name: "Shared " + engine, Slug: slug, Type: model.TypeDatabase,
+		ProjectID: s.systemProjectID, Name: "Shared " + engine + " " + databases.DisplayVersion(engine, version), Slug: slug, Type: model.TypeDatabase,
 		Source: model.ServiceSource{Kind: "image", Image: spec.Image}, Spec: spec, WebhookSecret: util.RandomToken(16),
 	})
 	if err != nil {
@@ -568,4 +583,13 @@ func (s *Server) transfer(ctx context.Context, nodeID, method, key, path string)
 		return errors.New(rep.Error)
 	}
 	return nil
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

@@ -139,6 +139,7 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/v1/databases/{id}/public` | `{enabled, allowed_cidrs}`: external access on `db.<base domain>:<port>` (ports `PAAS_DB_PORT_MIN`–`MAX`, default 20000–20999). PostgreSQL TLS via SSLRequest (`sslmode=require`), Redis `rediss://`, MongoDB `tls=true` when HTTPS is on |
+| POST | `/api/v1/projects/{id}/databases` | `version` picks the engine version (`/api/v1/sizes` → `engines.<engine>.versions`); shared databases of one version share a server |
 | GET | `/api/v1/databases/{id}/metrics?hours=24` | size and connections per minute (7 days), quota, read-only flag |
 | PUT | `/api/v1/databases/{id}/quota` | administrators: `{quota_mb}` (0 = default: shared 1 GB, dedicated by size). Over quota PostgreSQL is read-only, MySQL loses write privileges |
 | POST | `/api/v1/databases/{id}/pooler` | `{enabled}` PgBouncer (transaction mode); linked services get `<ENV>_POOLED` |

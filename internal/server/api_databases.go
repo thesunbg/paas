@@ -50,7 +50,10 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		return
 	}
-	out := map[string]any{"database": db}
+	out := map[string]any{"database": db, "version": databases.DisplayVersion(db.Engine, db.Version)}
+	if v := s.serverVersion(r.Context(), db); v != "" {
+		out["server_version"] = v
+	}
 	if role, _ := s.teamRoleForDB(r, db); roleRank[role] >= roleRank["developer"] && (db.Status == "ready" || db.Status == "upgrading") {
 		if c, srv, err := s.dbCreds(r.Context(), db); err == nil {
 			out["connection"] = map[string]any{
