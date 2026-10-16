@@ -17,6 +17,9 @@ jobs:
           sshpass -e ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -p $PORT root@$HOST 'bash -s' <<'SH'
           set +e
           . /etc/paas/db.env
-          psql "$PAAS_DATABASE_URL" -X -P pager=off -c "select s.slug, n.name, i.status, i.container_id, i.created_at from instances i join services s on s.id=i.service_id left join nodes n on n.id=i.node_id where s.slug in ('n8n','giaphaviet','wordpress') order by i.created_at desc"
-          for c in $(psql "$PAAS_DATABASE_URL" -XAtc "select i.container_id from instances i join services s on s.id=i.service_id join nodes n on n.id=i.node_id where s.slug='n8n' and n.address='202.92.6.129' order by i.created_at desc limit 1"); do echo "-- $c"; grep -vE "Starting migration|Finished migration" /var/lib/paas/containers/$c/output.log | tail -n 40; grep -c "Finished migration" /var/lib/paas/containers/$c/output.log; done
+          psql "$PAAS_DATABASE_URL" -X -P pager=off -c "select d.status, d.trigger, d.detected, left(d.error,200) err, d.created_at from deployments d join services s on s.id=d.service_id where s.slug='giaphaviet' order by d.created_at desc limit 4"
+          psql "$PAAS_DATABASE_URL" -X -P pager=off -c "select e.key from env_vars e join services s on s.id=e.service_id where s.slug='giaphaviet'"
+          psql "$PAAS_DATABASE_URL" -X -P pager=off -c "select spec->'volumes' vols, build from services where slug='giaphaviet'"
+          D=$(psql "$PAAS_DATABASE_URL" -XAtc "select d.id from deployments d join services s on s.id=d.service_id where s.slug='giaphaviet' order by d.created_at desc limit 1")
+          psql "$PAAS_DATABASE_URL" -XAtc "select line from deployment_logs where deployment_id='$D' order by id" 2>/dev/null | grep -iE "prisma|==>|error" | tail -25
           SH
