@@ -118,8 +118,9 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 	if in.Branch == "" {
 		in.Branch = "main"
 	}
+	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
 	if in.Domain != "" {
-		if err := validHostname(in.Domain); err != nil {
+		if err := s.checkCustomDomain(r, in.Domain); err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
