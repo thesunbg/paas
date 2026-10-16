@@ -401,6 +401,15 @@ export interface DBUserInfo {
   created_at?: string;
 }
 
+export interface HAInfo {
+  capable: boolean;
+  enabled: boolean;
+  alias?: string;
+  primary?: { service: string; node: string; status: string };
+  standby?: { service: string; node?: string; status: string };
+  replication?: string;
+}
+
 export interface PITRInfo {
   capable: boolean;
   enabled: boolean;
@@ -877,6 +886,9 @@ export const api = {
   pitr: (id: string) => get<PITRInfo>(`/databases/${e(id)}/pitr`),
   setPITR: (id: string, enabled: boolean, retention_days: number) => post<{ enabled: boolean }>(`/databases/${e(id)}/pitr`, { enabled, retention_days }),
   pitrRestore: (id: string, target_time?: string, name?: string) => post<Database>(`/databases/${e(id)}/pitr/restore`, { target_time, name }),
+  ha: (id: string) => get<HAInfo>(`/databases/${e(id)}/ha`),
+  setHA: (id: string, enabled: boolean) => post<{ ha: boolean }>(`/databases/${e(id)}/ha`, { enabled }),
+  switchover: (id: string) => post<{ status: string }>(`/databases/${e(id)}/ha/switchover`),
   databasePooler: (id: string, enabled: boolean) => post<{ pooler: boolean }>(`/databases/${e(id)}/pooler`, { enabled }),
   databasePublic: (id: string, enabled: boolean, allowed_cidrs: string[] = []) =>
     post<{ public_port: number; allowed_cidrs: string[] }>(`/databases/${e(id)}/public`, { enabled, allowed_cidrs }),

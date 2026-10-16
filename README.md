@@ -80,6 +80,14 @@ to grant, and in **New service** pick a repository from the list: language, type
 detected automatically, and pushes / pull requests deploy without manual webhooks or tokens.
 The server's `PAAS_PUBLIC_URL` must be reachable from GitHub.
 
+## Databases as a service
+
+Managed PostgreSQL, MySQL (MariaDB), Redis and MongoDB, shared or dedicated, with:
+external access on `db.<base domain>:<port>` (TLS and an IP allowlist; open TCP
+20000–20999 in the firewall), usage metrics and storage quotas, PgBouncer pooling,
+extra read-only / read-write users, in-place resize, point-in-time recovery and
+high availability with automatic failover for dedicated PostgreSQL.
+
 ## High availability
 
 Run several control planes against the same (highly available) PostgreSQL:

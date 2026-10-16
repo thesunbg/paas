@@ -76,6 +76,8 @@ type Server struct {
 	gh   *github.Client
 
 	pitrRunning atomic.Bool
+	haMu        sync.Mutex
+	haRunning   map[string]time.Time
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.
@@ -353,6 +355,7 @@ func (s *Server) leaderLoop(ctx context.Context) {
 		go s.reconcileLoop(lctx)
 		go s.maintenanceLoop(lctx)
 		go s.dbMetricsLoop(lctx)
+		go s.haLoop(lctx)
 		for lctx.Err() == nil {
 			time.Sleep(5 * time.Second)
 			pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)

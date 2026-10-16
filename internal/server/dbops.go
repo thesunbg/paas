@@ -125,6 +125,9 @@ func (s *Server) dbCreds(ctx context.Context, db *store.Database) (databases.Cre
 		return c, nil, err
 	}
 	c.Host = internalHost(srv.Slug, proj.Slug)
+	if len(srv.Spec.DNSAliases) > 0 {
+		c.Host = srv.Spec.DNSAliases[0] // HA: follows whichever server is primary
+	}
 	if db.Mode == "shared" {
 		root, err := s.sharedRootPassword(ctx, db.Engine)
 		if err != nil {
@@ -359,6 +362,7 @@ func (s *Server) restartLinked(ctx context.Context, dbID string) {
 func (s *Server) deleteDatabase(ctx context.Context, db *store.Database) error {
 	_ = s.store.SetDatabaseStatus(ctx, db.ID, "deleting", "")
 	s.removePooler(ctx, db)
+	s.removeStandby(ctx, db)
 	if db.ServerServiceID != nil {
 		srv, err := s.store.ServiceByID(ctx, *db.ServerServiceID)
 		if err == nil {

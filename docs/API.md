@@ -134,6 +134,23 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 
 `POST /webhooks/github/{serviceId}` — configure it in GitHub (content type `application/json`, secret = the service `webhook_secret`, event `push`). Pushes to the service branch deploy automatically; `root_dir` limits deploys to changes under that folder.
 
+## Databases as a service
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/v1/databases/{id}/public` | `{enabled, allowed_cidrs}`: external access on `db.<base domain>:<port>` (ports `PAAS_DB_PORT_MIN`–`MAX`, default 20000–20999). PostgreSQL TLS via SSLRequest (`sslmode=require`), Redis `rediss://`, MongoDB `tls=true` when HTTPS is on |
+| GET | `/api/v1/databases/{id}/metrics?hours=24` | size and connections per minute (7 days), quota, read-only flag |
+| PUT | `/api/v1/databases/{id}/quota` | administrators: `{quota_mb}` (0 = default: shared 1 GB, dedicated by size). Over quota PostgreSQL is read-only, MySQL loses write privileges |
+| POST | `/api/v1/databases/{id}/pooler` | `{enabled}` PgBouncer (transaction mode); linked services get `<ENV>_POOLED` |
+| PUT | `/api/v1/databases/{id}/size` | `{size}` resize a dedicated server in place |
+| GET/POST | `/api/v1/databases/{id}/users` | extra users `{name, role: readonly\|readwrite}` (PostgreSQL, MySQL) |
+| DELETE | `/api/v1/databases/{id}/users/{user}` | |
+| POST | `/api/v1/databases/{id}/users/{user}/password` | rotate |
+| GET/POST | `/api/v1/databases/{id}/pitr` | `{enabled, retention_days}` WAL archiving + daily base backups (dedicated PostgreSQL) |
+| POST | `/api/v1/databases/{id}/pitr/restore` | `{target_time?, name?}` restore into a new database |
+| GET/POST | `/api/v1/databases/{id}/ha` | `{enabled}` hot standby on another node, automatic failover ~30 s after the primary's node stops responding |
+| POST | `/api/v1/databases/{id}/ha/switchover` | planned switchover to the standby |
+
 ## Accounts (administrators)
 
 | Method | Path | Notes |

@@ -127,7 +127,25 @@ func (s *Server) dnsTable(ctx context.Context) (*model.DNSTable, error) {
 		name := internalHost(svc, proj)
 		t.Records[name] = append(t.Records[name], ip)
 	}
-	return t, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Aliases (HA databases) resolve to the instances of the service holding them.
+	arows, err := s.store.DB.Query(ctx, `SELECT a.alias, i.ip FROM services s
+		CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(s.spec->'dns_aliases', '[]'::jsonb)) AS a(alias)
+		JOIN instances i ON i.service_id=s.id WHERE i.status='running' AND i.ip<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer arows.Close()
+	for arows.Next() {
+		var name, ip string
+		if err := arows.Scan(&name, &ip); err != nil {
+			return nil, err
+		}
+		t.Records[name] = append(t.Records[name], ip)
+	}
+	return t, arows.Err()
 }
 
 func (s *Server) publishDNS(ctx context.Context) {

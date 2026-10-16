@@ -18,7 +18,7 @@ import (
 )
 
 // Notification event names.
-var notificationEvents = []string{"deploy.succeeded", "deploy.failed", "instance.crashloop", "instance.evicted", "node.offline", "backup.failed", "job.failed", "autoscale"}
+var notificationEvents = []string{"deploy.succeeded", "deploy.failed", "instance.crashloop", "instance.evicted", "node.offline", "backup.failed", "job.failed", "autoscale", "database.quota", "database.failover"}
 
 var notifyClient = &http.Client{Timeout: 10 * time.Second}
 
@@ -82,7 +82,7 @@ func (s *Server) send(c store.NotificationChannel, event, text string, data map[
 	}
 	icon := "ℹ️"
 	switch {
-	case strings.HasSuffix(event, "failed") || event == "node.offline" || event == "instance.crashloop":
+	case strings.HasSuffix(event, "failed") || event == "node.offline" || event == "instance.crashloop" || event == "database.failover" || event == "database.quota":
 		icon = "🔴"
 	case strings.HasSuffix(event, "succeeded"):
 		icon = "✅"
@@ -174,7 +174,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(in.Events) == 0 {
-		in.Events = []string{"deploy.failed", "instance.crashloop", "node.offline", "backup.failed", "job.failed"}
+		in.Events = []string{"deploy.failed", "instance.crashloop", "node.offline", "backup.failed", "job.failed", "database.quota", "database.failover"}
 	}
 	for _, e := range in.Events {
 		if !slices.Contains(notificationEvents, e) {
