@@ -210,8 +210,9 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, err.Error())
 		return
 	}
+	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
 	if in.Domain != "" {
-		if err := validHostname(in.Domain); err != nil {
+		if err := s.checkCustomDomain(r, in.Domain); err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
@@ -241,7 +242,7 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 			_, _ = s.store.AddDomain(r.Context(), created.ID, s.generatedDomain(created.Slug+"-"+util.RandomToken(2), p.Slug), true)
 		}
 		if in.Domain != "" {
-			_, _ = s.store.AddDomain(r.Context(), created.ID, strings.ToLower(in.Domain), false)
+			_, _ = s.store.AddDomain(r.Context(), created.ID, in.Domain, false)
 		}
 	}
 	u := currentUser(r)
@@ -621,6 +622,22 @@ func validHostname(h string) error {
 	return nil
 }
 
+// checkCustomDomain validates a hostname a user asks to route to a service. The
+// dashboard and database hosts are never available; names under the base domain
+// are reserved for generated domains unless the caller is a system administrator.
+func (s *Server) checkCustomDomain(r *http.Request, host string) error {
+	if err := validHostname(host); err != nil {
+		return err
+	}
+	if host == s.cfg.DashboardDomain || host == s.cfg.DBHost {
+		return fmt.Errorf("hostname %q is reserved", host)
+	}
+	if (host == s.cfg.BaseDomain || strings.HasSuffix(host, "."+s.cfg.BaseDomain)) && !currentUser(r).IsAdmin {
+		return fmt.Errorf("hostnames under the platform domain are reserved")
+	}
+	return nil
+}
+
 func (s *Server) handleListDomains(w http.ResponseWriter, r *http.Request) {
 	svc, _ := s.serviceFor(w, r, "viewer")
 	if svc == nil {
@@ -647,12 +664,8 @@ func (s *Server) handleAddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := strings.ToLower(strings.TrimSpace(in.Hostname))
-	if err := validHostname(host); err != nil {
+	if err := s.checkCustomDomain(r, host); err != nil {
 		writeError(w, 400, err.Error())
-		return
-	}
-	if host == s.cfg.DashboardDomain || strings.HasSuffix(host, "."+s.cfg.BaseDomain) && !currentUser(r).IsAdmin {
-		writeError(w, 400, "hostnames under the platform domain are reserved")
 		return
 	}
 	d, err := s.store.AddDomain(r.Context(), svc.ID, host, false)

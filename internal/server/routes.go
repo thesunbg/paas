@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/thesunbg/paas/internal/bus"
@@ -77,7 +78,9 @@ func (s *Server) routeTable(ctx context.Context) (*model.RouteTable, error) {
 	}
 	for _, d := range domains {
 		svc := byID[d.ServiceID]
-		if svc == nil {
+		// The dashboard and database hosts belong to the platform; a service row
+		// claiming one (created before this was validated) must not shadow them.
+		if svc == nil || strings.EqualFold(d.Hostname, s.cfg.DashboardDomain) || strings.EqualFold(d.Hostname, s.cfg.DBHost) {
 			continue
 		}
 		r := model.Route{Host: d.Hostname, ServiceID: svc.ID}

@@ -42,6 +42,13 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 		Domain string `json:"domain"`
 	}
 	_ = decode(r, &in)
+	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
+	if in.Domain != "" {
+		if err := s.checkCustomDomain(r, in.Domain); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
 	ctx := context.WithoutCancel(r.Context())
 	created, dbs, err := s.installPlan(ctx, p, tpl.Services, tpl.Databases, templateOpts{Domain: in.Domain})
 	if err != nil {
@@ -113,8 +120,9 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 	if in.Branch == "" {
 		in.Branch = "main"
 	}
+	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
 	if in.Domain != "" {
-		if err := validHostname(in.Domain); err != nil {
+		if err := s.checkCustomDomain(r, in.Domain); err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}

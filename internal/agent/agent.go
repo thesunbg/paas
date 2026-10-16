@@ -463,6 +463,12 @@ func (a *Agent) handlePush(ctx context.Context, req *proto.PushRequest) *proto.G
 }
 
 // serveStaticOrigin exposes static site outputs to edge proxies on other nodes, over the mesh only.
+// plainSegment reports whether p names one entry inside a directory: not empty,
+// not "." or "..", no separator. The static origin is reachable from containers.
+func plainSegment(p string) bool {
+	return p != "" && p != "." && p != ".." && !strings.ContainsAny(p, `/\`)
+}
+
 func (a *Agent) serveStaticOrigin(ctx context.Context) {
 	if a.mesh == nil {
 		return
@@ -472,11 +478,11 @@ func (a *Agent) serveStaticOrigin(ctx context.Context) {
 	srv := &http.Server{Addr: addr, ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Path: /<service>/<deployment>/<file...>
 		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 3)
-		if len(parts) < 2 {
+		if len(parts) < 2 || !plainSegment(parts[0]) || !plainSegment(parts[1]) {
 			http.NotFound(w, r)
 			return
 		}
-		site := filepath.Join(root, filepath.Base(parts[0]), filepath.Base(parts[1]))
+		site := filepath.Join(root, parts[0], parts[1])
 		rest := "/"
 		if len(parts) == 3 {
 			rest += parts[2]
