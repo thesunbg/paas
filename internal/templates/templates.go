@@ -63,7 +63,7 @@ var All = []Template{
 			Env: map[string]string{
 				"DB_TYPE": "postgresdb", "DB_POSTGRESDB_HOST": "${db.n8n.host}", "DB_POSTGRESDB_PORT": "${db.n8n.port}",
 				"DB_POSTGRESDB_DATABASE": "${db.n8n.name}", "DB_POSTGRESDB_USER": "${db.n8n.user}", "DB_POSTGRESDB_PASSWORD": "${db.n8n.password}",
-				"N8N_HOST": "${host}", "WEBHOOK_URL": "${url}/", "N8N_PORT": "5678", "N8N_ENCRYPTION_KEY": "${random}",
+				"N8N_HOST": "${host}", "WEBHOOK_URL": "${url}/", "N8N_PORT": "5678", "N8N_LISTEN_ADDRESS": "0.0.0.0", "N8N_ENCRYPTION_KEY": "${random}",
 			},
 			Volumes: []model.Volume{{Name: "data", Path: "/home/node/.n8n"}},
 		}},
