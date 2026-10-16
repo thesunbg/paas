@@ -393,6 +393,22 @@ export interface Connection {
   pooled_url?: string;
 }
 
+export interface DBUserInfo {
+  username: string;
+  role: 'readonly' | 'readwrite';
+  password: string;
+  url: string;
+  created_at?: string;
+}
+
+export interface PITRInfo {
+  capable: boolean;
+  enabled: boolean;
+  retention_days: number;
+  earliest?: string;
+  base_backups: Backup[] | null;
+}
+
 export interface DBMetricsResponse {
   points: { ts: string; size_bytes: number; connections: number }[];
   quota_mb: number;
@@ -427,6 +443,7 @@ export interface CreateDatabaseInput {
 
 export interface Backup {
   s3_key?: string;
+  kind?: 'dump' | 'base';
   id: string;
   database_id: string;
   node_id: string | null;
@@ -852,6 +869,14 @@ export const api = {
   myIP: () => get<{ ip: string }>('/me/ip'),
   databaseMetrics: (id: string, hours = 24) => get<DBMetricsResponse>(`/databases/${e(id)}/metrics?hours=${hours}`),
   databaseQuota: (id: string, quota_mb: number) => put<{ quota_mb: number }>(`/databases/${e(id)}/quota`, { quota_mb }),
+  resizeDatabase: (id: string, size: string) => put<{ status: string }>(`/databases/${e(id)}/size`, { size }),
+  dbUsers: (id: string) => get<DBUserInfo[]>(`/databases/${e(id)}/users`),
+  createDBUser: (id: string, name: string, role: 'readonly' | 'readwrite') => post<DBUserInfo>(`/databases/${e(id)}/users`, { name, role }),
+  deleteDBUser: (id: string, user: string) => del(`/databases/${e(id)}/users/${e(user)}`),
+  rotateDBUser: (id: string, user: string) => post<{ username: string; password: string }>(`/databases/${e(id)}/users/${e(user)}/password`),
+  pitr: (id: string) => get<PITRInfo>(`/databases/${e(id)}/pitr`),
+  setPITR: (id: string, enabled: boolean, retention_days: number) => post<{ enabled: boolean }>(`/databases/${e(id)}/pitr`, { enabled, retention_days }),
+  pitrRestore: (id: string, target_time?: string, name?: string) => post<Database>(`/databases/${e(id)}/pitr/restore`, { target_time, name }),
   databasePooler: (id: string, enabled: boolean) => post<{ pooler: boolean }>(`/databases/${e(id)}/pooler`, { enabled }),
   databasePublic: (id: string, enabled: boolean, allowed_cidrs: string[] = []) =>
     post<{ public_port: number; allowed_cidrs: string[] }>(`/databases/${e(id)}/public`, { enabled, allowed_cidrs }),

@@ -52,7 +52,7 @@
       <h3>Usage</h3>
       <p class="hint">Sampled every minute, kept for 7 days.</p>
     </div>
-    <select bind:value={hours} onchange={load} aria-label="Range">
+    <select bind:value={hours} onchange={load} aria-label="Range" style="width:auto">
       <option value={6}>6 h</option>
       <option value={24}>24 h</option>
       <option value={168}>7 days</option>

@@ -17,6 +17,8 @@
   import ExternalAccess from '../components/db/ExternalAccess.svelte';
   import Usage from '../components/db/Usage.svelte';
   import Pooler from '../components/db/Pooler.svelte';
+  import Users from '../components/db/Users.svelte';
+  import PITR from '../components/db/PITR.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -35,6 +37,13 @@
 
   // Upgrade dialog
   let upgradeOpen = $state(false);
+  let resizeOpen = $state(false);
+  let resizeSize = $state('small');
+  async function resize(e: SubmitEvent) {
+    e.preventDefault();
+    resizeOpen = false;
+    act('resize', () => api.resizeDatabase(id, resizeSize), `Resizing to ${resizeSize} — the server restarts`);
+  }
   let upgradeSize = $state('small');
 
   const transitional = (s?: string) => s === 'provisioning' || s === 'upgrading' || s === 'deleting';
@@ -177,6 +186,9 @@
         {#if isAdmin && db.mode === 'shared' && db.status === 'ready'}
           <button onclick={() => (upgradeOpen = true)} disabled={!!busy}><Icon name="zap" size={14} />Upgrade to dedicated</button>
         {/if}
+        {#if isAdmin && db.mode === 'dedicated' && db.status === 'ready'}
+          <button onclick={() => ((resizeSize = db.size_preset), (resizeOpen = true))} disabled={!!busy}><Icon name="zap" size={14} />Change size</button>
+        {/if}
         {#if isAdmin}<button class="danger" onclick={del}><Icon name="trash" size={14} />Delete</button>{/if}
       </div>
     </div>
@@ -236,6 +248,8 @@
       {#if db.status === 'ready'}<Usage {detail} />{/if}
       <ExternalAccess {detail} {isAdmin} reload={load} />
       {#if db.engine === 'postgres'}<Pooler {detail} {isAdmin} reload={load} />{/if}
+      {#if (db.engine === 'postgres' || db.engine === 'mysql') && isDev}<Users {detail} {isAdmin} />{/if}
+      {#if db.engine === 'postgres'}<PITR {detail} {isAdmin} reload={load} />{/if}
     </div>
 
     <div class="card" style="margin-top:16px">
@@ -289,14 +303,14 @@
       </div>
       {#if backups === null}
         <div class="card-body"><Loading /></div>
-      {:else if backups.length === 0}
+      {:else if backups.filter((x) => x.kind !== 'base').length === 0}
         <div class="card-body muted small">No backups yet.</div>
       {:else}
         <div class="table-wrap">
           <table>
             <thead><tr><th>Created</th><th>Status</th><th class="right">Size</th><th class="hide-sm">Duration</th><th class="hide-sm">File</th><th class="right"></th></tr></thead>
             <tbody>
-              {#each backups as b (b.id)}
+              {#each backups.filter((x) => x.kind !== 'base') as b (b.id)}
                 <tr>
                   <td title={absTime(b.created_at)} class="nowrap">{relTime(b.created_at)}</td>
                   <td>
@@ -332,6 +346,21 @@
       {#snippet footer()}
         <button type="button" onclick={() => (upgradeOpen = false)}>Cancel</button>
         <button type="submit" form="upgrade-form" class="primary">Upgrade</button>
+      {/snippet}
+    </Modal>
+    <Modal bind:open={resizeOpen} title="Change size" width={460}>
+      <form id="resize-form" class="stack" onsubmit={resize}>
+        <p class="muted small">The server restarts with the new memory and CPU limits (a few seconds of downtime). Data stays on its volume.</p>
+        <label class="field">
+          <span>Size</span>
+          <select bind:value={resizeSize}>
+            {#each dbSizes as s (s.name)}<option value={s.name}>{s.name} — {mb(s.memory_mb)}, {cpu(s.cpu_millis)}, {s.max_connections} connections</option>{/each}
+          </select>
+        </label>
+      </form>
+      {#snippet footer()}
+        <button type="button" onclick={() => (resizeOpen = false)}>Cancel</button>
+        <button type="submit" form="resize-form" class="primary">Resize</button>
       {/snippet}
     </Modal>
   {/if}

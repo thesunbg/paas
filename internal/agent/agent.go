@@ -125,6 +125,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		{proto.CmdRemoveFiles, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
 			return bus.Handle(nc, s, a.handleRemoveFiles)
 		}},
+		{proto.CmdPITRPrepare, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
+			return bus.Handle(nc, s, a.handlePITRPrepare)
+		}},
 		{proto.CmdBuild, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleBuild) }},
 		{proto.CmdPush, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handlePush) }},
 		{proto.CmdJob, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleJob) }},

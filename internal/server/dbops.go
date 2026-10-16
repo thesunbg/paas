@@ -253,8 +253,7 @@ func (s *Server) ensureSharedServer(ctx context.Context, engine string) (*store.
 
 func (s *Server) createDedicatedServer(ctx context.Context, db *store.Database, pinNode *string) (*store.Service, error) {
 	c, _, _ := s.dbCreds(ctx, db) // server not yet linked; host is filled later
-	preset, _ := databases.PresetByName(db.SizePreset)
-	spec, err := databases.ServerSpec(db.Engine, preset, false, c)
+	spec, err := s.dedicatedSpec(db, c)
 	if err != nil {
 		return nil, err
 	}
@@ -366,6 +365,13 @@ func (s *Server) deleteDatabase(ctx context.Context, db *store.Database) error {
 			if db.Mode == "shared" {
 				c, _, err := s.dbCreds(ctx, db)
 				if err == nil {
+					// Roles are global on a shared server: drop the extra users first.
+					users, _ := s.store.DBUsers(ctx, db.ID)
+					for _, u := range users {
+						if cmd, err := databases.DropUser(db.Engine, true, c, u.Username); err == nil {
+							_ = s.execOnService(ctx, srv.ID, cmd, "", "", 1)
+						}
+					}
 					if cmd, err := databases.DropLogical(db.Engine, c); err == nil {
 						if err := s.execOnService(ctx, srv.ID, cmd, "", "", 2); err != nil {
 							slog.Warn("drop logical database", "db", db.Name, "err", err)

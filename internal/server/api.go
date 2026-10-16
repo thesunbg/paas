@@ -43,7 +43,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/github/installed", s.handleGitHubInstalled)
 
 	h("GET /api/v1/me", s.handleMe)
-	h("GET /api/v1/me/ip", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"ip": clientAddr(r)}) })
+	h("GET /api/v1/me/ip", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"ip": clientAddr(r)})
+	})
 	h("GET /api/v1/me/github/link", s.handleGitHubLinkStart)
 	h("DELETE /api/v1/me/github", s.handleGitHubUnlink)
 	h("POST /api/v1/me/password", s.handleChangePassword)
@@ -125,6 +127,14 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/databases/{id}/metrics", s.handleDatabaseMetrics)
 	h("PUT /api/v1/databases/{id}/quota", s.handleDatabaseQuota)
 	h("POST /api/v1/databases/{id}/pooler", s.handleDatabasePooler)
+	h("PUT /api/v1/databases/{id}/size", s.handleDatabaseResize)
+	h("GET /api/v1/databases/{id}/pitr", s.handleGetPITR)
+	h("POST /api/v1/databases/{id}/pitr", s.handleSetPITR)
+	h("POST /api/v1/databases/{id}/pitr/restore", s.handlePITRRestore)
+	h("GET /api/v1/databases/{id}/users", s.handleListDBUsers)
+	h("POST /api/v1/databases/{id}/users", s.handleCreateDBUser)
+	h("DELETE /api/v1/databases/{id}/users/{user}", s.handleDeleteDBUser)
+	h("POST /api/v1/databases/{id}/users/{user}/password", s.handleRotateDBUser)
 
 	h("GET /api/v1/nodes", s.handleListNodes)
 	h("PATCH /api/v1/nodes/{id}", s.handleUpdateNode)

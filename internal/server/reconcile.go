@@ -339,6 +339,7 @@ func (s *Server) maintenanceLoop(ctx context.Context) {
 		}
 		tick++
 		s.runScheduledBackups(ctx)
+		go s.pitrTick(ctx)
 		if tick%30 == 1 {
 			s.store.PurgeExpiredSessions(ctx)
 			s.imageGC(ctx)

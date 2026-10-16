@@ -310,6 +310,96 @@ func SetReadOnly(engine string, shared bool, c Credentials, on bool) (Command, e
 	return Command{}, fmt.Errorf("read-only mode is not supported for %s", engine)
 }
 
+// Extra users: "readonly" can read every table, "readwrite" can also change rows.
+// Neither can change the schema; the owner account keeps that.
+
+// CreateUser returns the command adding a user with a role to the database.
+func CreateUser(engine string, shared bool, c Credentials, name, password, role string) (Command, error) {
+	if role != "readonly" && role != "readwrite" {
+		return Command{}, fmt.Errorf("role must be readonly or readwrite")
+	}
+	switch engine {
+	case Postgres:
+		priv := "SELECT"
+		if role == "readwrite" {
+			priv = "SELECT, INSERT, UPDATE, DELETE"
+		}
+		seq := "SELECT"
+		if role == "readwrite" {
+			seq = "USAGE, SELECT, UPDATE"
+		}
+		u, owner, db := quoteIdent(name), quoteIdent(c.Username), quoteIdent(c.DBName)
+		sql := fmt.Sprintf(`CREATE ROLE %[1]s LOGIN PASSWORD %[2]s CONNECTION LIMIT 20;
+GRANT CONNECT ON DATABASE %[3]s TO %[1]s;
+\c %[3]s
+GRANT USAGE ON SCHEMA public TO %[1]s;
+GRANT %[4]s ON ALL TABLES IN SCHEMA public TO %[1]s;
+GRANT %[5]s ON ALL SEQUENCES IN SCHEMA public TO %[1]s;
+ALTER DEFAULT PRIVILEGES FOR ROLE %[6]s IN SCHEMA public GRANT %[4]s ON TABLES TO %[1]s;
+ALTER DEFAULT PRIVILEGES FOR ROLE %[6]s IN SCHEMA public GRANT %[5]s ON SEQUENCES TO %[1]s;
+`, u, quoteLit(password), db, priv, seq, owner)
+		admin := c.Username
+		if shared {
+			admin = "postgres"
+		}
+		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", admin, "-d", "postgres"}, Stdin: sql}, nil
+	case MySQL:
+		priv := "SELECT"
+		if role == "readwrite" {
+			priv = "SELECT, INSERT, UPDATE, DELETE"
+		}
+		sql := fmt.Sprintf("CREATE USER %[1]s@'%%' IDENTIFIED BY %[2]s WITH MAX_USER_CONNECTIONS 20;\nGRANT %[3]s ON %[4]s.* TO %[1]s@'%%';\nFLUSH PRIVILEGES;\n",
+			quoteLit(name), quoteLit(password), priv, quoteMy(c.DBName))
+		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
+	}
+	return Command{}, fmt.Errorf("extra users are supported for PostgreSQL and MySQL")
+}
+
+// DropUser removes an extra user.
+func DropUser(engine string, shared bool, c Credentials, name string) (Command, error) {
+	switch engine {
+	case Postgres:
+		u, owner, db := quoteIdent(name), quoteIdent(c.Username), quoteIdent(c.DBName)
+		sql := fmt.Sprintf(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %[4]s;
+\c %[3]s
+ALTER DEFAULT PRIVILEGES FOR ROLE %[2]s IN SCHEMA public REVOKE ALL ON TABLES FROM %[1]s;
+ALTER DEFAULT PRIVILEGES FOR ROLE %[2]s IN SCHEMA public REVOKE ALL ON SEQUENCES FROM %[1]s;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %[1]s;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %[1]s;
+REVOKE ALL ON SCHEMA public FROM %[1]s;
+\c postgres
+REVOKE ALL ON DATABASE %[3]s FROM %[1]s;
+DROP ROLE IF EXISTS %[1]s;
+`, u, owner, db, quoteLit(name))
+		admin := c.Username
+		if shared {
+			admin = "postgres"
+		}
+		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", admin, "-d", "postgres"}, Stdin: sql}, nil
+	case MySQL:
+		sql := fmt.Sprintf("DROP USER IF EXISTS %s@'%%';\n", quoteLit(name))
+		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
+	}
+	return Command{}, fmt.Errorf("extra users are supported for PostgreSQL and MySQL")
+}
+
+// SetPassword changes a user's password.
+func SetPassword(engine string, shared bool, c Credentials, name, password string) (Command, error) {
+	switch engine {
+	case Postgres:
+		admin := c.Username
+		if shared {
+			admin = "postgres"
+		}
+		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", admin, "-d", "postgres"},
+			Stdin: fmt.Sprintf("ALTER ROLE %s PASSWORD %s;\n", quoteIdent(name), quoteLit(password))}, nil
+	case MySQL:
+		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)},
+			Stdin: fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED BY %s;\nFLUSH PRIVILEGES;\n", quoteLit(name), quoteLit(password))}, nil
+	}
+	return Command{}, fmt.Errorf("not supported for %s", engine)
+}
+
 func firstNonEmpty(v ...string) string {
 	for _, s := range v {
 		if s != "" {

@@ -41,6 +41,7 @@ const (
 	CmdLogs        = "logs"
 	CmdImageGC     = "imagegc"
 	CmdRemoveFiles = "rmfiles"
+	CmdPITRPrepare = "pitrprepare"
 	CmdStats       = "stats"
 	CmdPush        = "push"
 	CmdJob         = "job"
@@ -278,4 +279,15 @@ type DetectReply struct {
 	CommitMessage string `json:"commit_message,omitempty"`
 	Summary       string `json:"summary"`
 	Error         string `json:"error,omitempty"`
+}
+
+// PITRPrepareRequest lays out a PostgreSQL data directory for point-in-time
+// recovery: it extracts a base backup and copies the archived WAL next to it.
+// Paths are relative to the agent data directory.
+type PITRPrepareRequest struct {
+	BaseBackup string `json:"base_backup"` // gzipped tar from pg_basebackup -Ft -z
+	WALSource  string `json:"wal_source"`  // archive directory of the source server
+	DataDir    string `json:"data_dir"`    // PGDATA of the new server
+	WALDest    string `json:"wal_dest"`    // archive directory of the new server
+	TargetTime string `json:"target_time"` // RFC 3339; empty = end of the archive
 }

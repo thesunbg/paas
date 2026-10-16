@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -73,6 +74,8 @@ type Server struct {
 
 	ghMu sync.Mutex
 	gh   *github.Client
+
+	pitrRunning atomic.Bool
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.

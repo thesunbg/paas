@@ -202,6 +202,10 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "backup not found")
 		return
 	}
+	if b.Kind == "base" {
+		writeError(w, 400, "base backups are restored with point-in-time recovery")
+		return
+	}
 	if err := s.restoreBackup(context.WithoutCancel(r.Context()), db, b); err != nil {
 		writeError(w, 500, err.Error())
 		return

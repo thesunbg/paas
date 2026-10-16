@@ -170,15 +170,16 @@ type Backup struct {
 	SizeBytes  int64      `json:"size_bytes"`
 	Error      string     `json:"error"`
 	S3Key      string     `json:"s3_key"`
+	Kind       string     `json:"kind"` // dump | base
 	CreatedAt  time.Time  `json:"created_at"`
 	FinishedAt *time.Time `json:"finished_at"`
 }
 
-const backupCols = `id, database_id, node_id, status, path, size_bytes, error, s3_key, created_at, finished_at`
+const backupCols = `id, database_id, node_id, status, path, size_bytes, error, s3_key, kind, created_at, finished_at`
 
 func scanBackup(row pgx.Row) (*Backup, error) {
 	var b Backup
-	if err := row.Scan(&b.ID, &b.DatabaseID, &b.NodeID, &b.Status, &b.Path, &b.SizeBytes, &b.Error, &b.S3Key, &b.CreatedAt, &b.FinishedAt); err != nil {
+	if err := row.Scan(&b.ID, &b.DatabaseID, &b.NodeID, &b.Status, &b.Path, &b.SizeBytes, &b.Error, &b.S3Key, &b.Kind, &b.CreatedAt, &b.FinishedAt); err != nil {
 		return nil, notFound(err)
 	}
 	return &b, nil
@@ -213,7 +214,7 @@ func (s *Store) BackupsForDatabase(ctx context.Context, databaseID string) ([]Ba
 
 // OldBackups returns completed backups beyond the newest `keep` for a database.
 func (s *Store) OldBackups(ctx context.Context, databaseID string, keep int) ([]Backup, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND status<>'running' ORDER BY created_at DESC OFFSET $2`, databaseID, keep)
+	rows, err := s.DB.Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='dump' AND status<>'running' ORDER BY created_at DESC OFFSET $2`, databaseID, keep)
 	if err != nil {
 		return nil, err
 	}
@@ -291,4 +292,77 @@ func (s *Store) DBMetrics(ctx context.Context, dbID string, since time.Time) ([]
 
 func (s *Store) PruneDBMetrics(ctx context.Context, before time.Time) {
 	_, _ = s.DB.Exec(ctx, `DELETE FROM db_metrics WHERE ts < $1`, before)
+}
+
+// DBUser is an extra login on a database.
+type DBUser struct {
+	DatabaseID  string    `json:"database_id"`
+	Username    string    `json:"username"`
+	Role        string    `json:"role"`
+	PasswordEnc string    `json:"-"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+func (s *Store) DBUsers(ctx context.Context, dbID string) ([]DBUser, error) {
+	rows, err := s.DB.Query(ctx, `SELECT database_id, username, role, password_enc, created_at FROM db_users WHERE database_id=$1 ORDER BY created_at`, dbID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DBUser{}
+	for rows.Next() {
+		var u DBUser
+		if err := rows.Scan(&u.DatabaseID, &u.Username, &u.Role, &u.PasswordEnc, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DBUser(ctx context.Context, dbID, username string) (*DBUser, error) {
+	var u DBUser
+	err := s.DB.QueryRow(ctx, `SELECT database_id, username, role, password_enc, created_at FROM db_users WHERE database_id=$1 AND username=$2`, dbID, username).
+		Scan(&u.DatabaseID, &u.Username, &u.Role, &u.PasswordEnc, &u.CreatedAt)
+	return &u, notFound(err)
+}
+
+func (s *Store) CreateDBUser(ctx context.Context, u DBUser) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO db_users (database_id, username, role, password_enc) VALUES ($1,$2,$3,$4)`, u.DatabaseID, u.Username, u.Role, u.PasswordEnc)
+	return err
+}
+
+func (s *Store) SetDBUserPassword(ctx context.Context, dbID, username, enc string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE db_users SET password_enc=$3 WHERE database_id=$1 AND username=$2`, dbID, username, enc)
+	return err
+}
+
+func (s *Store) DeleteDBUser(ctx context.Context, dbID, username string) error {
+	_, err := s.DB.Exec(ctx, `DELETE FROM db_users WHERE database_id=$1 AND username=$2`, dbID, username)
+	return err
+}
+
+func (s *Store) SetDatabaseSize(ctx context.Context, id, size string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE databases SET size_preset=$2 WHERE id=$1`, id, size)
+	return err
+}
+
+// CreateBaseBackup records a PITR base backup.
+func (s *Store) CreateBaseBackup(ctx context.Context, databaseID, nodeID, path string) (*Backup, error) {
+	return scanBackup(s.DB.QueryRow(ctx, `INSERT INTO backups (database_id, node_id, path, kind) VALUES ($1,$2,$3,'base') RETURNING `+backupCols, databaseID, nodeID, path))
+}
+
+// BaseBackups lists completed PITR base backups, newest first.
+func (s *Store) BaseBackups(ctx context.Context, databaseID string) ([]Backup, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='base' AND status='completed' ORDER BY created_at DESC`, databaseID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Backup, error) {
+		b, err := scanBackup(r)
+		if err != nil {
+			return Backup{}, err
+		}
+		return *b, nil
+	})
 }
