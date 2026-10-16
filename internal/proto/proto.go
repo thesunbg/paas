@@ -267,6 +267,15 @@ type DetectRequest struct {
 	RootDir    string `json:"root_dir,omitempty"`
 	GitToken   string `json:"git_token,omitempty"`
 	Dockerfile string `json:"dockerfile,omitempty"`
+	// ComposePath reads this compose file instead of searching for one.
+	ComposePath string `json:"compose_path,omitempty"`
+}
+
+// ComposeFile is a docker-compose file found in a repository.
+type ComposeFile struct {
+	Path     string   `json:"path"` // relative to the repository root
+	Content  string   `json:"content"`
+	Services []string `json:"services"`
 }
 
 type DetectReply struct {
@@ -280,7 +289,9 @@ type DetectReply struct {
 	CommitMessage string  `json:"commit_message,omitempty"`
 	Summary       string  `json:"summary"`
 	Prisma        *Prisma `json:"prisma,omitempty"`
-	Error         string  `json:"error,omitempty"`
+	// Compose is set when the repository has a docker-compose file describing several services.
+	Compose *ComposeFile `json:"compose,omitempty"`
+	Error   string       `json:"error,omitempty"`
 }
 
 // PITRPrepareRequest lays out a PostgreSQL data directory for point-in-time

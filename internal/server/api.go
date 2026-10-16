@@ -79,6 +79,7 @@ func (s *Server) routes() http.Handler {
 	h("POST /api/v1/projects/{id}/templates/{template}", s.handleInstallTemplate)
 	h("POST /api/v1/projects/{id}/detect", s.handleDetect)
 	h("POST /api/v1/projects/{id}/compose", s.handleImportCompose)
+	h("POST /api/v1/projects/{id}/import-repo", s.handleImportRepo)
 	h("GET /api/v1/templates", s.handleListTemplates)
 
 	h("GET /api/v1/services/{id}", s.handleGetService)

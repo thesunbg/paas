@@ -763,7 +763,17 @@ export interface DetectResult {
   commit_message: string;
   summary: string;
   prisma?: { provider: string; url_env?: string; migrations: boolean };
+  compose?: { path: string; services: string[] };
   error?: string;
+}
+
+export interface ImportRepoInput {
+  repo: string;
+  branch: string;
+  installation_id?: number;
+  git_token?: string;
+  compose_path?: string;
+  domain?: string;
 }
 
 export interface TeamLimits {
@@ -839,6 +849,7 @@ export const api = {
   installTemplate: (project: string, template: string, domain?: string) =>
     post<InstallResponse>(`/projects/${e(project)}/templates/${e(template)}`, domain ? { domain } : {}),
   importCompose: (project: string, compose: string) => post<InstallResponse>(`/projects/${e(project)}/compose`, { compose }),
+  importRepo: (project: string, input: ImportRepoInput) => post<InstallResponse>(`/projects/${e(project)}/import-repo`, input),
 
   // Services
   service: (id: string) => get<ServiceDetail>(`/services/${e(id)}`),

@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/thesunbg/paas/internal/detect"
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/proto"
@@ -358,11 +360,19 @@ func (b *Builder) Inspect(ctx context.Context, req proto.DetectRequest) proto.De
 			return proto.DetectReply{Error: fmt.Sprintf("root directory %q not found in repository", req.RootDir)}
 		}
 	}
+	compose, cerr := findCompose(src, req.ComposePath)
+	if req.ComposePath != "" && cerr != nil {
+		return proto.DetectReply{CommitSHA: sha, CommitMessage: msg, Error: cerr.Error()}
+	}
 	plan, err := detect.Detect(root, detect.Options{ServiceType: model.TypeWeb, Dockerfile: req.Dockerfile})
 	if err != nil {
+		if compose != nil {
+			return proto.DetectReply{CommitSHA: sha, CommitMessage: msg, Compose: compose, Summary: "docker compose (" + compose.Path + ")"}
+		}
 		return proto.DetectReply{CommitSHA: sha, CommitMessage: msg, Error: err.Error()}
 	}
 	rep := proto.DetectReply{
+		Compose:  compose,
 		Language: plan.Language, Framework: plan.Framework, Static: plan.Static, Port: plan.Port,
 		Dockerfile: plan.UserDockerfile != "", CommitSHA: sha, CommitMessage: msg, Summary: plan.Summary(), SuggestedType: model.TypeWeb,
 		Prisma: plan.Prisma,
@@ -374,4 +384,64 @@ func (b *Builder) Inspect(ctx context.Context, req proto.DetectRequest) proto.De
 		rep.Port = detect.DefaultPort
 	}
 	return rep
+}
+
+var composeNames = []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
+
+// findCompose looks for a docker-compose file that builds at least one service
+// from the repository next to other services (a multi-service application).
+// With path set, that file is read whatever it holds.
+func findCompose(src, path string) (*proto.ComposeFile, error) {
+	var candidates []string
+	if path != "" {
+		candidates = []string{filepath.ToSlash(filepath.Clean(path))}
+	} else {
+		for _, dir := range []string{"", "deploy", "docker", ".docker", "deployment", "infra", "ops"} {
+			for _, n := range composeNames {
+				candidates = append(candidates, filepath.ToSlash(filepath.Join(dir, n)))
+			}
+		}
+	}
+	for _, rel := range candidates {
+		if strings.HasPrefix(rel, "../") || rel == ".." || filepath.IsAbs(rel) {
+			return nil, fmt.Errorf("compose file %s is outside the repository", path)
+		}
+		full := filepath.Join(src, rel)
+		st, err := os.Lstat(full)
+		if err != nil || !st.Mode().IsRegular() || st.Size() > 256<<10 {
+			continue
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			continue
+		}
+		var f struct {
+			Services map[string]struct {
+				Build yaml.Node `yaml:"build"`
+			} `yaml:"services"`
+		}
+		if err := yaml.Unmarshal(data, &f); err != nil {
+			if path != "" {
+				return nil, fmt.Errorf("invalid compose file %s: %w", path, err)
+			}
+			continue
+		}
+		builds := 0
+		names := make([]string, 0, len(f.Services))
+		for n, s := range f.Services {
+			names = append(names, n)
+			if s.Build.Kind != 0 {
+				builds++
+			}
+		}
+		sort.Strings(names)
+		if path == "" && (builds == 0 || len(names) < 2) {
+			continue
+		}
+		return &proto.ComposeFile{Path: rel, Content: string(data), Services: names}, nil
+	}
+	if path != "" {
+		return nil, fmt.Errorf("compose file %s not found in the repository", path)
+	}
+	return nil, nil
 }

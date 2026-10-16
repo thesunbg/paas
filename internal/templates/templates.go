@@ -21,13 +21,26 @@ type Service struct {
 	Command []string          `json:"command,omitempty"`
 	Size    string            `json:"size,omitempty"`
 	Health  string            `json:"health_path,omitempty"`
+	// Build is set for services built from the imported repository.
+	Build *Build `json:"build,omitempty"`
+	// Private services get no public domain; other services reach them by name.
+	Private bool `json:"private,omitempty"`
+	// Links are environment variables that receive a database's URL (env -> database name).
+	Links map[string]string `json:"links,omitempty"`
+}
+
+// Build locates a service's Dockerfile in a repository.
+type Build struct {
+	RootDir    string `json:"root_dir"`
+	Dockerfile string `json:"dockerfile,omitempty"` // relative to RootDir; empty = Dockerfile
 }
 
 // Database is a managed database created by a template.
 type Database struct {
-	Name   string `json:"name"`
-	Engine string `json:"engine"`
-	Mode   string `json:"mode,omitempty"`
+	Name    string `json:"name"`
+	Engine  string `json:"engine"`
+	Mode    string `json:"mode,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 type Template struct {
@@ -135,6 +148,7 @@ func ByID(id string) (*Template, bool) {
 
 // DBValues are the connection details a template can reference.
 type DBValues struct {
+	ID                                    string `json:"-"`
 	Host, Port, User, Password, Name, URL string
 }
 
@@ -142,6 +156,12 @@ var placeholder = regexp.MustCompile(`\$\{([a-z0-9_.-]+)\}`)
 
 // Expand substitutes placeholders in a template value.
 func Expand(v string, dbs map[string]DBValues, publicURL, host string) string {
+	return ExpandWith(v, dbs, nil, publicURL, host)
+}
+
+// ExpandWith also resolves ${svc.<name>.url|host} against the public URLs of
+// the other services created together.
+func ExpandWith(v string, dbs map[string]DBValues, services map[string]string, publicURL, host string) string {
 	return placeholder.ReplaceAllStringFunc(v, func(m string) string {
 		key := m[2 : len(m)-1]
 		switch key {
@@ -153,6 +173,18 @@ func Expand(v string, dbs map[string]DBValues, publicURL, host string) string {
 			b := make([]byte, 24)
 			_, _ = rand.Read(b)
 			return hex.EncodeToString(b)
+		}
+		if strings.HasPrefix(key, "svc.") {
+			parts := strings.Split(key, ".")
+			if u, ok := services[parts[1]]; ok && len(parts) == 3 {
+				switch parts[2] {
+				case "url":
+					return u
+				case "host":
+					return strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+				}
+			}
+			return m
 		}
 		if strings.HasPrefix(key, "db.") {
 			parts := strings.Split(key, ".")

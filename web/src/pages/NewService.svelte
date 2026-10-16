@@ -211,6 +211,36 @@
     step = Math.min(step + 1, steps.length - 1);
   }
 
+  // A docker-compose file describing several services: create them all at once.
+  let importing = $state(false);
+  let importWarnings = $state<string[]>([]);
+  async function importAll() {
+    if (!detected?.compose) return;
+    importing = true;
+    error = '';
+    try {
+      const r = await api.importRepo(projectId, {
+        repo: repo.trim(),
+        branch: branch.trim() || 'main',
+        installation_id: installationId,
+        git_token: !installationId && gitToken.trim() ? gitToken.trim() : undefined,
+        compose_path: detected.compose.path,
+      });
+      const n = r.services?.length ?? 0;
+      const d = r.databases?.length ?? 0;
+      toast.success(`Created ${n} service${n === 1 ? '' : 's'}${d ? ` and ${d} database${d === 1 ? '' : 's'}` : ''}; deploying`);
+      if (r.warnings?.length) {
+        importWarnings = r.warnings;
+        return;
+      }
+      navigate(`/projects/${projectId}`);
+    } catch (err) {
+      error = errorMessage(err);
+    } finally {
+      importing = false;
+    }
+  }
+
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     if (step < steps.length - 1) {
@@ -405,6 +435,25 @@
               <div class="detect"><span class="spinner"></span>Analyzing repository…</div>
             {:else if detected}
               <div class="detect ok"><Icon name="check" size={14} />Detected <b>{detected.summary || detected.language}</b></div>
+              {#if detected.compose}
+                <div class="compose">
+                  <div>
+                    <b>{detected.compose.path}</b> describes {detected.compose.services.length} services:
+                    {#each detected.compose.services as s, i (s)}<code>{s}</code>{i < detected.compose.services.length - 1 ? ', ' : ''}{/each}.
+                    <br /><span class="faint small">Services with a <code>build</code> section are built from this repository with their Dockerfile; database containers become managed databases, linked automatically. Secrets the file expects are generated.</span>
+                  </div>
+                  {#if importWarnings.length}
+                    <div class="alert warn small">
+                      <div><b>Created, with warnings</b><ul>{#each importWarnings as w, i (i)}<li>{w}</li>{/each}</ul></div>
+                    </div>
+                    <a class="btn primary" href={href(`/projects/${projectId}`)}>Open project</a>
+                  {:else}
+                    <button type="button" class="btn primary" onclick={importAll} disabled={importing}>
+                      {#if importing}<span class="spinner"></span>{/if}Deploy all {detected.compose.services.length} services
+                    </button>
+                  {/if}
+                </div>
+              {/if}
             {:else if detectError}
               <div class="detect warn">Could not analyze the repository: {detectError}</div>
             {/if}
@@ -759,6 +808,16 @@
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--bg-elev-2);
+  }
+  .compose {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
   }
   .detect.ok {
     border-color: transparent;
