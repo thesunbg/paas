@@ -40,6 +40,24 @@ func TestDetect(t *testing.T) {
 			contains: []string{"npm ci", "npm run build", "npm run start", "FROM node:22-alpine"},
 		},
 		{
+			name: "next static export with boilerplate main",
+			files: map[string]string{
+				"package.json":      `{"main":"index.js","scripts":{"build":"next build"},"dependencies":{"next":"15"}}`,
+				"package-lock.json": "{}", ".nvmrc": "22",
+				"next.config.mjs": "const nextConfig = {\n  output: 'export',\n  trailingSlash: true,\n};\nexport default nextConfig;\n",
+			},
+			svcType: model.TypeWeb,
+			lang:    "node", fw: "next", static: true,
+			contains: []string{"npm ci", "npm run build", "FROM scratch", "out"},
+		},
+		{
+			name:    "next without start script",
+			files:   map[string]string{"package.json": `{"main":"index.js","scripts":{"build":"next build"},"dependencies":{"next":"15"}}`},
+			svcType: model.TypeWeb,
+			lang:    "node", fw: "next",
+			contains: []string{"npx next start"},
+		},
+		{
 			name:    "vite spa becomes static",
 			files:   map[string]string{"package.json": `{"scripts":{"build":"vite build"},"devDependencies":{"vite":"5"}}`, "pnpm-lock.yaml": ""},
 			svcType: model.TypeWeb,
@@ -48,7 +66,7 @@ func TestDetect(t *testing.T) {
 		},
 		{
 			name:    "express with engines",
-			files:   map[string]string{"package.json": `{"main":"server.js","engines":{"node":">=20"},"dependencies":{"express":"4"}}`},
+			files:   map[string]string{"package.json": `{"main":"server.js","engines":{"node":">=20"},"dependencies":{"express":"4"}}`, "server.js": "require(\"express\")"},
 			svcType: model.TypeWeb,
 			lang:    "node", fw: "express",
 			contains: []string{"node:20-alpine", "node server.js", "npm install"},

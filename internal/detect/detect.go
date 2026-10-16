@@ -201,10 +201,18 @@ func (d *detector) node() (*Plan, error) {
 	b := d.opt.Build
 	_, hasBuild := pkg.Scripts["build"]
 	_, hasStart := pkg.Scripts["start"]
-	hasServerEntry := pkg.Main != "" || anyExists(d.dir, "server.js", "index.js", "app.js", "main.js", "server.mjs", "index.mjs")
+	// "main" is often npm-init boilerplate ("index.js") that does not exist.
+	mainEntry := ""
+	if pkg.Main != "" && exists(filepath.Join(d.dir, pkg.Main)) {
+		mainEntry = pkg.Main
+	}
+	hasServerEntry := mainEntry != "" || anyExists(d.dir, "server.js", "index.js", "app.js", "main.js", "server.mjs", "index.mjs")
 
 	switch {
 	case d.opt.ServiceType == model.TypeStatic:
+		plan.Static = true
+	case plan.Framework == "next" && b.StartCmd == "" && d.nextStaticExport():
+		// next.config with output: 'export' builds a static site into out/.
 		plan.Static = true
 	case d.opt.ServiceType == model.TypeWeb && b.StartCmd == "" && !hasStart && !hasServerEntry:
 		// SPA without a server (Vite/CRA/Angular/Astro): serve it as a static site.
@@ -254,8 +262,12 @@ func (d *detector) node() (*Plan, error) {
 		switch {
 		case hasStart:
 			start = pm + " run start"
-		case pkg.Main != "":
-			start = "node " + pkg.Main
+		case mainEntry != "":
+			start = "node " + mainEntry
+		case plan.Framework == "next":
+			start = "npx next start -H 0.0.0.0 -p ${PORT:-8080}"
+		case plan.Framework == "nuxt" && hasBuild:
+			start = "node .output/server/index.mjs"
 		default:
 			for _, f := range []string{"server.js", "index.js", "app.js", "main.js", "server.mjs", "index.mjs"} {
 				if exists(filepath.Join(d.dir, f)) {
@@ -291,12 +303,28 @@ func (d *detector) node() (*Plan, error) {
 		df.WriteString(runWithEnv(build) + "\n")
 	}
 	if plan.Static {
-		writeStaticExport(&df, b.OutputDir, []string{"dist", "build", "out", ".output/public", "dist/browser", "_site", "public"})
+		candidates := []string{"dist", "build", "out", ".output/public", "dist/browser", "_site", "public"}
+		if plan.Framework == "next" {
+			candidates = []string{"out"}
+		}
+		writeStaticExport(&df, b.OutputDir, candidates)
 		return plan.withDockerfile(df.String()), nil
 	}
 	fmt.Fprintf(&df, "ENV NODE_ENV=production PORT=%d HOST=0.0.0.0 HOSTNAME=0.0.0.0\nEXPOSE %d\n", DefaultPort, DefaultPort)
 	fmt.Fprintf(&df, "CMD [\"sh\", \"-c\", %s]\n", strconv.Quote(start))
 	return plan.withDockerfile(df.String()), nil
+}
+
+var nextExportRe = regexp.MustCompile(`output\s*:\s*["'\x60]export["'\x60]`)
+
+// nextStaticExport reports whether next.config sets output: 'export'.
+func (d *detector) nextStaticExport() bool {
+	for _, f := range []string{"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs", "next.config.mts"} {
+		if nextExportRe.MatchString(readFile(filepath.Join(d.dir, f))) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Plan) withDockerfile(s string) *Plan {
