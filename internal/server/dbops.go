@@ -359,6 +359,7 @@ func (s *Server) restartLinked(ctx context.Context, dbID string) {
 
 func (s *Server) deleteDatabase(ctx context.Context, db *store.Database) error {
 	_ = s.store.SetDatabaseStatus(ctx, db.ID, "deleting", "")
+	s.removePooler(ctx, db)
 	if db.ServerServiceID != nil {
 		srv, err := s.store.ServiceByID(ctx, *db.ServerServiceID)
 		if err == nil {

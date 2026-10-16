@@ -15,6 +15,8 @@
   import CopyButton from '../components/CopyButton.svelte';
   import Modal from '../components/Modal.svelte';
   import ExternalAccess from '../components/db/ExternalAccess.svelte';
+  import Usage from '../components/db/Usage.svelte';
+  import Pooler from '../components/db/Pooler.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -231,7 +233,9 @@
     </div>
 
     <div class="features">
+      {#if db.status === 'ready'}<Usage {detail} />{/if}
       <ExternalAccess {detail} {isAdmin} reload={load} />
+      {#if db.engine === 'postgres'}<Pooler {detail} {isAdmin} reload={load} />{/if}
     </div>
 
     <div class="card" style="margin-top:16px">

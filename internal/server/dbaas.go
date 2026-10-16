@@ -43,13 +43,9 @@ func (s *Server) tcpRoutes(ctx context.Context, upstreams map[string][]string) [
 		if db.Options.PublicPort == 0 || db.ServerServiceID == nil {
 			continue
 		}
-		target := *db.ServerServiceID
-		if db.Options.Pooler && db.Options.PoolerServiceID != "" {
-			target = db.Options.PoolerServiceID
-		}
 		out = append(out, model.TCPRoute{
 			Port: db.Options.PublicPort, DatabaseID: db.ID, Mode: tcpMode(db.Engine),
-			Upstreams: upstreams[target], Allow: db.Options.AllowedCIDRs,
+			Upstreams: upstreams[*db.ServerServiceID], Allow: db.Options.AllowedCIDRs,
 		})
 	}
 	return out

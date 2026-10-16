@@ -304,6 +304,11 @@ func (s *Server) userEnv(ctx context.Context, svc *store.Service) (map[string]st
 				env[l.EnvName] = u
 			}
 		}
+		if u, err := s.poolerURL(ctx, db); err == nil {
+			if _, set := env[l.EnvName+"_POOLED"]; !set {
+				env[l.EnvName+"_POOLED"] = u
+			}
+		}
 	}
 	return env, nil
 }

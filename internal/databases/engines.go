@@ -42,16 +42,20 @@ type Preset struct {
 	MemoryMB int    `json:"memory_mb"`
 	CPU      int    `json:"cpu_millis"`
 	MaxConns int    `json:"max_connections"`
+	QuotaMB  int    `json:"storage_quota_mb"` // default storage quota of a dedicated server
 }
 
 var Presets = []Preset{
-	{"nano", 128, 250, 25},
-	{"micro", 256, 500, 50},
-	{"small", 512, 1000, 100},
-	{"medium", 1024, 2000, 150},
-	{"large", 2048, 4000, 200},
-	{"xlarge", 4096, 8000, 300},
+	{"nano", 128, 250, 25, 1024},
+	{"micro", 256, 500, 50, 2048},
+	{"small", 512, 1000, 100, 5120},
+	{"medium", 1024, 2000, 150, 10240},
+	{"large", 2048, 4000, 200, 20480},
+	{"xlarge", 4096, 8000, 300, 51200},
 }
+
+// SharedQuotaMB is the default storage quota of a logical database on a shared server.
+const SharedQuotaMB = 1024
 
 func PresetByName(name string) (Preset, bool) {
 	for _, p := range Presets {
@@ -244,6 +248,66 @@ func Restore(engine string, shared bool, c Credentials) (Command, error) {
 		return Command{Cmd: []string{"mongorestore", "--quiet", "--archive", "--gzip", "--drop", "-u", c.Username, "-p", c.Password, "--authenticationDatabase", "admin"}}, nil
 	}
 	return Command{}, fmt.Errorf("restore is not supported for %s yet", engine)
+}
+
+// Stats returns a command printing the database's size in bytes and its open connections.
+func Stats(engine string, shared bool, c Credentials) (Command, error) {
+	switch engine {
+	case Postgres:
+		user := c.Username
+		if shared {
+			user = "postgres"
+		}
+		q := fmt.Sprintf("SELECT pg_database_size(%[1]s), (SELECT count(*) FROM pg_stat_activity WHERE datname = %[1]s)", quoteLit(c.DBName))
+		return Command{Cmd: []string{"psql", "-At", "-F", " ", "-U", user, "-d", "postgres", "-c", q}}, nil
+	case MySQL:
+		q := fmt.Sprintf("SELECT (SELECT COALESCE(SUM(data_length+index_length),0) FROM information_schema.tables WHERE table_schema=%[1]s), (SELECT COUNT(*) FROM information_schema.processlist WHERE db=%[1]s)", quoteLit(c.DBName))
+		return Command{Cmd: []string{"mariadb", "-uroot", "-N", "-B", "-e", q}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}, nil
+	case Redis:
+		return Command{Cmd: []string{"sh", "-c", `redis-cli --no-auth-warning -a "$REDIS_PASSWORD" INFO | awk -F: '/^used_memory:/{m=$2} /^connected_clients:/{c=$2} END{gsub(/\r/,"",m); gsub(/\r/,"",c); print m, c}'`}, Env: []string{"REDIS_PASSWORD=" + c.Password}}, nil
+	case Mongo:
+		js := `const t = db.getSiblingDB("admin").runCommand({listDatabases: 1}).totalSize; print(t + " " + db.serverStatus().connections.current)`
+		return Command{Cmd: []string{"mongosh", "--quiet", "-u", c.Username, "-p", c.Password, "--authenticationDatabase", "admin", "--eval", js}}, nil
+	}
+	return Command{}, fmt.Errorf("unknown engine %q", engine)
+}
+
+// ParseStats reads the output of Stats.
+func ParseStats(out string) (size int64, conns int, err error) {
+	f := strings.Fields(out)
+	if len(f) < 2 {
+		return 0, 0, fmt.Errorf("unexpected stats output %q", strings.TrimSpace(out))
+	}
+	size, err = strconv.ParseInt(strings.SplitN(f[len(f)-2], ".", 2)[0], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	conns, err = strconv.Atoi(f[len(f)-1])
+	return size, conns, err
+}
+
+// SetReadOnly turns writes off (or back on) for the database, used when it exceeds its quota.
+func SetReadOnly(engine string, shared bool, c Credentials, on bool) (Command, error) {
+	switch engine {
+	case Postgres:
+		user := c.Username
+		if shared {
+			user = "postgres"
+		}
+		sql := fmt.Sprintf("ALTER DATABASE %s SET default_transaction_read_only = off;\n", quoteIdent(c.DBName))
+		if on {
+			sql = fmt.Sprintf("ALTER DATABASE %s SET default_transaction_read_only = on;\nSELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid();\n",
+				quoteIdent(c.DBName), quoteLit(c.DBName))
+		}
+		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", "postgres"}, Stdin: sql}, nil
+	case MySQL:
+		sql := fmt.Sprintf("GRANT ALL PRIVILEGES ON %s.* TO %s@'%%';\nFLUSH PRIVILEGES;\n", quoteMy(c.DBName), quoteLit(c.Username))
+		if on {
+			sql = fmt.Sprintf("REVOKE INSERT, UPDATE, CREATE, ALTER, INDEX ON %s.* FROM %s@'%%';\nFLUSH PRIVILEGES;\n", quoteMy(c.DBName), quoteLit(c.Username))
+		}
+		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
+	}
+	return Command{}, fmt.Errorf("read-only mode is not supported for %s", engine)
 }
 
 func firstNonEmpty(v ...string) string {

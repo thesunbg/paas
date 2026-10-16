@@ -390,6 +390,14 @@ export interface Connection {
   username: string;
   password: string;
   url: string;
+  pooled_url?: string;
+}
+
+export interface DBMetricsResponse {
+  points: { ts: string; size_bytes: number; connections: number }[];
+  quota_mb: number;
+  read_only: boolean;
+  max_connections: number;
 }
 
 export interface DatabaseServer {
@@ -842,6 +850,9 @@ export const api = {
   upgradeDatabase: (id: string, size?: string) => post<{ status: string }>(`/databases/${e(id)}/upgrade`, size ? { size } : {}),
   retryDatabase: (id: string) => post<{ status: string }>(`/databases/${e(id)}/retry`),
   myIP: () => get<{ ip: string }>('/me/ip'),
+  databaseMetrics: (id: string, hours = 24) => get<DBMetricsResponse>(`/databases/${e(id)}/metrics?hours=${hours}`),
+  databaseQuota: (id: string, quota_mb: number) => put<{ quota_mb: number }>(`/databases/${e(id)}/quota`, { quota_mb }),
+  databasePooler: (id: string, enabled: boolean) => post<{ pooler: boolean }>(`/databases/${e(id)}/pooler`, { enabled }),
   databasePublic: (id: string, enabled: boolean, allowed_cidrs: string[] = []) =>
     post<{ public_port: number; allowed_cidrs: string[] }>(`/databases/${e(id)}/public`, { enabled, allowed_cidrs }),
 

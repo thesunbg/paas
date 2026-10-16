@@ -57,6 +57,9 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 				"host": c.Host, "port": c.Port, "database": c.DBName, "username": c.Username, "password": c.Password,
 				"url": databases.URL(db.Engine, c),
 			}
+			if u, err := s.poolerURL(r.Context(), db); err == nil {
+				out["connection"].(map[string]any)["pooled_url"] = u
+			}
 			if db.Options.PublicPort != 0 {
 				out["external"] = map[string]any{
 					"host": s.cfg.DBHost, "port": db.Options.PublicPort, "tls": s.tlsAtEdge(),
