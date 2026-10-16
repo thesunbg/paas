@@ -17,19 +17,9 @@ jobs:
           sshpass -e ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -p $PORT root@$HOST 'bash -s' <<'SH'
           set +e
           . /etc/paas/db.env
-          q() { psql "$PAAS_DATABASE_URL" -X -P pager=off -c "$1"; }
-          echo "== shared-mysql deployments"; psql "$PAAS_DATABASE_URL" -XAtc "select d.status||' '||d.created_at||E'\n'||d.error from deployments d join services s on s.id=d.service_id where s.slug='shared-mysql' order by d.created_at desc limit 2"
-          echo "== shared-mysql container logs"
-          for c in $(psql "$PAAS_DATABASE_URL" -XAtc "select i.container_id from instances i join services s on s.id=i.service_id where s.slug='shared-mysql' order by i.created_at desc limit 1"); do tail -n 60 /var/lib/paas/containers/$c/output.log; done
-          ls -lt /var/lib/paas/containers | head -5
-          for d in $(ls -t /var/lib/paas/containers | grep shared-mysql | head -1); do echo "-- $d"; tail -n 60 /var/lib/paas/containers/$d/output.log; done
-          ls -la /var/lib/paas/volumes/$(psql "$PAAS_DATABASE_URL" -XAtc "select id from services where slug='shared-mysql'")/data | head
-          echo "== nft"; nft list ruleset | grep -vE "^\s*$" | head -120
-          echo "== from a demo container to shared-postgres"
+          iptables -w -S DOCKER-USER
+          SP=$(psql "$PAAS_DATABASE_URL" -XAtc "select i.ip from instances i join services s on s.id=i.service_id where s.slug='shared-postgres' and i.status='running' limit 1")
           C=$(psql "$PAAS_DATABASE_URL" -XAtc "select i.container_id from instances i join services s on s.id=i.service_id where s.slug='net-empire' and i.status='running' limit 1")
           PID=$(ctr -n paas tasks ls | awk -v c="$C" '$1==c{print $2}')
-          echo "container $C pid $PID"
-          nsenter -t $PID -n ip -br addr
-          nsenter -t $PID -n bash -c 'timeout 3 bash -c "</dev/tcp/10.101.0.67/5432" && echo ok-5432 || echo FAIL-5432'
-          nsenter -t $PID -n ip route
+          nsenter -t $PID -n bash -c "timeout 3 bash -c '</dev/tcp/$SP/5432' && echo app-to-shared-postgres-OK || echo app-to-shared-postgres-FAIL"
           SH
