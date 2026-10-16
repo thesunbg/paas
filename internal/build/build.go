@@ -100,6 +100,7 @@ func (b *Builder) Build(ctx context.Context, req proto.BuildRequest, log Logger)
 	}
 	rep.Detected = plan.Summary()
 	rep.Port = plan.Port
+	rep.Prisma = plan.Prisma
 	log(fmt.Sprintf("==> detected %s", plan.Summary()))
 
 	dfDir := root
@@ -159,7 +160,7 @@ func (b *Builder) Build(ctx context.Context, req proto.BuildRequest, log Logger)
 		if rep.StaticPath != "" {
 			_ = os.RemoveAll(rep.StaticPath)
 		}
-		return proto.BuildReply{Error: "build failed: " + err.Error(), CommitSHA: sha, CommitMessage: msg, Detected: rep.Detected}
+		return proto.BuildReply{Error: "build failed: " + err.Error(), CommitSHA: sha, CommitMessage: msg, Detected: rep.Detected, Prisma: rep.Prisma}
 	}
 	if plan.Static {
 		removeSymlinks(rep.StaticPath, log)
@@ -364,6 +365,7 @@ func (b *Builder) Inspect(ctx context.Context, req proto.DetectRequest) proto.De
 	rep := proto.DetectReply{
 		Language: plan.Language, Framework: plan.Framework, Static: plan.Static, Port: plan.Port,
 		Dockerfile: plan.UserDockerfile != "", CommitSHA: sha, CommitMessage: msg, Summary: plan.Summary(), SuggestedType: model.TypeWeb,
+		Prisma: plan.Prisma,
 	}
 	if plan.Static {
 		rep.SuggestedType = model.TypeStatic

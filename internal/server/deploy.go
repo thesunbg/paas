@@ -273,6 +273,9 @@ func (s *Server) buildDeployment(ctx context.Context, svc *store.Service, d *sto
 	if changed {
 		_ = s.store.SetServiceSpec(ctx, svc.ID, svc.Spec)
 	}
+	if rep.Prisma != nil {
+		s.provisionPrisma(ctx, svc, d, rep.Prisma)
+	}
 	return nil
 }
 

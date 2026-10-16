@@ -154,3 +154,28 @@ func TestNoStartCommand(t *testing.T) {
 		t.Fatal("expected error for missing start command")
 	}
 }
+
+func TestPrismaInfo(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, map[string]string{
+		"package.json":         `{"scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16","@prisma/client":"5"}}`,
+		"prisma/schema.prisma": "generator client {\n  provider = \"prisma-client-js\"\n}\n\ndatasource db {\n  provider = \"sqlite\"\n  url      = env(\"DATABASE_URL\")\n}\n",
+		"prisma/migrations/20240101_init/migration.sql": "CREATE TABLE x (id int);",
+	})
+	p, err := Detect(dir, Options{ServiceType: model.TypeWeb})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Prisma == nil || p.Prisma.Provider != "sqlite" || p.Prisma.URLEnv != "DATABASE_URL" || !p.Prisma.Migrations {
+		t.Fatalf("prisma info %+v", p.Prisma)
+	}
+	if !strings.Contains(p.Dockerfile, "npx prisma migrate deploy && npm run start") {
+		t.Fatalf("start command does not apply migrations:\n%s", p.Dockerfile)
+	}
+	// Without migrations the schema is pushed.
+	os.RemoveAll(filepath.Join(dir, "prisma", "migrations"))
+	p, _ = Detect(dir, Options{ServiceType: model.TypeWeb})
+	if !strings.Contains(p.Dockerfile, "npx prisma db push --skip-generate && npm run start") {
+		t.Fatalf("expected db push:\n%s", p.Dockerfile)
+	}
+}

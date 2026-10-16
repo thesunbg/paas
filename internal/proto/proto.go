@@ -164,13 +164,14 @@ type BuildRequest struct {
 }
 
 type BuildReply struct {
-	Image         string `json:"image,omitempty"`
-	StaticPath    string `json:"static_path,omitempty"`
-	CommitSHA     string `json:"commit_sha,omitempty"`
-	CommitMessage string `json:"commit_message,omitempty"`
-	Detected      string `json:"detected,omitempty"`
-	Port          int    `json:"port,omitempty"`
-	Error         string `json:"error,omitempty"`
+	Image         string  `json:"image,omitempty"`
+	StaticPath    string  `json:"static_path,omitempty"`
+	CommitSHA     string  `json:"commit_sha,omitempty"`
+	CommitMessage string  `json:"commit_message,omitempty"`
+	Detected      string  `json:"detected,omitempty"`
+	Port          int     `json:"port,omitempty"`
+	Prisma        *Prisma `json:"prisma,omitempty"`
+	Error         string  `json:"error,omitempty"`
 }
 
 type ExecRequest struct {
@@ -269,16 +270,17 @@ type DetectRequest struct {
 }
 
 type DetectReply struct {
-	Language      string `json:"language"`
-	Framework     string `json:"framework,omitempty"`
-	Static        bool   `json:"static"`
-	Port          int    `json:"port,omitempty"`
-	SuggestedType string `json:"suggested_type"` // web | static | worker
-	Dockerfile    bool   `json:"dockerfile"`
-	CommitSHA     string `json:"commit_sha,omitempty"`
-	CommitMessage string `json:"commit_message,omitempty"`
-	Summary       string `json:"summary"`
-	Error         string `json:"error,omitempty"`
+	Language      string  `json:"language"`
+	Framework     string  `json:"framework,omitempty"`
+	Static        bool    `json:"static"`
+	Port          int     `json:"port,omitempty"`
+	SuggestedType string  `json:"suggested_type"` // web | static | worker
+	Dockerfile    bool    `json:"dockerfile"`
+	CommitSHA     string  `json:"commit_sha,omitempty"`
+	CommitMessage string  `json:"commit_message,omitempty"`
+	Summary       string  `json:"summary"`
+	Prisma        *Prisma `json:"prisma,omitempty"`
+	Error         string  `json:"error,omitempty"`
 }
 
 // PITRPrepareRequest lays out a PostgreSQL data directory for point-in-time
@@ -290,4 +292,11 @@ type PITRPrepareRequest struct {
 	DataDir    string `json:"data_dir"`    // PGDATA of the new server
 	WALDest    string `json:"wal_dest"`    // archive directory of the new server
 	TargetTime string `json:"target_time"` // RFC 3339; empty = end of the archive
+}
+
+// Prisma describes the database a Prisma app expects, so the platform can provide it.
+type Prisma struct {
+	Provider   string `json:"provider"`          // sqlite | postgresql | mysql | ...
+	URLEnv     string `json:"url_env,omitempty"` // env var named in url = env("...")
+	Migrations bool   `json:"migrations"`        // prisma/migrations exists
 }

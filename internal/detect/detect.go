@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/thesunbg/paas/internal/model"
+	"github.com/thesunbg/paas/internal/proto"
 )
 
 // DefaultPort is the port every generated image listens on ($PORT).
@@ -27,6 +28,7 @@ type Plan struct {
 	Dockerfile     string // generated Dockerfile content; empty when UserDockerfile is set
 	UserDockerfile string // path (relative to root) of the repository's own Dockerfile
 	Port           int
+	Prisma         *proto.Prisma // the app uses Prisma (database the platform can provide)
 }
 
 // Summary is a short human-readable description, e.g. "node/next".
@@ -139,6 +141,9 @@ func runWithEnv(cmd string) string {
 // ---------- Node.js ----------
 
 type packageJSON struct {
+	Prisma struct {
+		Schema string `json:"schema"`
+	} `json:"prisma"`
 	Scripts         map[string]string `json:"scripts"`
 	Dependencies    map[string]string `json:"dependencies"`
 	DevDependencies map[string]string `json:"devDependencies"`
@@ -294,6 +299,17 @@ func (d *detector) node() (*Plan, error) {
 	// Prisma generates its client from the schema, which is not there yet when
 	// dependencies install (only package files are copied first, for caching).
 	prisma := pkg.has("prisma") || pkg.has("@prisma/client") || exists(filepath.Join(d.dir, "prisma", "schema.prisma"))
+	if prisma {
+		plan.Prisma = prismaInfo(d.dir, pkg.Prisma.Schema)
+		if plan.Prisma != nil && start != "" && b.StartCmd == "" {
+			// Apply the schema before the app starts (the database may be new).
+			if plan.Prisma.Migrations {
+				start = "npx prisma migrate deploy && " + start
+			} else {
+				start = "npx prisma db push --skip-generate && " + start
+			}
+		}
+	}
 
 	var df strings.Builder
 	fmt.Fprintf(&df, "# syntax=docker/dockerfile:1\nFROM %s AS build\nWORKDIR /app\n", image)
@@ -323,6 +339,50 @@ func (d *detector) node() (*Plan, error) {
 	fmt.Fprintf(&df, "ENV NODE_ENV=production PORT=%d HOST=0.0.0.0 HOSTNAME=0.0.0.0\nEXPOSE %d\n", DefaultPort, DefaultPort)
 	fmt.Fprintf(&df, "CMD [\"sh\", \"-c\", %s]\n", strconv.Quote(start))
 	return plan.withDockerfile(df.String()), nil
+}
+
+var (
+	prismaProviderRe = regexp.MustCompile(`(?s)datasource\s+\w+\s*\{.*?provider\s*=\s*"([a-z]+)"`)
+	prismaURLEnvRe   = regexp.MustCompile(`(?s)datasource\s+\w+\s*\{.*?url\s*=\s*env\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)`)
+)
+
+// prismaInfo reads the datasource of the Prisma schema (prisma/schema.prisma,
+// the package.json "prisma.schema" path, or a prisma/schema/ folder).
+func prismaInfo(dir, configured string) *proto.Prisma {
+	var paths []string
+	if configured != "" && !filepath.IsAbs(configured) && !strings.Contains(configured, "..") {
+		paths = append(paths, filepath.Join(dir, configured))
+	}
+	paths = append(paths, filepath.Join(dir, "prisma", "schema.prisma"), filepath.Join(dir, "schema.prisma"))
+	if files, _ := filepath.Glob(filepath.Join(dir, "prisma", "schema", "*.prisma")); len(files) > 0 {
+		paths = append(paths, files...)
+	}
+	for _, p := range paths {
+		src := readFile(p)
+		if !strings.Contains(src, "datasource") {
+			if st, err := os.Stat(p); err == nil && st.IsDir() {
+				files, _ := filepath.Glob(filepath.Join(p, "*.prisma"))
+				for _, f := range files {
+					if c := readFile(f); strings.Contains(c, "datasource") {
+						src = c
+						p = f
+						break
+					}
+				}
+			}
+		}
+		m := prismaProviderRe.FindStringSubmatch(src)
+		if m == nil {
+			continue
+		}
+		info := &proto.Prisma{Provider: m[1]}
+		if u := prismaURLEnvRe.FindStringSubmatch(src); u != nil {
+			info.URLEnv = u[1]
+		}
+		info.Migrations = exists(filepath.Join(filepath.Dir(p), "migrations"))
+		return info
+	}
+	return nil
 }
 
 var nextExportRe = regexp.MustCompile(`output\s*:\s*["'\x60]export["'\x60]`)
