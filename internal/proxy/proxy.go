@@ -51,6 +51,10 @@ type Proxy struct {
 	statsMu sync.Mutex
 	stats   map[string]*proto.ServiceHits
 
+	tcp    *tcpManager
+	dbTLS  atomic.Pointer[tls.Config]
+	dbHost atomic.Value // string
+
 	wakeMu sync.Mutex
 	waking map[string]chan struct{}
 	woken  map[string][]string // service id -> upstreams obtained by a wake-up
@@ -73,6 +77,8 @@ func New(cfg config.Proxy, nc *nats.Conn) *Proxy {
 		},
 	}
 	p.table.Store(&table{hosts: map[string]*entry{}})
+	p.tcp = newTCPManager(p)
+	p.dbHost.Store("")
 	if cfg.DashboardUpstream != "" {
 		u := &url.URL{Scheme: "http", Host: cfg.DashboardUpstream}
 		p.dashboard = httputil.NewSingleHostReverseProxy(u)
@@ -97,6 +103,8 @@ func (p *Proxy) SetRoutes(t *model.RouteTable) {
 		nt.hosts[strings.ToLower(r.Host)] = e
 	}
 	p.table.Store(nt)
+	p.dbHost.Store(strings.ToLower(t.DBHost))
+	p.tcp.apply(t.TCP)
 	p.wakeMu.Lock()
 	for id := range p.woken {
 		for _, r := range t.Routes {
@@ -136,6 +144,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 	if p.cfg.ACMEEmail != "" || p.cfg.TLS {
 		magic, issuer := p.certmagic()
 		tlsCfg := magic.TLSConfig()
+		p.setDBTLS(magic.TLSConfig())
 		tlsCfg.NextProtos = append([]string{"h2", "http/1.1"}, tlsCfg.NextProtos...)
 		tlsCfg.MinVersion = tls.VersionTLS12
 		httpsSrv := &http.Server{Addr: p.cfg.HTTPSAddr, Handler: handler, TLSConfig: tlsCfg, ReadHeaderTimeout: 15 * time.Second}
@@ -177,7 +186,7 @@ func (p *Proxy) certmagic() (*certmagic.Config, *certmagic.ACMEIssuer) {
 		Storage: &certmagic.FileStorage{Path: p.cfg.DataDir + "/certs"},
 		OnDemand: &certmagic.OnDemandConfig{DecisionFunc: func(ctx context.Context, name string) error {
 			// Only request certificates for hostnames that are actually routed.
-			if p.lookup(name) == nil {
+			if p.lookup(name) == nil && !strings.EqualFold(name, p.dbHost.Load().(string)) {
 				return fmt.Errorf("unknown host %s", name)
 			}
 			return nil
@@ -451,4 +460,31 @@ func (p *Proxy) serveStaticRoute(w http.ResponseWriter, r *http.Request, e *entr
 		},
 	}
 	rp.ServeHTTP(w, r)
+}
+
+// setDBTLS prepares the TLS config used for database connections: clients that
+// send no SNI (an IP address) get the certificate of the database host.
+func (p *Proxy) setDBTLS(base *tls.Config) {
+	cfg := base.Clone()
+	cfg.MinVersion = tls.VersionTLS12
+	cfg.NextProtos = []string{"postgresql"}
+	get := base.GetCertificate
+	cfg.GetCertificate = func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if h.ServerName == "" {
+			h.ServerName = p.dbHost.Load().(string)
+		}
+		return get(h)
+	}
+	p.dbTLS.Store(cfg)
+}
+
+// dbTLSConfig returns the TLS config for a TCP route mode, nil without HTTPS.
+func (p *Proxy) dbTLSConfig(mode string) *tls.Config {
+	cfg := p.dbTLS.Load()
+	if cfg == nil || mode == "postgres" {
+		return cfg
+	}
+	c := cfg.Clone()
+	c.NextProtos = nil
+	return c
 }

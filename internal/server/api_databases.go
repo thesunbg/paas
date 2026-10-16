@@ -57,6 +57,12 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 				"host": c.Host, "port": c.Port, "database": c.DBName, "username": c.Username, "password": c.Password,
 				"url": databases.URL(db.Engine, c),
 			}
+			if db.Options.PublicPort != 0 {
+				out["external"] = map[string]any{
+					"host": s.cfg.DBHost, "port": db.Options.PublicPort, "tls": s.tlsAtEdge(),
+					"url": s.externalURL(db, c), "allowed_cidrs": db.Options.AllowedCIDRs,
+				}
+			}
 			out["server"] = map[string]any{"service_id": srv.ID, "status": srv.Status, "memory_limit_mb": srv.Spec.Resources.MemoryLimitMB}
 			if in, err := s.firstInstance(r.Context(), srv.ID); err == nil {
 				out["server"].(map[string]any)["memory_usage_mb"] = in.MemoryUsageMB

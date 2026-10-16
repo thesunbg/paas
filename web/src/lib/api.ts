@@ -196,7 +196,29 @@ export interface Database {
   error: string;
   backup_schedule_hours: number;
   last_backup_at: string | null;
+  options?: DBOptions;
   created_at: string;
+}
+
+export interface DBOptions {
+  public_port?: number;
+  allowed_cidrs?: string[];
+  quota_mb?: number;
+  read_only?: boolean;
+  pooler?: boolean;
+  pooler_service_id?: string;
+  pitr?: boolean;
+  pitr_retention_days?: number;
+  ha?: boolean;
+  replica_service_id?: string;
+}
+
+export interface ExternalAccess {
+  host: string;
+  port: number;
+  tls: boolean;
+  url: string;
+  allowed_cidrs: string[];
 }
 
 export interface ProjectDetail {
@@ -380,6 +402,7 @@ export interface DatabaseServer {
 export interface DatabaseDetail {
   database: Database;
   connection?: Connection;
+  external?: ExternalAccess;
   server?: DatabaseServer;
   links: DatabaseLink[];
 }
@@ -818,6 +841,9 @@ export const api = {
   restoreBackup: (id: string, backup: string) => post<{ status: string }>(`/databases/${e(id)}/backups/${e(backup)}/restore`),
   upgradeDatabase: (id: string, size?: string) => post<{ status: string }>(`/databases/${e(id)}/upgrade`, size ? { size } : {}),
   retryDatabase: (id: string) => post<{ status: string }>(`/databases/${e(id)}/retry`),
+  myIP: () => get<{ ip: string }>('/me/ip'),
+  databasePublic: (id: string, enabled: boolean, allowed_cidrs: string[] = []) =>
+    post<{ public_port: number; allowed_cidrs: string[] }>(`/databases/${e(id)}/public`, { enabled, allowed_cidrs }),
 
   // Cluster
   nodes: () => get<NodesResponse>('/nodes'),

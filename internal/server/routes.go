@@ -70,7 +70,8 @@ func (s *Server) routeTable(ctx context.Context) (*model.RouteTable, error) {
 	s.routesVersion++
 	version := s.routesVersion
 	s.routesMu.Unlock()
-	t := &model.RouteTable{Version: version, Generated: time.Now()}
+	t := &model.RouteTable{Version: version, Generated: time.Now(), DBHost: s.cfg.DBHost}
+	t.TCP = s.tcpRoutes(ctx, upstreams)
 	if s.cfg.DashboardDomain != "" {
 		t.Routes = append(t.Routes, model.Route{Host: s.cfg.DashboardDomain, Kind: "dashboard"})
 	}

@@ -23,6 +23,9 @@ type Server struct {
 	ImageRetention  int    // PAAS_IMAGE_RETENTION, deployments kept per service for rollback
 	ClusterBase     string // PAAS_CLUSTER_BASE, first two octets of the container address space (default 10.100)
 	S3              S3     // off-site backups
+	DBHost          string // PAAS_DB_HOST, public host for external database access (default db.<base>)
+	DBPortMin       int    // PAAS_DB_PORT_MIN, first public port for databases (default 20000)
+	DBPortMax       int    // PAAS_DB_PORT_MAX (default 20999)
 
 	// High availability: several control planes share PostgreSQL and form a NATS cluster.
 	ServerName    string   // PAAS_SERVER_NAME (unique per control plane)
@@ -121,6 +124,9 @@ func LoadServer() Server {
 		ClusterToken:    env("PAAS_CLUSTER_TOKEN", ""),
 		AllowLocalGit:   envBool("PAAS_ALLOW_LOCAL_GIT", false),
 		ImageRetention:  envInt("PAAS_IMAGE_RETENTION", 3),
+		DBHost:          env("PAAS_DB_HOST", "db."+base),
+		DBPortMin:       envInt("PAAS_DB_PORT_MIN", 20000),
+		DBPortMax:       envInt("PAAS_DB_PORT_MAX", 20999),
 		ClusterBase:     env("PAAS_CLUSTER_BASE", "10.100"),
 		ServerName:      env("PAAS_SERVER_NAME", hostname()),
 		ClusterAddr:     env("PAAS_NATS_CLUSTER_ADDR", ""),

@@ -145,6 +145,20 @@ type RouteTable struct {
 	Version   int64     `json:"version"`
 	Routes    []Route   `json:"routes"`
 	Generated time.Time `json:"generated"`
+	// TCP exposes managed databases on DBHost:<port> through every edge proxy.
+	TCP    []TCPRoute `json:"tcp,omitempty"`
+	DBHost string     `json:"db_host,omitempty"`
+}
+
+// TCPRoute forwards one public port to a database server.
+type TCPRoute struct {
+	Port       int      `json:"port"`
+	DatabaseID string   `json:"database_id"`
+	Upstreams  []string `json:"upstreams"`
+	// Mode: "postgres" answers SSLRequest and terminates TLS, "tls" terminates
+	// TLS from the first byte (redis, mongo), "plain" passes bytes through (mysql).
+	Mode  string   `json:"mode"`
+	Allow []string `json:"allow"` // client CIDRs; empty allows nobody
 }
 
 // DNSTable maps internal names (svc.project.internal) to container IPs.

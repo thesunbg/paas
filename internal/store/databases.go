@@ -22,15 +22,35 @@ type Database struct {
 	Error               string     `json:"error"`
 	BackupScheduleHours int        `json:"backup_schedule_hours"`
 	LastBackupAt        *time.Time `json:"last_backup_at"`
+	Options             DBOptions  `json:"options"`
 	CreatedAt           time.Time  `json:"created_at"`
 }
 
-const databaseCols = `id, project_id, name, engine, mode, server_service_id, db_name, username, password_enc, size_preset, status, error, backup_schedule_hours, last_backup_at, created_at`
+// DBOptions holds the DBaaS settings of a database.
+type DBOptions struct {
+	// External access through the edge proxies on db.<base domain>:<port>.
+	PublicPort   int      `json:"public_port,omitempty"`
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+	// Storage quota in MB (0 = the size preset's default); over it the database turns read-only.
+	QuotaMB  int  `json:"quota_mb,omitempty"`
+	ReadOnly bool `json:"read_only,omitempty"`
+	// PgBouncer in front of the database (postgres).
+	Pooler          bool   `json:"pooler,omitempty"`
+	PoolerServiceID string `json:"pooler_service_id,omitempty"`
+	// Point-in-time recovery: WAL archiving and periodic base backups (dedicated postgres).
+	PITR          bool `json:"pitr,omitempty"`
+	PITRRetention int  `json:"pitr_retention_days,omitempty"`
+	// High availability: a streaming standby on another node (dedicated postgres).
+	HA               bool   `json:"ha,omitempty"`
+	ReplicaServiceID string `json:"replica_service_id,omitempty"`
+}
+
+const databaseCols = `id, project_id, name, engine, mode, server_service_id, db_name, username, password_enc, size_preset, status, error, backup_schedule_hours, last_backup_at, options, created_at`
 
 func scanDatabase(row pgx.Row) (*Database, error) {
 	var d Database
 	err := row.Scan(&d.ID, &d.ProjectID, &d.Name, &d.Engine, &d.Mode, &d.ServerServiceID, &d.DBName, &d.Username, &d.PasswordEnc,
-		&d.SizePreset, &d.Status, &d.Error, &d.BackupScheduleHours, &d.LastBackupAt, &d.CreatedAt)
+		&d.SizePreset, &d.Status, &d.Error, &d.BackupScheduleHours, &d.LastBackupAt, &d.Options, &d.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -214,4 +234,61 @@ func (s *Store) DeleteBackup(ctx context.Context, id string) error {
 func (s *Store) SetBackupS3Key(ctx context.Context, id, key string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE backups SET s3_key=$2 WHERE id=$1`, id, key)
 	return err
+}
+
+func (s *Store) UpdateDatabaseOptions(ctx context.Context, id string, o DBOptions) error {
+	_, err := s.DB.Exec(ctx, `UPDATE databases SET options=$2 WHERE id=$1`, id, o)
+	return err
+}
+
+// UsedPublicPorts lists the external ports already given to databases.
+func (s *Store) UsedPublicPorts(ctx context.Context) (map[int]bool, error) {
+	rows, err := s.DB.Query(ctx, `SELECT (options->>'public_port')::int FROM databases WHERE (options->>'public_port') IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]bool{}
+	for rows.Next() {
+		var p int
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out[p] = true
+	}
+	return out, rows.Err()
+}
+
+// DBMetric is one sample of a database's size and connections.
+type DBMetric struct {
+	TS          time.Time `json:"ts"`
+	SizeBytes   int64     `json:"size_bytes"`
+	Connections int       `json:"connections"`
+}
+
+func (s *Store) InsertDBMetric(ctx context.Context, dbID string, m DBMetric) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO db_metrics (database_id, ts, size_bytes, connections) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+		dbID, m.TS, m.SizeBytes, m.Connections)
+	return err
+}
+
+func (s *Store) DBMetrics(ctx context.Context, dbID string, since time.Time) ([]DBMetric, error) {
+	rows, err := s.DB.Query(ctx, `SELECT ts, size_bytes, connections FROM db_metrics WHERE database_id=$1 AND ts >= $2 ORDER BY ts`, dbID, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DBMetric{}
+	for rows.Next() {
+		var m DBMetric
+		if err := rows.Scan(&m.TS, &m.SizeBytes, &m.Connections); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) PruneDBMetrics(ctx context.Context, before time.Time) {
+	_, _ = s.DB.Exec(ctx, `DELETE FROM db_metrics WHERE ts < $1`, before)
 }

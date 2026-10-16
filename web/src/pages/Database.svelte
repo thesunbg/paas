@@ -14,6 +14,7 @@
   import Secret from '../components/Secret.svelte';
   import CopyButton from '../components/CopyButton.svelte';
   import Modal from '../components/Modal.svelte';
+  import ExternalAccess from '../components/db/ExternalAccess.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -229,6 +230,10 @@
       </div>
     </div>
 
+    <div class="features">
+      <ExternalAccess {detail} {isAdmin} reload={load} />
+    </div>
+
     <div class="card" style="margin-top:16px">
       <div class="card-head"><h3>Linked services</h3><span class="faint small">{detail.links.length}</span></div>
       {#if detail.links.length}
@@ -329,6 +334,12 @@
 </div>
 
 <style>
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
   .grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

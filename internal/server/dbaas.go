@@ -1,0 +1,183 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"github.com/thesunbg/paas/internal/databases"
+	"github.com/thesunbg/paas/internal/model"
+	"github.com/thesunbg/paas/internal/store"
+)
+
+// External access: a database can be reached from outside the cluster on
+// db.<base domain>:<port>. Every edge proxy listens on the port, enforces the
+// allowlist and terminates TLS (see proxy/tcp.go).
+
+func tcpMode(engine string) string {
+	switch engine {
+	case databases.Postgres:
+		return "postgres"
+	case databases.Redis, databases.Mongo:
+		return "tls"
+	}
+	return "plain"
+}
+
+// tlsAtEdge reports whether the edge proxies terminate TLS (automatic HTTPS on).
+func (s *Server) tlsAtEdge() bool { return strings.HasPrefix(s.cfg.PublicURL, "https://") }
+
+// tcpRoutes lists the public database ports for the route table.
+func (s *Server) tcpRoutes(ctx context.Context, upstreams map[string][]string) []model.TCPRoute {
+	dbs, err := s.store.AllDatabases(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []model.TCPRoute
+	for _, db := range dbs {
+		if db.Options.PublicPort == 0 || db.ServerServiceID == nil {
+			continue
+		}
+		target := *db.ServerServiceID
+		if db.Options.Pooler && db.Options.PoolerServiceID != "" {
+			target = db.Options.PoolerServiceID
+		}
+		out = append(out, model.TCPRoute{
+			Port: db.Options.PublicPort, DatabaseID: db.ID, Mode: tcpMode(db.Engine),
+			Upstreams: upstreams[target], Allow: db.Options.AllowedCIDRs,
+		})
+	}
+	return out
+}
+
+// externalURL is the connection string for clients outside the cluster.
+func (s *Server) externalURL(db *store.Database, c databases.Credentials) string {
+	if db.Options.PublicPort == 0 {
+		return ""
+	}
+	c.Host, c.Port = s.cfg.DBHost, db.Options.PublicPort
+	u, err := url.Parse(databases.URL(db.Engine, c))
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	tlsOn := s.tlsAtEdge()
+	switch db.Engine {
+	case databases.Postgres:
+		if tlsOn {
+			q.Set("sslmode", "require")
+		} else {
+			q.Set("sslmode", "disable")
+		}
+	case databases.Redis:
+		if tlsOn {
+			u.Scheme = "rediss"
+		}
+	case databases.Mongo:
+		if tlsOn {
+			q.Set("tls", "true")
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func (s *Server) allocatePublicPort(ctx context.Context) (int, error) {
+	used, err := s.store.UsedPublicPorts(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for p := s.cfg.DBPortMin; p <= s.cfg.DBPortMax; p++ {
+		if !used[p] {
+			return p, nil
+		}
+	}
+	return 0, errors.New("no free public database port; widen PAAS_DB_PORT_MIN/MAX")
+}
+
+func normalizeCIDRs(in []string) ([]string, error) {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, raw := range in {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		var pfx netip.Prefix
+		if p, err := netip.ParsePrefix(v); err == nil {
+			pfx = p.Masked()
+		} else if a, err := netip.ParseAddr(v); err == nil {
+			pfx = netip.PrefixFrom(a, a.BitLen())
+		} else {
+			return nil, fmt.Errorf("invalid IP or CIDR %q", v)
+		}
+		if !seen[pfx.String()] {
+			seen[pfx.String()] = true
+			out = append(out, pfx.String())
+		}
+	}
+	if len(out) > 100 {
+		return nil, errors.New("at most 100 allowlist entries")
+	}
+	return out, nil
+}
+
+// POST /api/v1/databases/{id}/public {enabled, allowed_cidrs}
+func (s *Server) handleDatabasePublic(w http.ResponseWriter, r *http.Request) {
+	db, p := s.databaseFor(w, r, "admin")
+	if db == nil {
+		return
+	}
+	var in struct {
+		Enabled      bool     `json:"enabled"`
+		AllowedCIDRs []string `json:"allowed_cidrs"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	ctx := r.Context()
+	release := s.store.AdvisoryLock(ctx, "db-public-port")
+	defer release()
+	db, err := s.store.DatabaseByID(ctx, db.ID)
+	if err != nil {
+		writeError(w, 404, "database not found")
+		return
+	}
+	o := db.Options
+	if in.Enabled {
+		cidrs, err := normalizeCIDRs(in.AllowedCIDRs)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		if len(cidrs) == 0 {
+			writeError(w, 400, "add at least one allowed IP or CIDR (0.0.0.0/0 allows everyone)")
+			return
+		}
+		o.AllowedCIDRs = cidrs
+		if o.PublicPort == 0 {
+			port, err := s.allocatePublicPort(ctx)
+			if err != nil {
+				writeError(w, 503, err.Error())
+				return
+			}
+			o.PublicPort = port
+		}
+	} else {
+		o.PublicPort, o.AllowedCIDRs = 0, nil
+	}
+	if err := s.store.UpdateDatabaseOptions(ctx, db.ID, o); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	u := currentUser(r)
+	s.store.Audit(ctx, &u.ID, &p.TeamID, "database.public", fmt.Sprintf("%s %v %s", db.Name, in.Enabled, strings.Join(o.AllowedCIDRs, ",")))
+	s.publishRoutes(context.WithoutCancel(ctx))
+	writeJSON(w, 200, map[string]any{"public_port": o.PublicPort, "allowed_cidrs": o.AllowedCIDRs, "host": s.cfg.DBHost, "port": strconv.Itoa(o.PublicPort)})
+}

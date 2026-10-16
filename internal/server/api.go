@@ -43,6 +43,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/github/installed", s.handleGitHubInstalled)
 
 	h("GET /api/v1/me", s.handleMe)
+	h("GET /api/v1/me/ip", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"ip": clientAddr(r)}) })
 	h("GET /api/v1/me/github/link", s.handleGitHubLinkStart)
 	h("DELETE /api/v1/me/github", s.handleGitHubUnlink)
 	h("POST /api/v1/me/password", s.handleChangePassword)
@@ -120,6 +121,7 @@ func (s *Server) routes() http.Handler {
 	h("POST /api/v1/databases/{id}/backups/{backup}/restore", s.handleRestoreBackup)
 	h("POST /api/v1/databases/{id}/upgrade", s.handleUpgradeDatabase)
 	h("POST /api/v1/databases/{id}/retry", s.handleRetryDatabase)
+	h("POST /api/v1/databases/{id}/public", s.handleDatabasePublic)
 
 	h("GET /api/v1/nodes", s.handleListNodes)
 	h("PATCH /api/v1/nodes/{id}", s.handleUpdateNode)
