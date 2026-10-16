@@ -192,6 +192,10 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "type must be web, worker, static or cron")
 		return
 	}
+	if err := s.checkCounts(r, p.TeamID, 0, 1, 0); err != nil {
+		writeError(w, 403, err.Error())
+		return
+	}
 	svc := &store.Service{ProjectID: p.ID, Type: in.Type, WebhookSecret: util.RandomToken(20)}
 	svc.Source.AutoDeploy = true
 	if err := s.applyInput(svc, &in); err != nil {
@@ -200,6 +204,10 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.checkInstallation(r.Context(), p.TeamID, svc.Source.InstallationID); err != nil {
 		writeError(w, 400, err.Error())
+		return
+	}
+	if err := s.checkServiceSize(r, svc); err != nil {
+		writeError(w, 403, err.Error())
 		return
 	}
 	if in.Domain != "" {
@@ -374,6 +382,10 @@ func (s *Server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	if err := s.checkServiceSize(r, svc); err != nil {
+		writeError(w, 403, err.Error())
+		return
+	}
 	if err := s.store.UpdateServiceConfig(r.Context(), svc); err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -478,6 +490,10 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decode(r, &in); err != nil || in.Replicas < 1 || in.Replicas > 50 {
 		writeError(w, 400, "replicas must be between 1 and 50")
+		return
+	}
+	if l := s.teamLimits(r.Context()); limited(r) && l.MaxReplicas > 0 && in.Replicas > l.MaxReplicas {
+		writeError(w, 403, fmt.Sprintf("services are limited to %d replicas", l.MaxReplicas))
 		return
 	}
 	if err := s.scaleService(r.Context(), svc, in.Replicas); err != nil {

@@ -134,6 +134,16 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 
 `POST /webhooks/github/{serviceId}` — configure it in GitHub (content type `application/json`, secret = the service `webhook_secret`, event `push`). Pushes to the service branch deploy automatically; `root_dir` limits deploys to changes under that folder.
 
+## Sign-up and team limits (administrators)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/admin/settings` | `{allow_signup, limits}` |
+| PUT | `/api/v1/admin/settings` | `{allow_signup?, limits?: {max_projects, max_services, max_databases, max_memory_mb, max_replicas, max_signups_per_ip_per_day}}` (0 = unlimited) |
+
+With sign-up on, anyone can register at `/#/signup` and gets a personal team. Limits apply to every
+non-administrator; requests over a limit return 403, too many sign-ups from one IP return 429.
+
 ## GitHub App (Vercel-style integration)
 
 One GitHub App per installation of paas, created from a manifest; teams install it on

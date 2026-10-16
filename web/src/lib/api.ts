@@ -696,7 +696,23 @@ export interface DetectResult {
   error?: string;
 }
 
+export interface TeamLimits {
+  max_projects: number;
+  max_services: number;
+  max_databases: number;
+  max_memory_mb: number;
+  max_replicas: number;
+  max_signups_per_ip_per_day: number;
+}
+
+export interface SystemSettings {
+  allow_signup: boolean;
+  limits: TeamLimits;
+}
+
 export const api = {
+  systemSettings: () => get<SystemSettings>('/admin/settings'),
+  putSystemSettings: (s: Partial<SystemSettings>) => put<SystemSettings>('/admin/settings', s),
   // GitHub App
   githubApp: () => get<GitHubAppStatus>('/github/app'),
   githubManifest: (organization?: string) => post<{ action_url: string; manifest: string }>('/github/app/manifest', organization ? { organization } : {}),

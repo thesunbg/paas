@@ -4,7 +4,9 @@
 
   let { setup, onauthed }: { setup: SetupStatus; onauthed: () => Promise<void> } = $props();
 
-  const initialMode = (): 'login' | 'register' => (setup.needs_setup ? 'register' : 'login');
+  // "#/signup" opens the registration form directly (e.g. links from a landing page).
+  const wantsSignup = /^#\/(signup|register)\b/.test(location.hash);
+  const initialMode = (): 'login' | 'register' => (setup.needs_setup || (wantsSignup && setup.allow_signup) ? 'register' : 'login');
   let mode = $state(initialMode());
   let email = $state('');
   let password = $state('');
@@ -33,6 +35,7 @@
     try {
       if (mode === 'register') await api.register(email.trim(), password, name.trim());
       else await api.login(email.trim(), password, needCode ? code.trim() : undefined);
+      if (wantsSignup) history.replaceState(null, '', '#/');
       await onauthed();
     } catch (err) {
       if (err instanceof ApiError && err.data?.two_factor) {
@@ -67,6 +70,15 @@
         Deploy and manage your apps{setup.base_domain ? ` on ${setup.base_domain}` : ''}.
       {/if}
     </p>
+
+    {#if !isSetup && setup.allow_signup}
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={mode === 'login'} class:on={mode === 'login'} onclick={() => ((mode = 'login'), (error = ''))}>Sign in</button>
+        <button type="button" role="tab" aria-selected={mode === 'register'} class:on={mode === 'register'} onclick={() => ((mode = 'register'), (error = ''), (needCode = false))}>Create account</button>
+      </div>
+    {:else if wantsSignup && !isSetup}
+      <p class="alert">Sign-up is closed on this server. Ask an administrator to invite you.</p>
+    {/if}
 
     <form class="stack card card-pad" onsubmit={submit}>
       {#if mode === 'register'}
@@ -115,19 +127,29 @@
       {#if needCode}<button type="button" class="ghost sm" onclick={() => ((needCode = false), (code = ''), (error = ''))}>Use a different account</button>{/if}
     </form>
 
-    {#if !isSetup && setup.allow_signup}
-      <p class="muted switch">
-        {#if mode === 'login'}
-          No account? <button class="link" onclick={() => ((mode = 'register'), (error = ''))}>Sign up</button>
-        {:else}
-          Already have an account? <button class="link" onclick={() => ((mode = 'login'), (error = ''))}>Sign in</button>
-        {/if}
-      </p>
-    {/if}
   </div>
 </div>
 
 <style>
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 3px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+  }
+  .tabs button {
+    flex: 1;
+    border: 0;
+    background: transparent;
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+  .tabs button.on {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
   .wrap {
     min-height: 100vh;
     display: flex;

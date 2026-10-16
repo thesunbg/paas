@@ -78,6 +78,10 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name required")
 		return
 	}
+	if err := s.checkCounts(r, team, 1, 0, 0); err != nil {
+		writeError(w, 403, err.Error())
+		return
+	}
 	p, err := s.store.CreateProject(r.Context(), team, strings.TrimSpace(in.Name), s.uniqueProjectSlug(r.Context(), in.Name))
 	if err != nil {
 		writeError(w, 500, err.Error())

@@ -18,6 +18,10 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	if err := s.checkCounts(r, p.TeamID, 0, 0, 1); err != nil {
+		writeError(w, 403, err.Error())
+		return
+	}
 	db, err := s.createDatabase(r.Context(), p, in)
 	if err != nil {
 		writeError(w, 400, err.Error())

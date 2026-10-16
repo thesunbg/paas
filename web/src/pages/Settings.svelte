@@ -12,6 +12,7 @@
   import Notifications from './settings/Notifications.svelte';
   import TwoFactor from './settings/TwoFactor.svelte';
   import GitHub from './settings/GitHub.svelte';
+  import System from './settings/System.svelte';
 
   let { tab = 'tokens' }: { tab?: string } = $props();
 
@@ -22,6 +23,7 @@
     { id: 'members', label: 'Team members' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'github', label: 'GitHub' },
+    ...(session.me?.user.is_admin ? [{ id: 'system', label: 'System' }] : []),
   ];
 
   // Tokens
@@ -292,6 +294,8 @@
         <Notifications />
       {:else if tab === 'github'}
         <GitHub />
+      {:else if tab === 'system' && session.me?.user.is_admin}
+        <System />
       {:else}
         <p class="muted">Unknown section.</p>
       {/if}

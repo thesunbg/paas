@@ -66,6 +66,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 403, "registration is closed; ask an administrator to invite you")
 			return
 		}
+		if max := s.teamLimits(r.Context()).MaxPerIPPerDay; max > 0 && !signupGuard.take(clientAddr(r), max) {
+			writeError(w, 429, "too many accounts created from this address today")
+			return
+		}
 	}
 	u, err := s.createUser(r, in, first)
 	if err != nil {
@@ -449,10 +453,20 @@ func (g *attemptGuard) fail(key string) {
 	}
 }
 
+// clientAddr is the caller's IP. Behind the local edge proxy (a loopback peer)
+// the last X-Forwarded-For entry, which that proxy appends, is the real client.
 func clientAddr(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if last := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(last) != nil {
+				return last
+			}
+		}
 	}
 	return host
 }
@@ -476,4 +490,32 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "deleted"})
+}
+
+// signupGuard limits account creation per client address per day.
+var signupGuard = &dailyCounter{hits: map[string][]time.Time{}}
+
+type dailyCounter struct {
+	mu   sync.Mutex
+	hits map[string][]time.Time
+}
+
+func (c *dailyCounter) take(key string, max int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var keep []time.Time
+	for _, t := range c.hits[key] {
+		if time.Since(t) < 24*time.Hour {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) >= max {
+		c.hits[key] = keep
+		return false
+	}
+	c.hits[key] = append(keep, time.Now())
+	if len(c.hits) > 100000 {
+		c.hits = map[string][]time.Time{}
+	}
+	return true
 }

@@ -123,6 +123,8 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/cluster/join", s.handleJoinInfo)
 	h("GET /api/v1/sizes", s.handleSizes)
 	h("DELETE /api/v1/users/{id}", s.handleDeleteUser)
+	h("GET /api/v1/admin/settings", s.handleGetSystemSettings)
+	h("PUT /api/v1/admin/settings", s.handlePutSystemSettings)
 
 	mux.Handle("/", webui.Handler())
 	return logRequests(securityHeaders(mux))

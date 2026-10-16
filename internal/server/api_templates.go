@@ -31,6 +31,10 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "unknown template")
 		return
 	}
+	if err := s.checkCounts(r, p.TeamID, 0, len(tpl.Services), len(tpl.Databases)); err != nil {
+		writeError(w, 403, err.Error())
+		return
+	}
 	var in struct {
 		Domain string `json:"domain"`
 	}
@@ -84,6 +88,10 @@ func (s *Server) handleImportCompose(w http.ResponseWriter, r *http.Request) {
 	svcs, warnings, err := templates.ParseCompose([]byte(in.Compose))
 	if err != nil {
 		writeError(w, 400, err.Error())
+		return
+	}
+	if err := s.checkCounts(r, p.TeamID, 0, len(svcs), 0); err != nil {
+		writeError(w, 403, err.Error())
 		return
 	}
 	created, err := s.createTemplateServices(context.WithoutCancel(r.Context()), p, svcs, nil, "")
