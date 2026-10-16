@@ -39,10 +39,12 @@ type Agent struct {
 	rt      *rt.Runtime
 	net     *network.Manager
 	builder *build.Builder
-	nodeID  string
-	mesh    *network.Mesh
-	base    [2]int
-	index   int
+	// buildBlocked explains why this node refuses builds (empty when it accepts them).
+	buildBlocked string
+	nodeID       string
+	mesh         *network.Mesh
+	base         [2]int
+	index        int
 
 	standalone bool         // own process (joined node), not embedded in the control plane
 	busy       atomic.Int32 // builds, jobs and transfers in progress (see work)
@@ -110,8 +112,15 @@ func (a *Agent) Run(ctx context.Context) error {
 			defer a.mesh.Close()
 		}
 	}
+	// Before Recover starts any container: no container ever runs without isolation.
 	if err := a.net.SyncFirewall(); err != nil {
-		slog.Warn("firewall", "err", err)
+		return fmt.Errorf("firewall: %w", err)
+	}
+	if a.builder != nil {
+		if err := a.setupBuildNetwork(); err != nil {
+			slog.Error("builds disabled on this node", "err", err)
+			a.buildBlocked = err.Error()
+		}
 	}
 	if a.builder != nil {
 		go a.serveStaticOrigin(ctx)
@@ -329,6 +338,9 @@ func (a *Agent) handleRemoveFiles(ctx context.Context, req *proto.RemoveFilesReq
 }
 
 func (a *Agent) handleBuild(ctx context.Context, req *proto.BuildRequest) *proto.BuildReply {
+	if a.buildBlocked != "" {
+		return &proto.BuildReply{Error: "builds are disabled on this node: " + a.buildBlocked}
+	}
 	defer a.work()()
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
 	defer cancel()

@@ -756,9 +756,6 @@ func (r *Runtime) Recover(ctx context.Context) {
 			}
 		}
 	}
-	if err := r.net.SyncFirewall(); err != nil {
-		slog.Warn("firewall", "err", err)
-	}
 }
 
 // Statuses reports every managed container with fresh resource usage.

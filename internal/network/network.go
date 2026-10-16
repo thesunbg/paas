@@ -19,7 +19,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,9 +28,11 @@ import (
 )
 
 const (
-	// MaxProjects is the number of project subnets per node (slot 1023 is infrastructure).
-	MaxProjects = 1023
-	maxNodes    = 250
+	// MaxProjects is the exclusive upper bound of tenant network indexes (1..MaxProjects-1).
+	// Index BuildNetIndex is the BuildKit bridge (pn1022) and slot 1023 is infrastructure.
+	MaxProjects   = 1022
+	BuildNetIndex = 1022
+	maxNodes      = 250
 )
 
 // Manager owns CNI networks on one node.
@@ -82,13 +83,6 @@ func (m *Manager) Configure(base [2]int, nodeIndex, sharedIndex int) {
 		m.networks = map[int]gocni.CNI{}
 	}
 	m.base, m.node, m.shared = base, nodeIndex, sharedIndex
-}
-
-// SetShared declares which project network every project may reach (shared database servers).
-func (m *Manager) SetShared(idx int) {
-	m.mu.Lock()
-	m.shared = idx
-	m.mu.Unlock()
 }
 
 // BridgeName returns the Linux bridge name of a project network.
@@ -158,23 +152,39 @@ func (m *Manager) network(idx int) (gocni.CNI, error) {
 	if n, ok := m.networks[idx]; ok {
 		return n, nil
 	}
-	subnet, gw := subnetFor(m.base, m.node, idx)
-	var buf bytes.Buffer
-	if err := confTmpl.Execute(&buf, map[string]any{
-		"Index": idx, "Bridge": BridgeName(idx), "Subnet": subnet, "Gateway": gw,
-		"IPAMDir": filepath.Join(m.dataDir, "cni", "ipam"),
-	}); err != nil {
+	conf, err := m.confList(idx)
+	if err != nil {
 		return nil, err
 	}
 	n, err := gocni.New(gocni.WithPluginDir([]string{m.binDir}), gocni.WithInterfacePrefix("eth"), gocni.WithMinNetworkCount(1))
 	if err != nil {
 		return nil, err
 	}
-	if err := n.Load(gocni.WithConfListBytes(buf.Bytes())); err != nil {
+	if err := n.Load(gocni.WithConfListBytes(conf)); err != nil {
 		return nil, fmt.Errorf("load cni config: %w", err)
 	}
 	m.networks[idx] = n
 	return n, nil
+}
+
+// confList renders the CNI configuration of network idx on this node. m.mu must be held.
+func (m *Manager) confList(idx int) ([]byte, error) {
+	subnet, gw := subnetFor(m.base, m.node, idx)
+	var buf bytes.Buffer
+	err := confTmpl.Execute(&buf, map[string]any{
+		"Index": idx, "Bridge": BridgeName(idx), "Subnet": subnet, "Gateway": gw,
+		"IPAMDir": filepath.Join(m.dataDir, "cni", "ipam"),
+	})
+	return buf.Bytes(), err
+}
+
+// BuildConfList is the CNI configuration BuildKit uses for RUN steps: bridge
+// pn<BuildNetIndex>, which the firewall treats like a project that owns nothing
+// in the cluster (no other project reachable, no host ports but DNS/80/443).
+func (m *Manager) BuildConfList() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.confList(BuildNetIndex)
 }
 
 // Attach connects the network namespace at nsPath to the project network and returns the container IP.
@@ -200,14 +210,11 @@ func (m *Manager) Attach(ctx context.Context, idx int, id, nsPath string) (strin
 	if err := m.DNS.ListenOn(m.Gateway(idx)); err != nil {
 		slog.Warn("dns listen", "ip", m.Gateway(idx), "err", err)
 	}
-	if err := m.SyncFirewall(); err != nil {
-		slog.Warn("nftables sync failed", "err", err)
-	}
 	return ip, nil
 }
 
 // Restore re-registers a network that already has containers (after an agent restart):
-// it loads the CNI config, serves DNS on its gateway and refreshes the firewall.
+// it loads the CNI config and serves DNS on its gateway.
 func (m *Manager) Restore(idx int) {
 	if _, err := m.network(idx); err != nil {
 		slog.Warn("restore network", "index", idx, "err", err)
@@ -246,45 +253,87 @@ func (m *Manager) Gateway(idx int) string {
 	return gw
 }
 
-// Ruleset renders the nftables configuration for the current state.
+// Ruleset renders the nftables configuration. It depends only on the address
+// layout and the host resolvers, never on which networks currently exist.
 func (m *Manager) Ruleset() string {
 	m.mu.Lock()
-	idxs := make([]int, 0, len(m.networks))
-	for i := range m.networks {
-		idxs = append(idxs, i)
-	}
 	base, node, shared := m.base, m.node, m.shared
 	m.mu.Unlock()
-	sort.Ints(idxs)
-	mesh := MeshInterface
+	return ruleset(base, node, shared, privateResolvers(hostResolvers()))
+}
 
+// privateResolvers keeps the IPv4 resolvers (host:port or bare IP) that sit in
+// private, CGNAT or link-local space. Loopback, public and IPv6 are dropped:
+// only private ones are blocked by the egress drop and need an exemption.
+func privateResolvers(in []string) []string {
+	var out []string
+	for _, r := range in {
+		if h, _, err := net.SplitHostPort(r); err == nil {
+			r = h
+		}
+		ip := net.ParseIP(r).To4()
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		if ip.IsPrivate() || ip.IsLinkLocalUnicast() || (ip[0] == 100 && ip[1]&0xc0 == 64) {
+			out = append(out, ip.String())
+		}
+	}
+	return out
+}
+
+func ruleset(base [2]int, node, shared int, resolvers []string) string {
+	mesh := MeshInterface
 	var b strings.Builder
 	b.WriteString("table inet paas\ndelete table inet paas\ntable inet paas {\n")
 	fmt.Fprintf(&b, "  set cluster {\n    type ipv4_addr; flags interval;\n    elements = { %s }\n  }\n", clusterRange(base))
-	b.WriteString("  chain forward {\n    type filter hook forward priority -5; policy accept;\n")
-	b.WriteString("    ct state established,related accept\n")
-	for _, i := range idxs {
-		br := BridgeName(i)
+	// Which bridge owns which /26 is static: the ruleset never needs to know which networks exist.
+	b.WriteString("  set same {\n    type ifname . ipv4_addr\n    elements = {")
+	n := 0
+	for i := 1; i < MaxProjects; i++ {
 		if i == shared {
-			// Shared services: tenants may only reach the shared database ports; the internal
-			// registry and anything else there is reachable from infrastructure addresses only.
-			fmt.Fprintf(&b, "    oifname %q ip saddr & 0.0.255.192 == 0.0.255.192 ip saddr @cluster accept\n", br)
-			fmt.Fprintf(&b, "    oifname %q tcp dport { 3306, 5432 } ip saddr @cluster accept\n", br)
-			fmt.Fprintf(&b, "    oifname %q ip saddr @cluster drop\n", br)
 			continue
 		}
 		t, f := projectOffset(i)
-		fmt.Fprintf(&b, "    oifname %q ip saddr & 0.0.255.192 == 0.0.%d.%d ip saddr @cluster accept\n", br, t, f)
-		fmt.Fprintf(&b, "    oifname %q ip saddr & 0.0.255.192 == 0.0.255.192 ip saddr @cluster accept\n", br) // proxies on other nodes
-		fmt.Fprintf(&b, "    oifname %q ip saddr @cluster drop\n", br)
-		fmt.Fprintf(&b, "    iifname %q oifname %q ip daddr & 0.0.255.192 == 0.0.%d.%d accept\n", br, mesh, t, f)
+		sep := ","
+		if n%6 == 0 {
+			sep = ",\n     "
+		}
+		if n == 0 {
+			sep = "\n     "
+		}
+		fmt.Fprintf(&b, "%s %q . 0.0.%d.%d", sep, BridgeName(i), t, f)
+		n++
 	}
+	b.WriteString("\n    }\n  }\n")
+	b.WriteString("  chain forward {\n    type filter hook forward priority -5; policy accept;\n")
+	b.WriteString("    ct state established,related accept\n")
+	if len(resolvers) > 0 {
+		fmt.Fprintf(&b, "    iifname \"pn*\" ip daddr { %s } meta l4proto { tcp, udp } th dport 53 accept\n", strings.Join(resolvers, ", "))
+	}
+	b.WriteString("    iifname \"pn*\" ip daddr { 169.254.0.0/16, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 } ip daddr != @cluster drop\n")
+	// Into a bridge: infrastructure proxies, the same project from another node, shared DB ports; the rest of the cluster is dropped.
+	b.WriteString("    oifname \"pn*\" ip saddr & 0.0.255.192 == 0.0.255.192 ip saddr @cluster accept\n")
+	b.WriteString("    oifname . ip saddr & 0.0.255.192 @same ip saddr @cluster accept\n")
+	if shared > 0 {
+		fmt.Fprintf(&b, "    oifname %q tcp dport { 3306, 5432 } ip saddr @cluster accept\n", BridgeName(shared))
+	}
+	b.WriteString("    oifname \"pn*\" ip saddr @cluster drop\n")
+	// Out to the mesh: only towards the same project's /26 on other nodes (or the shared project).
+	fmt.Fprintf(&b, "    iifname . ip daddr & 0.0.255.192 @same oifname %q accept\n", mesh)
 	if shared > 0 {
 		t, f := projectOffset(shared)
 		fmt.Fprintf(&b, "    iifname \"pn*\" oifname %q ip daddr & 0.0.255.192 == 0.0.%d.%d accept\n", mesh, t, f)
 	}
 	fmt.Fprintf(&b, "    iifname \"pn*\" oifname %q drop\n", mesh)
-	b.WriteString("  }\n}\n")
+	b.WriteString("  }\n")
+	// Containers may only use the host for DNS and the HTTP(S) proxy.
+	b.WriteString("  chain input {\n    type filter hook input priority 0; policy accept;\n")
+	b.WriteString("    iifname != \"pn*\" accept\n")
+	b.WriteString("    ct state established,related accept\n")
+	b.WriteString("    meta l4proto { tcp, udp } th dport 53 accept\n")
+	b.WriteString("    tcp dport { 80, 443 } accept\n")
+	b.WriteString("    drop\n  }\n}\n")
 
 	b.WriteString("table ip paas_nat\ndelete table ip paas_nat\ntable ip paas_nat {\n")
 	b.WriteString("  chain postrouting {\n    type nat hook postrouting priority srcnat; policy accept;\n")
@@ -293,10 +342,12 @@ func (m *Manager) Ruleset() string {
 	return b.String()
 }
 
-// SyncFirewall applies the isolation and NAT rules.
+// SyncFirewall applies the isolation and NAT rules. The ruleset depends only on the
+// address layout, so one call after registration (before any container starts)
+// covers every project network, present or future.
 func (m *Manager) SyncFirewall() error {
 	if _, err := exec.LookPath("nft"); err != nil {
-		return fmt.Errorf("nft not found: project isolation and NAT are disabled")
+		return fmt.Errorf("nft not found: it is required for project isolation and NAT")
 	}
 	rules := m.Ruleset()
 	// "delete table" fails when the table does not exist yet, so declare it first (done in Ruleset).

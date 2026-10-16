@@ -117,6 +117,11 @@ install_runtime() {
 [worker.containerd]
   enabled = true
   namespace = "paas"
+  # RUN steps get their own firewalled bridge (pn1022); paas-agent writes the
+  # conflist after registration. Without it buildkitd would use the host network.
+  networkMode = "cni"
+  cniConfigPath = "/etc/buildkit/cni.conflist"
+  cniBinaryPath = "/opt/cni/bin"
   gc = true
   [[worker.containerd.gcpolicy]]
     keepBytes = "25GB"
@@ -130,10 +135,13 @@ EOF
 Description=BuildKit (paas builds)
 After=containerd.service
 Requires=containerd.service
+# Fails until paas-agent has written cni.conflist; keep retrying.
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=/usr/local/bin/buildkitd --config /etc/buildkit/buildkitd.toml
 Restart=always
+RestartSec=5
 # Keep builds from starving running apps.
 MemoryHigh=75%
 CPUWeight=50
