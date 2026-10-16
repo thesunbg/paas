@@ -756,6 +756,7 @@ export interface DetectResult {
   commit_sha: string;
   commit_message: string;
   summary: string;
+  prisma?: { provider: string; url_env?: string; migrations: boolean };
   error?: string;
 }
 

@@ -333,6 +333,7 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 		oci.WithEnv(env),
 		oci.WithHostname(firstNonEmpty(req.Hostname, req.ContainerID[:12])),
 		withoutRunTmpfs,
+		withNoFileLimit,
 		oci.WithMounts(mounts),
 		oci.WithLinuxNamespace(specs.LinuxNamespace{Type: specs.NetworkNamespace, Path: m.NetNS}),
 		oci.WithNoNewPrivileges,
@@ -938,5 +939,27 @@ func withoutRunTmpfs(_ context.Context, _ oci.Client, _ *containers.Container, s
 		kept = append(kept, m)
 	}
 	s.Mounts = kept
+	return nil
+}
+
+// withNoFileLimit raises the open-files limit to Docker's default (containerd's
+// spec keeps 1024, and apps such as n8n fail with EMFILE).
+func withNoFileLimit(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+	if s.Process == nil {
+		return nil
+	}
+	n := uint64(1048576)
+	// A container cannot exceed the limit of the runtime that starts it.
+	var cur syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &cur); err == nil && cur.Max < n {
+		n = cur.Max
+	}
+	kept := s.Process.Rlimits[:0]
+	for _, r := range s.Process.Rlimits {
+		if r.Type != "RLIMIT_NOFILE" {
+			kept = append(kept, r)
+		}
+	}
+	s.Process.Rlimits = append(kept, specs.POSIXRlimit{Type: "RLIMIT_NOFILE", Hard: n, Soft: n})
 	return nil
 }

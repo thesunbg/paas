@@ -12,6 +12,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 	"log/slog"
 	"net"
 	"os"
@@ -192,6 +194,9 @@ func (m *Manager) Attach(ctx context.Context, idx int, id, nsPath string) (strin
 	if ip == "" {
 		return "", fmt.Errorf("cni returned no ip")
 	}
+	if err := upLoopback(nsPath); err != nil {
+		slog.Warn("loopback up", "ns", nsPath, "err", err)
+	}
 	if err := m.DNS.ListenOn(m.Gateway(idx)); err != nil {
 		slog.Warn("dns listen", "ip", m.Gateway(idx), "err", err)
 	}
@@ -343,4 +348,25 @@ func HostIP() string {
 		}
 	}
 	return "127.0.0.1"
+}
+
+// upLoopback brings up "lo" in a container's network namespace. The bridge
+// plugin only configures eth0; without lo, anything talking to 127.0.0.1
+// (n8n's task runners, sidecar-style processes, health scripts) hangs.
+func upLoopback(nsPath string) error {
+	ns, err := netns.GetFromPath(nsPath)
+	if err != nil {
+		return err
+	}
+	defer ns.Close()
+	h, err := netlink.NewHandleAt(ns)
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+	lo, err := h.LinkByName("lo")
+	if err != nil {
+		return err
+	}
+	return h.LinkSetUp(lo)
 }

@@ -423,7 +423,7 @@
             {:else if detected}
               <div class="detect ok">
                 <Icon name="zap" size={14} />
-                <span>Detected <b>{detected.summary || detected.language}</b>{detected.commit_sha ? ` at ${detected.commit_sha.slice(0, 7)}` : ''} — type{detected.port && type === 'web' ? ' and port' : ''} preselected.</span>
+                <span>Detected <b>{detected.summary || detected.language}</b>{detected.commit_sha ? ` at ${detected.commit_sha.slice(0, 7)}` : ''} — type{detected.port && type === 'web' ? ' and port' : ''} preselected.{#if detected.prisma}<br />Prisma ({detected.prisma.provider}): <code>{detected.prisma.url_env || 'DATABASE_URL'}</code> is set up automatically{detected.prisma.provider === 'sqlite' ? ' with a persistent volume' : ' with a managed database'}, and {detected.prisma.migrations ? 'migrations run' : 'the schema is pushed'} before the app starts.{/if}</span>
               </div>
             {:else if detectError}
               <div class="detect warn">Could not analyze the repository: {detectError}</div>
