@@ -11,6 +11,7 @@
 #   --domain DOMAIN      base domain for generated app URLs (wildcard DNS *.DOMAIN -> edge nodes)
 #   --email EMAIL        enables automatic HTTPS (Let's Encrypt) on the edge proxy
 #   --https              enables automatic HTTPS without an email
+#   --dashboard-domain D dashboard hostname (default paas.DOMAIN; may equal DOMAIN)
 #   --roles ROLES        comma separated: worker,build,edge (join; default worker)
 #   --server URL         NATS URL of the control plane (join)
 #   --token TOKEN        cluster token (join)
@@ -20,12 +21,13 @@
 set -eu
 
 MODE="${1:-server}"; [ $# -gt 0 ] && shift
-DOMAIN=""; EMAIL=""; HTTPS=0; ROLES=""; SERVER=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
+DOMAIN=""; DASH=""; EMAIL=""; HTTPS=0; ROLES=""; SERVER=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN="$2"; shift 2;;
     --email) EMAIL="$2"; shift 2;;
     --https) HTTPS=1; shift;;
+    --dashboard-domain) DASH="$2"; shift 2;;
     --roles) ROLES="$2"; shift 2;;
     --server) SERVER="$2"; shift 2;;
     --token) TOKEN="$2"; shift 2;;
@@ -230,11 +232,12 @@ write_units() {
     [ -n "$DOMAIN" ] || DOMAIN="$(hostname -I 2>/dev/null | awk '{print $1}').sslip.io"
     SCHEME=http; [ -n "$EMAIL" ] && HTTPS=1; [ "$HTTPS" = 1 ] && SCHEME=https
     TLS=false; [ "$HTTPS" = 1 ] && TLS=true
+    [ -n "$DASH" ] || DASH="paas.${DOMAIN}"
     cat > /etc/paas/paasd.env <<EOF
 PAAS_DATA_DIR=/var/lib/paas
 PAAS_BASE_DOMAIN=${DOMAIN}
-PAAS_DASHBOARD_DOMAIN=paas.${DOMAIN}
-PAAS_PUBLIC_URL=${SCHEME}://paas.${DOMAIN}
+PAAS_DASHBOARD_DOMAIN=${DASH}
+PAAS_PUBLIC_URL=${SCHEME}://${DASH}
 PAAS_ACME_EMAIL=${EMAIL}
 PAAS_TLS=${TLS}
 PAAS_ROLES=${ROLES}
@@ -312,8 +315,8 @@ systemctl restart paasd
 [ -e /etc/systemd/system/paasd-proxy.service ] && systemctl restart paasd-proxy
 
 if [ "$MODE" = server ]; then
-  log "done. Open ${SCHEME}://paas.${DOMAIN} (or http://$(hostname -I | awk '{print $1}'):8080) to create the administrator account."
-  log "DNS: point *.${DOMAIN} and paas.${DOMAIN} to this server."
+  log "done. Open ${SCHEME}://${DASH} (or http://$(hostname -I | awk '{print $1}'):8080) to create the administrator account."
+  log "DNS: point *.${DOMAIN} and ${DASH} to this server."
 else
   log "done. This node registers itself with the control plane within a few seconds (see: journalctl -u paasd -f)."
 fi
