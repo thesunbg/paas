@@ -51,6 +51,17 @@ func TestDetect(t *testing.T) {
 			contains: []string{"npm ci", "npm run build", "FROM scratch", "out"},
 		},
 		{
+			name: "next with prisma",
+			files: map[string]string{
+				"package.json":         `{"scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16","@prisma/client":"5"},"devDependencies":{"prisma":"5"}}`,
+				"package-lock.json":    "{}",
+				"prisma/schema.prisma": "generator client {\n  provider = \"prisma-client-js\"\n}\n",
+			},
+			svcType: model.TypeWeb,
+			lang:    "node", fw: "next",
+			contains: []string{"apk add --no-cache openssl", "npx prisma generate", "npm run build"},
+		},
+		{
 			name:    "next without start script",
 			files:   map[string]string{"package.json": `{"main":"index.js","scripts":{"build":"next build"},"dependencies":{"next":"15"}}`},
 			svcType: model.TypeWeb,

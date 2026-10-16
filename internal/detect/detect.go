@@ -291,11 +291,21 @@ func (d *detector) node() (*Plan, error) {
 		cache = "/root/.bun/install/cache"
 	}
 
+	// Prisma generates its client from the schema, which is not there yet when
+	// dependencies install (only package files are copied first, for caching).
+	prisma := pkg.has("prisma") || pkg.has("@prisma/client") || exists(filepath.Join(d.dir, "prisma", "schema.prisma"))
+
 	var df strings.Builder
 	fmt.Fprintf(&df, "# syntax=docker/dockerfile:1\nFROM %s AS build\nWORKDIR /app\n", image)
+	if prisma && strings.Contains(image, "alpine") {
+		df.WriteString("RUN apk add --no-cache openssl\n") // Prisma's query engine needs libssl
+	}
 	df.WriteString("COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* bun.lockb* bun.lock* .npmrc* ./\n")
 	fmt.Fprintf(&df, "RUN --mount=type=cache,target=%s --mount=type=secret,id=paasenv sh -c %s\n", cache, shQuote(secretEnv+" "+install))
 	df.WriteString("COPY . .\n")
+	if prisma {
+		df.WriteString(runWithEnv("npx prisma generate") + "\n")
+	}
 	if build != "" {
 		if plan.Framework == "next" {
 			df.WriteString("ENV NEXT_TELEMETRY_DISABLED=1\n")
