@@ -124,6 +124,7 @@ func (s *Server) routes() http.Handler {
 	h("POST /api/v1/databases/{id}/backups/{backup}/restore", s.handleRestoreBackup)
 	h("POST /api/v1/databases/{id}/upgrade", s.handleUpgradeDatabase)
 	h("POST /api/v1/databases/{id}/retry", s.handleRetryDatabase)
+	h("POST /api/v1/databases/{id}/import", s.handleDatabaseImport)
 	h("POST /api/v1/databases/{id}/public", s.handleDatabasePublic)
 	h("GET /api/v1/databases/{id}/metrics", s.handleDatabaseMetrics)
 	h("PUT /api/v1/databases/{id}/quota", s.handleDatabaseQuota)

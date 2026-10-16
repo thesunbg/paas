@@ -489,3 +489,74 @@ func firstNonEmpty(v ...string) string {
 	}
 	return ""
 }
+
+// ImportExitDump is the exit code of an import whose source could not be dumped.
+const ImportExitDump = 3
+
+// importFile holds the dump during an import, on the data volume (not the
+// container's root filesystem, which can be small).
+func importFile(engine string) string { return Engines[engine].DataPath + "/.paas-import" }
+
+// ImportFrom returns a command, run inside the database server, that copies
+// the database at sourceURL into this one (existing objects are replaced).
+// The source credentials travel in the environment, never on a command line.
+func ImportFrom(engine string, shared bool, c Credentials, sourceURL string) (Command, error) {
+	u, err := url.Parse(sourceURL)
+	if err != nil || u.Host == "" {
+		return Command{}, fmt.Errorf("invalid source URL")
+	}
+	file := importFile(engine)
+	switch engine {
+	case Postgres:
+		if u.Scheme != "postgres" && u.Scheme != "postgresql" {
+			return Command{}, fmt.Errorf("the source must be a postgres:// URL")
+		}
+		user := c.Username
+		role := ""
+		if shared {
+			user, role = "postgres", " --role="+shQuote(c.Username)
+		}
+		script := fmt.Sprintf(`F=%[1]s
+pg_dump --no-owner --no-acl -Fc -d "$SRC_URL" -f "$F" || { rm -f "$F"; exit %[2]d; }
+pg_restore -U %[3]s --clean --if-exists --no-owner --no-acl%[4]s -d %[5]s "$F"
+rc=$?; rm -f "$F"; exit $rc`, shQuote(file), ImportExitDump, shQuote(user), role, shQuote(c.DBName))
+		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{"SRC_URL=" + sourceURL}}, nil
+	case MySQL:
+		if u.Scheme != "mysql" && u.Scheme != "mariadb" {
+			return Command{}, fmt.Errorf("the source must be a mysql:// URL")
+		}
+		src := strings.TrimPrefix(u.Path, "/")
+		if src == "" {
+			return Command{}, fmt.Errorf("the source URL must name a database (mysql://user:pass@host:3306/name)")
+		}
+		pass, _ := u.User.Password()
+		port := firstNonEmpty(u.Port(), "3306")
+		// MariaDB 11.4+ clients verify the server certificate by default, which
+		// fails against most MySQL servers; older clients lack the option.
+		script := fmt.Sprintf(`F=%[1]s
+SSL=""; mariadb-dump --help 2>/dev/null | grep -q ssl-verify-server-cert && SSL="--skip-ssl-verify-server-cert"
+MYSQL_PWD="$SRC_PASS" mariadb-dump $SSL -h "$SRC_HOST" -P "$SRC_PORT" -u "$SRC_USER" --single-transaction --routines --triggers --no-tablespaces "$SRC_DB" > "$F" || { rm -f "$F"; exit %[2]d; }
+MYSQL_PWD="$DST_PASS" mariadb -uroot %[3]s < "$F"
+rc=$?; rm -f "$F"; exit $rc`, shQuote(file), ImportExitDump, shQuote(c.DBName))
+		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{
+			"SRC_HOST=" + u.Hostname(), "SRC_PORT=" + port, "SRC_USER=" + u.User.Username(), "SRC_PASS=" + pass, "SRC_DB=" + src,
+			"DST_PASS=" + firstNonEmpty(c.RootPass, c.Password),
+		}}, nil
+	case Mongo:
+		if u.Scheme != "mongodb" && u.Scheme != "mongodb+srv" {
+			return Command{}, fmt.Errorf("the source must be a mongodb:// URL")
+		}
+		src := strings.TrimPrefix(u.Path, "/")
+		if src == "" {
+			return Command{}, fmt.Errorf("the source URL must name a database (mongodb://user:pass@host:27017/name)")
+		}
+		script := fmt.Sprintf(`F=%[1]s
+mongodump --quiet --uri "$SRC_URL" --archive="$F" --gzip || { rm -f "$F"; exit %[2]d; }
+mongorestore --quiet --archive="$F" --gzip --drop -u "$DST_USER" -p "$DST_PASS" --authenticationDatabase admin --nsFrom "$SRC_DB.*" --nsTo %[3]s
+rc=$?; rm -f "$F"; exit $rc`, shQuote(file), ImportExitDump, shQuote(c.DBName+".*"))
+		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{"SRC_URL=" + sourceURL, "SRC_DB=" + src, "DST_USER=" + c.Username, "DST_PASS=" + c.Password}}, nil
+	}
+	return Command{}, fmt.Errorf("importing is not supported for %s; restore a dump file instead", engine)
+}
+
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'" }

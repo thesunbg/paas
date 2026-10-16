@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -43,6 +44,10 @@ type Agent struct {
 	base    [2]int
 	index   int
 
+	standalone bool         // own process (joined node), not embedded in the control plane
+	busy       atomic.Int32 // builds, jobs and transfers in progress (see work)
+	postponed  int          // self-update checks skipped because of busy
+
 	cpuMu       sync.Mutex
 	lastCPU     [2]uint64
 	lastEvictAt time.Time
@@ -61,13 +66,14 @@ func New(ctx context.Context, cfg config.Agent, nc *nats.Conn) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	standalone := nc == nil
 	if nc == nil {
 		nc, err = bus.Connect(cfg.NATSURL, cfg.ClusterToken, "agent-"+cfg.NodeName)
 		if err != nil {
 			return nil, err
 		}
 	}
-	a := &Agent{cfg: cfg, nc: nc, rt: r, net: nm}
+	a := &Agent{cfg: cfg, nc: nc, rt: r, net: nm, standalone: standalone}
 	if cfg.Mesh {
 		m, err := network.NewMesh(cfg.DataDir, cfg.WGPort)
 		if err != nil {
@@ -153,6 +159,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.applyDNS(msg.Data)
 	}
 
+	if a.standalone {
+		go a.selfUpdateLoop(ctx)
+	}
 	slog.Info("agent ready", "node", a.cfg.NodeName, "id", a.nodeID, "roles", a.cfg.Roles, "address", a.cfg.NodeAddress)
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
@@ -320,6 +329,7 @@ func (a *Agent) handleRemoveFiles(ctx context.Context, req *proto.RemoveFilesReq
 }
 
 func (a *Agent) handleBuild(ctx context.Context, req *proto.BuildRequest) *proto.BuildReply {
+	defer a.work()()
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
 	defer cancel()
 	lb := newLineBatcher(a.nc, req.LogSubject)
@@ -443,6 +453,7 @@ func (a *Agent) applyMesh(data []byte) {
 }
 
 func (a *Agent) handlePush(ctx context.Context, req *proto.PushRequest) *proto.GenericReply {
+	defer a.work()()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	if err := a.rt.Push(ctx, req.Image, req.Target, req.Insecure); err != nil {
@@ -482,6 +493,7 @@ func (a *Agent) serveStaticOrigin(ctx context.Context) {
 }
 
 func (a *Agent) handleJob(ctx context.Context, req *proto.RunRequest) *proto.JobReply {
+	defer a.work()()
 	timeout := time.Duration(req.TimeoutSec)*time.Second + 10*time.Minute
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -491,6 +503,7 @@ func (a *Agent) handleJob(ctx context.Context, req *proto.RunRequest) *proto.Job
 
 // handleTransfer moves a file between the node and object storage.
 func (a *Agent) handleTransfer(ctx context.Context, req *proto.TransferRequest) *proto.GenericReply {
+	defer a.work()()
 	path, err := a.dataPath(req.Path)
 	if err != nil || path == "" {
 		return &proto.GenericReply{Error: "invalid path"}

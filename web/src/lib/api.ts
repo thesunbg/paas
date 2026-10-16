@@ -3,7 +3,7 @@
 export type ServiceType = 'web' | 'worker' | 'static' | 'cron';
 export type ServiceStatus = 'created' | 'deploying' | 'running' | 'sleeping' | 'stopped' | 'failed';
 export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'active' | 'superseded' | 'failed' | 'cancelled';
-export type DatabaseStatus = 'provisioning' | 'ready' | 'failed' | 'upgrading' | 'deleting';
+export type DatabaseStatus = 'provisioning' | 'ready' | 'failed' | 'upgrading' | 'deleting' | 'importing';
 export type Engine = 'postgres' | 'mysql' | 'redis' | 'mongo';
 export type QoS = 'guaranteed' | 'burstable' | 'best-effort';
 export type Role = 'owner' | 'admin' | 'developer' | 'viewer';
@@ -907,6 +907,7 @@ export const api = {
   ha: (id: string) => get<HAInfo>(`/databases/${e(id)}/ha`),
   setHA: (id: string, enabled: boolean) => post<{ ha: boolean }>(`/databases/${e(id)}/ha`, { enabled }),
   switchover: (id: string) => post<{ status: string }>(`/databases/${e(id)}/ha/switchover`),
+  importDatabase: (id: string, source_url: string) => post<{ status: string }>(`/databases/${e(id)}/import`, { source_url }),
   databasePooler: (id: string, enabled: boolean) => post<{ pooler: boolean }>(`/databases/${e(id)}/pooler`, { enabled }),
   databasePublic: (id: string, enabled: boolean, allowed_cidrs: string[] = []) =>
     post<{ public_port: number; allowed_cidrs: string[] }>(`/databases/${e(id)}/public`, { enabled, allowed_cidrs }),

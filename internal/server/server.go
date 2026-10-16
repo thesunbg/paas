@@ -236,6 +236,9 @@ func (s *Server) registerBusHandlers() error {
 	if _, err := bus.HandleQueue(s.nc, proto.SubjRegister, q, s.onRegister); err != nil {
 		return err
 	}
+	if _, err := bus.HandleQueue(s.nc, proto.SubjBinary, q, s.onBinary); err != nil {
+		return err
+	}
 	if _, err := s.nc.QueueSubscribe(proto.SubjHeartbeat, q, s.onHeartbeat); err != nil {
 		return err
 	}

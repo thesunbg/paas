@@ -20,6 +20,7 @@ const (
 	SubjDNSGet     = "paas.dns.get"
 	SubjMesh       = "paas.mesh" // server -> agents (WireGuard peers)
 	SubjMeshGet    = "paas.mesh.get"
+	SubjBinary     = "paas.agent.binary" // agent -> server: which paasd binary nodes should run
 )
 
 // AgentSubject returns the subject an agent listens on for a command.
@@ -60,6 +61,14 @@ type RegisterRequest struct {
 	Version      string            `json:"version"`
 	WGPublicKey  string            `json:"wg_public_key"`
 	WGPort       int               `json:"wg_port"`
+}
+
+// BinaryInfo names the paasd binary of the control plane, so standalone agents
+// can update themselves to it.
+type BinaryInfo struct {
+	Arch   string `json:"arch"`
+	SHA256 string `json:"sha256"`
+	URL    string `json:"url"`
 }
 
 type RegisterReply struct {

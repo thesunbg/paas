@@ -20,6 +20,7 @@
   import Users from '../components/db/Users.svelte';
   import PITR from '../components/db/PITR.svelte';
   import HA from '../components/db/HA.svelte';
+  import Import from '../components/db/Import.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -47,7 +48,7 @@
   }
   let upgradeSize = $state('small');
 
-  const transitional = (s?: string) => s === 'provisioning' || s === 'upgrading' || s === 'deleting';
+  const transitional = (s?: string) => s === 'provisioning' || s === 'upgrading' || s === 'deleting' || s === 'importing';
 
   async function load() {
     try {
@@ -253,6 +254,7 @@
       {#if (db.engine === 'postgres' || db.engine === 'mysql') && isDev}<Users {detail} {isAdmin} />{/if}
       {#if db.engine === 'postgres'}<PITR {detail} {isAdmin} reload={load} />{/if}
       {#if db.engine === 'postgres'}<HA {detail} {isAdmin} reload={load} />{/if}
+      {#if isAdmin && db.engine !== 'redis'}<Import {detail} reload={load} />{/if}
     </div>
 
     <div class="card" style="margin-top:16px">

@@ -17,6 +17,7 @@ import (
 // handlePITRPrepare builds the data directory of a server that recovers a
 // PostgreSQL database to a point in time (see server/dbaas_pitr.go).
 func (a *Agent) handlePITRPrepare(ctx context.Context, req *proto.PITRPrepareRequest) *proto.GenericReply {
+	defer a.work()()
 	if err := a.pitrPrepare(req); err != nil {
 		return &proto.GenericReply{Error: err.Error()}
 	}
