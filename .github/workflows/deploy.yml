@@ -3,6 +3,9 @@ name: deploy
 # Installs (or upgrades) paas on a server over SSH.
 # Needs the repository secret DEPLOY_PASSWORD (or DEPLOY_SSH_KEY) for the SSH user.
 on:
+  # Pushing to the "deploy" branch deploys with the defaults below.
+  push:
+    branches: [deploy]
   workflow_dispatch:
     inputs:
       host:
@@ -27,7 +30,7 @@ on:
         default: ""
 
 concurrency:
-  group: deploy-${{ inputs.host }}
+  group: deploy-${{ inputs.host || 'default' }}
   cancel-in-progress: false
 
 jobs:
@@ -35,9 +38,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      HOST: ${{ inputs.host }}
-      PORT: ${{ inputs.port }}
-      USER_NAME: ${{ inputs.user }}
+      HOST: ${{ inputs.host || '202.92.6.129' }}
+      PORT: ${{ inputs.port || '24700' }}
+      USER_NAME: ${{ inputs.user || 'root' }}
       SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
       SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
     steps:
