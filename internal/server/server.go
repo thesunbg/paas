@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -343,6 +344,7 @@ func (s *Server) leaderLoop(ctx context.Context) {
 		_ = s.store.FailStuckDeployments(lctx)
 		go s.deployWorker(lctx)
 		go s.resumeProvisioning(lctx)
+		go s.syncBaseDomain(lctx)
 		go s.cronLoop(lctx)
 		go s.metricsLoop(lctx)
 		go s.reconcileLoop(lctx)
@@ -359,5 +361,45 @@ func (s *Server) leaderLoop(ctx context.Context) {
 		}
 		cancel()
 		_ = conn.Close(context.Background())
+	}
+}
+
+// syncBaseDomain moves generated domains to the current base domain after it
+// changed (e.g. from <ip>.sslip.io to a real domain) and points the GitHub App
+// webhook at the current public URL.
+func (s *Server) syncBaseDomain(ctx context.Context) {
+	doms, err := s.store.AllDomains(ctx)
+	if err != nil {
+		return
+	}
+	moved := 0
+	for _, d := range doms {
+		if !d.IsGenerated || strings.HasSuffix(d.Hostname, "."+s.cfg.BaseDomain) {
+			continue
+		}
+		svc, err := s.store.ServiceByID(ctx, d.ServiceID)
+		if err != nil {
+			continue
+		}
+		proj, err := s.store.ProjectByID(ctx, svc.ProjectID)
+		if err != nil {
+			continue
+		}
+		host := s.generatedDomain(svc.Slug, proj.Slug)
+		if _, err := s.store.DB.Exec(ctx, `UPDATE domains SET hostname=$2 WHERE id=$1`, d.ID, host); err != nil {
+			slog.Warn("move generated domain", "from", d.Hostname, "to", host, "err", err)
+			continue
+		}
+		slog.Info("generated domain moved", "from", d.Hostname, "to", host)
+		moved++
+	}
+	if moved > 0 {
+		s.publishRoutes(ctx)
+	}
+	if c, err := s.githubApp(ctx); err == nil {
+		hook := s.cfg.PublicURL + "/api/v1/webhooks/github-app"
+		if err := c.SetHookURL(ctx, hook); err != nil {
+			slog.Warn("github app webhook url", "err", err)
+		}
 	}
 }

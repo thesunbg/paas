@@ -21,9 +21,13 @@ on:
         required: true
         default: root
       domain:
-        description: Base domain for apps (empty = <ip>.sslip.io)
+        description: Base domain for apps (wildcard DNS *.domain -> server)
         required: false
         default: ""
+      https:
+        description: Automatic HTTPS (Let's Encrypt)
+        required: false
+        default: "true"
       email:
         description: Email for automatic HTTPS (empty = HTTP only)
         required: false
@@ -41,6 +45,8 @@ jobs:
       HOST: ${{ inputs.host || '202.92.6.129' }}
       PORT: ${{ inputs.port || '24700' }}
       USER_NAME: ${{ inputs.user || 'root' }}
+      DOMAIN: ${{ inputs.domain || vars.PAAS_DOMAIN || 'nguyenvando.com' }}
+      HTTPS: ${{ inputs.https || vars.PAAS_HTTPS || 'true' }}
       SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
       SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
     steps:
@@ -85,11 +91,11 @@ jobs:
 
       - name: Install
         env:
-          DOMAIN: ${{ inputs.domain }}
-          EMAIL: ${{ inputs.email }}
+          EMAIL: ${{ inputs.email || vars.PAAS_EMAIL }}
         run: |
           ARGS="server --binary /tmp/paasd"
           [ -n "$DOMAIN" ] && ARGS="$ARGS --domain $DOMAIN"
+          [ "$HTTPS" = true ] && ARGS="$ARGS --https"
           [ -n "$EMAIL" ] && ARGS="$ARGS --email $EMAIL"
           $SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" "install -m 0755 /tmp/paas /usr/local/bin/paas && sh /tmp/install.sh $ARGS"
 

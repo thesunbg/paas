@@ -10,6 +10,7 @@
 # Options:
 #   --domain DOMAIN      base domain for generated app URLs (wildcard DNS *.DOMAIN -> edge nodes)
 #   --email EMAIL        enables automatic HTTPS (Let's Encrypt) on the edge proxy
+#   --https              enables automatic HTTPS without an email
 #   --roles ROLES        comma separated: worker,build,edge (join; default worker)
 #   --server URL         NATS URL of the control plane (join)
 #   --token TOKEN        cluster token (join)
@@ -19,11 +20,12 @@
 set -eu
 
 MODE="${1:-server}"; [ $# -gt 0 ] && shift
-DOMAIN=""; EMAIL=""; ROLES=""; SERVER=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
+DOMAIN=""; EMAIL=""; HTTPS=0; ROLES=""; SERVER=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN="$2"; shift 2;;
     --email) EMAIL="$2"; shift 2;;
+    --https) HTTPS=1; shift;;
     --roles) ROLES="$2"; shift 2;;
     --server) SERVER="$2"; shift 2;;
     --token) TOKEN="$2"; shift 2;;
@@ -226,13 +228,15 @@ setup_postgres() {
 write_units() {
   if [ "$MODE" = server ]; then
     [ -n "$DOMAIN" ] || DOMAIN="$(hostname -I 2>/dev/null | awk '{print $1}').sslip.io"
-    SCHEME=http; [ -n "$EMAIL" ] && SCHEME=https
+    SCHEME=http; [ -n "$EMAIL" ] && HTTPS=1; [ "$HTTPS" = 1 ] && SCHEME=https
+    TLS=false; [ "$HTTPS" = 1 ] && TLS=true
     cat > /etc/paas/paasd.env <<EOF
 PAAS_DATA_DIR=/var/lib/paas
 PAAS_BASE_DOMAIN=${DOMAIN}
 PAAS_DASHBOARD_DOMAIN=paas.${DOMAIN}
 PAAS_PUBLIC_URL=${SCHEME}://paas.${DOMAIN}
 PAAS_ACME_EMAIL=${EMAIL}
+PAAS_TLS=${TLS}
 PAAS_ROLES=${ROLES}
 PAAS_PROXY_HTTP_ADDR=:80
 PAAS_PROXY_HTTPS_ADDR=:443

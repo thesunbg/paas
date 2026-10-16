@@ -320,3 +320,21 @@ func firstNonEmpty(v ...string) string {
 	}
 	return ""
 }
+
+// SetHookURL points the app webhook at url (when the server's public URL changes).
+func (c *Client) SetHookURL(ctx context.Context, url string) error {
+	jwt, err := c.JWT()
+	if err != nil {
+		return err
+	}
+	var cur struct {
+		URL string `json:"url"`
+	}
+	if err := do(ctx, http.MethodGet, API+"/app/hook/config", "Bearer "+jwt, nil, &cur); err != nil {
+		return err
+	}
+	if cur.URL == url {
+		return nil
+	}
+	return do(ctx, http.MethodPatch, API+"/app/hook/config", "Bearer "+jwt, map[string]string{"url": url, "content_type": "json"}, nil)
+}

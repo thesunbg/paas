@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/thesunbg/paas/main/internal/install
   | sudo sh -s -- server --domain apps.example.com --email you@example.com
 ```
 
-Point DNS for `*.apps.example.com` and `paas.apps.example.com` at the server. Then open `https://paas.apps.example.com` and create the administrator account. The script installs:
+Use `--https` instead of `--email` for automatic HTTPS without an email. Point DNS for `*.apps.example.com` and `paas.apps.example.com` at the server. Changing `--domain` later and re-running the script moves the generated app domains and the GitHub App webhook to the new domain. Then open `https://paas.apps.example.com` and create the administrator account. The script installs:
 - containerd 2, crun, runc, the CNI plugins and BuildKit;
 - PostgreSQL for the control-plane state;
 - zram and kernel tuning;

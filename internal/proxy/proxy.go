@@ -133,7 +133,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 	handler := newRateLimiter(p.cfg.RateLimit, p.cfg.RateBurst).wrap(p)
 	var servers []*http.Server
 	errc := make(chan error, 2)
-	if p.cfg.ACMEEmail != "" {
+	if p.cfg.ACMEEmail != "" || p.cfg.TLS {
 		magic, issuer := p.certmagic()
 		tlsCfg := magic.TLSConfig()
 		tlsCfg.NextProtos = append([]string{"h2", "http/1.1"}, tlsCfg.NextProtos...)
@@ -155,7 +155,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 		srv := &http.Server{Addr: p.cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 15 * time.Second}
 		servers = append(servers, srv)
 		go func() { errc <- srv.ListenAndServe() }()
-		slog.Info("edge proxy listening (HTTP only; set PAAS_ACME_EMAIL for automatic HTTPS)", "http", p.cfg.HTTPAddr)
+		slog.Info("edge proxy listening (HTTP only; set PAAS_TLS=true for automatic HTTPS)", "http", p.cfg.HTTPAddr)
 	}
 	select {
 	case <-ctx.Done():

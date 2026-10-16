@@ -66,6 +66,7 @@ type Proxy struct {
 	HTTPAddr          string // PAAS_PROXY_HTTP_ADDR
 	HTTPSAddr         string // PAAS_PROXY_HTTPS_ADDR
 	ACMEEmail         string // PAAS_ACME_EMAIL, enables automatic HTTPS when set
+	TLS               bool   // PAAS_TLS, enables automatic HTTPS without an email
 	ACMECA            string // PAAS_ACME_CA, optional custom directory (e.g. staging)
 	DataDir           string // PAAS_DATA_DIR
 	DashboardUpstream string // PAAS_DASHBOARD_UPSTREAM, e.g. 127.0.0.1:8080
@@ -168,6 +169,7 @@ func LoadProxy() Proxy {
 		HTTPAddr:          env("PAAS_PROXY_HTTP_ADDR", ":80"),
 		HTTPSAddr:         env("PAAS_PROXY_HTTPS_ADDR", ":443"),
 		ACMEEmail:         env("PAAS_ACME_EMAIL", ""),
+		TLS:               envBool("PAAS_TLS", false),
 		ACMECA:            env("PAAS_ACME_CA", ""),
 		DataDir:           filepath.Join(data, "proxy"),
 		DashboardUpstream: env("PAAS_DASHBOARD_UPSTREAM", "127.0.0.1:8080"),
