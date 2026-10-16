@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/mail"
@@ -110,12 +112,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	key := strings.ToLower(strings.TrimSpace(in.Email))
-	if !loginGuard.allowed(key) || !loginGuard.allowed(clientAddr(r)) {
+	email, ip := strings.ToLower(strings.TrimSpace(in.Email)), clientAddr(r)
+	pairKey, emailKey := email+"|"+ip, "email:"+email
+	if !loginGuard.allowed(pairKey, maxPerEmailIP) || !loginGuard.allowed(ip, maxPerIP) || !loginGuard.allowed(emailKey, maxPerEmail) {
 		writeError(w, 429, "too many failed attempts; try again in 15 minutes")
 		return
 	}
-	failed := func() { loginGuard.fail(key); loginGuard.fail(clientAddr(r)) }
+	failed := func() { loginGuard.fail(pairKey); loginGuard.fail(ip); loginGuard.fail(emailKey) }
 	u, err := s.store.UserByEmail(r.Context(), strings.TrimSpace(in.Email))
 	if err != nil {
 		// Spend comparable time to avoid user enumeration.
@@ -139,13 +142,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 401, map[string]any{"error": "two-factor code required", "two_factor": true})
 			return
 		}
-		if !totp.Verify(secret, in.Code, time.Now()) {
+		if !s.verifyTOTP(r.Context(), u.ID, secret, in.Code) {
 			failed()
 			writeJSON(w, 401, map[string]any{"error": "invalid two-factor code", "two_factor": true})
 			return
 		}
 	}
 	s.startSession(w, r, u)
+}
+
+// verifyTOTP checks a code and burns its time step so it cannot be replayed.
+func (s *Server) verifyTOTP(ctx context.Context, userID, secret, code string) bool {
+	step, ok := totp.Match(secret, code, time.Now())
+	if !ok {
+		return false
+	}
+	used, err := s.store.ConsumeTOTPStep(ctx, userID, step)
+	return err == nil && used
 }
 
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -214,6 +227,10 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	if err := s.store.RevokeCredentials(r.Context(), u.ID, currentSessionHash(r)); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
@@ -270,6 +287,18 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name required")
 		return
 	}
+	if l := s.teamLimits(r.Context()); limited(r) && l.MaxTeams > 0 {
+		var n int
+		err := s.store.DB.QueryRow(r.Context(), `SELECT count(*) FROM memberships WHERE user_id=$1 AND role='owner'`, currentUser(r).ID).Scan(&n)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		if n >= l.MaxTeams {
+			writeError(w, 403, fmt.Sprintf("you can own at most %d teams; ask an administrator for more", l.MaxTeams))
+			return
+		}
+	}
 	t, err := s.store.CreateTeam(r.Context(), in.Name, util.Slugify(in.Name)+"-"+util.RandomToken(2), currentUser(r).ID, false)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -322,6 +351,17 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid email")
 			return
 		}
+		// Without this, AddMember would sidestep the registration switch and per-IP cap.
+		if !currentUser(r).IsAdmin {
+			if signup, _ := s.store.GetSetting(r.Context(), settingAllowSignup); signup != "true" {
+				writeError(w, 403, "registration is closed; ask an administrator to create the account")
+				return
+			}
+			if max := s.teamLimits(r.Context()).MaxPerIPPerDay; max > 0 && !signupGuard.take(clientAddr(r), max) {
+				writeError(w, 429, "too many accounts created from this address today")
+				return
+			}
+		}
 		pass := util.RandomPassword(16)
 		u, err = s.createUser(r, credentialsInput{Email: in.Email, Password: pass}, false)
 		resp["temporary_password"] = pass
@@ -334,7 +374,8 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	resp["user"] = u
+	// Only echo what the caller supplied: an existing account's profile is not theirs to read.
+	resp["email"], resp["role"] = u.Email, in.Role
 	writeJSON(w, 201, resp)
 }
 
@@ -387,7 +428,13 @@ func (s *Server) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "call /me/2fa/setup first")
 		return
 	}
-	if !totp.Verify(secret, in.Code, time.Now()) {
+	key := "2fa:" + u.ID
+	if !loginGuard.allowed(key, maxPer2FA) {
+		writeError(w, 429, "too many failed attempts; try again in 15 minutes")
+		return
+	}
+	if !s.verifyTOTP(r.Context(), u.ID, secret, in.Code) {
+		loginGuard.fail(key)
 		writeError(w, 400, "invalid code")
 		return
 	}
@@ -412,8 +459,14 @@ func (s *Server) handle2FADisable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "two-factor authentication is not enabled")
 		return
 	}
+	key := "2fa:" + u.ID
+	if !loginGuard.allowed(key, maxPer2FA) {
+		writeError(w, 429, "too many failed attempts; try again in 15 minutes")
+		return
+	}
 	secret, _ := s.box.Decrypt(u.TOTPSecret)
-	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)) != nil || !totp.Verify(secret, in.Code, time.Now()) {
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)) != nil || !s.verifyTOTP(r.Context(), u.ID, secret, in.Code) {
+		loginGuard.fail(key)
 		writeError(w, 400, "password or code is wrong")
 		return
 	}
@@ -421,10 +474,19 @@ func (s *Server) handle2FADisable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	if err := s.store.RevokeCredentials(r.Context(), u.ID, currentSessionHash(r)); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
 	writeJSON(w, 200, map[string]string{"status": "disabled"})
 }
 
-// attemptGuard locks out a key (email or client IP) after repeated failures.
+// attemptGuard locks out a key after repeated failures. Login counts three keys
+// so one attacker cannot lock a victim out: email+IP protects a single account
+// from a single address, IP stops spraying passwords across accounts yet
+// tolerates a NAT (hence the higher cap), and email alone is a ceiling against
+// a distributed attack.
+// In-memory per control plane; remove when the counters move to a table.
 type attemptGuard struct {
 	mu       sync.Mutex
 	failures map[string][]time.Time
@@ -433,7 +495,10 @@ type attemptGuard struct {
 var loginGuard = &attemptGuard{failures: map[string][]time.Time{}}
 
 const (
-	maxFailures   = 10
+	maxPerEmailIP = 10
+	maxPerIP      = 50
+	maxPerEmail   = 100
+	maxPer2FA     = 10
 	failureWindow = 15 * time.Minute
 )
 
@@ -448,10 +513,10 @@ func (g *attemptGuard) recent(key string) []time.Time {
 	return keep
 }
 
-func (g *attemptGuard) allowed(key string) bool {
+func (g *attemptGuard) allowed(key string, max int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return len(g.recent(key)) < maxFailures
+	return len(g.recent(key)) < max
 }
 
 func (g *attemptGuard) fail(key string) {

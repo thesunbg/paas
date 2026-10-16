@@ -21,9 +21,10 @@ type TeamLimits struct {
 	MaxMemoryMB    int `json:"max_memory_mb"` // per instance
 	MaxReplicas    int `json:"max_replicas"`  // per service, including autoscaling
 	MaxPerIPPerDay int `json:"max_signups_per_ip_per_day"`
+	MaxTeams       int `json:"max_teams"` // owned per user, including the personal one
 }
 
-var defaultTeamLimits = TeamLimits{MaxProjects: 3, MaxServices: 5, MaxDatabases: 2, MaxMemoryMB: 512, MaxReplicas: 2, MaxPerIPPerDay: 3}
+var defaultTeamLimits = TeamLimits{MaxProjects: 3, MaxServices: 5, MaxDatabases: 2, MaxMemoryMB: 512, MaxReplicas: 2, MaxPerIPPerDay: 3, MaxTeams: 3}
 
 func (s *Server) teamLimits(ctx context.Context) TeamLimits {
 	l := defaultTeamLimits
@@ -125,7 +126,7 @@ func (s *Server) handlePutSystemSettings(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	if in.Limits != nil {
 		l := *in.Limits
-		for _, v := range []int{l.MaxProjects, l.MaxServices, l.MaxDatabases, l.MaxMemoryMB, l.MaxReplicas, l.MaxPerIPPerDay} {
+		for _, v := range []int{l.MaxProjects, l.MaxServices, l.MaxDatabases, l.MaxMemoryMB, l.MaxReplicas, l.MaxPerIPPerDay, l.MaxTeams} {
 			if v < 0 {
 				writeError(w, 400, "limits cannot be negative")
 				return

@@ -99,6 +99,15 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "you cannot remove your own administrator role")
 		return
 	}
+	pw := in.Password
+	if in.ResetPassword || pw != "" {
+		if pw == "" {
+			pw = util.RandomPassword(16)
+		} else if len(pw) < 8 {
+			writeError(w, 400, "password must be at least 8 characters")
+			return
+		}
+	}
 	name, admin := u.Name, u.IsAdmin
 	if in.Name != nil && strings.TrimSpace(*in.Name) != "" {
 		name = strings.TrimSpace(*in.Name)
@@ -112,13 +121,8 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{}
 	if in.ResetPassword || in.Password != "" {
-		pw := in.Password
-		if pw == "" {
-			pw = util.RandomPassword(16)
+		if in.Password == "" {
 			out["password"] = pw
-		} else if len(pw) < 8 {
-			writeError(w, 400, "password must be at least 8 characters")
-			return
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
 		if err != nil {
@@ -132,6 +136,14 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Disable2FA {
 		if err := s.store.SetTOTP(r.Context(), u.ID, "", false); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+	}
+	// A new password or removed 2FA invalidates every credential, including the
+	// admin's own session when they edit themselves.
+	if in.ResetPassword || in.Password != "" || in.Disable2FA {
+		if err := s.store.RevokeCredentials(r.Context(), u.ID, ""); err != nil {
 			writeError(w, 500, err.Error())
 			return
 		}

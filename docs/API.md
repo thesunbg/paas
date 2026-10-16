@@ -5,7 +5,7 @@ Base URL: `http://<control-plane>:8080/api/v1` (the dashboard domain proxies to 
 Authentication, any of:
 - `Authorization: Bearer <token>` — a session token from `/auth/login` or an API token (`paas_…`) from `/tokens`.
 - Cookie `paas_session` (set by login/register; used by the dashboard). Cookie-authenticated non-GET requests must be same-origin.
-- `?access_token=<token>` query parameter (for `EventSource` streams).
+- `?access_token=<token>` query parameter, only on the `…/logs/stream` routes (for `EventSource`); other routes ignore it.
 
 Errors are `{"error": "message"}` with a 4xx/5xx status.
 

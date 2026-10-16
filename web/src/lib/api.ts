@@ -639,7 +639,8 @@ export interface TwoFactorSetup {
 }
 
 export interface AddMemberResponse {
-  user: User;
+  email: string;
+  role: Role;
   temporary_password?: string;
 }
 
@@ -818,6 +819,7 @@ export interface TeamLimits {
   max_memory_mb: number;
   max_replicas: number;
   max_signups_per_ip_per_day: number;
+  max_teams: number;
 }
 
 export interface SystemSettings {

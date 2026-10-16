@@ -120,8 +120,8 @@
     membersError = '';
     try {
       const r = await api.addMember(team.id, inviteEmail.trim(), inviteRole);
-      invited = { email: r.user.email, password: r.temporary_password };
-      toast.success(`${r.user.email} added as ${inviteRole}`);
+      invited = { email: r.email, password: r.temporary_password };
+      toast.success(`${r.email} added as ${inviteRole}`);
       inviteEmail = '';
       await loadMembers();
     } catch (err) {

@@ -41,19 +41,21 @@ func Code(secret string, t time.Time) (string, error) {
 	return fmt.Sprintf("%06d", v%1000000), nil
 }
 
-// Verify accepts the code for the current 30 s step and one step either side.
-func Verify(secret, code string, now time.Time) bool {
+// Match accepts the code for the current 30 s step and one step either side,
+// returning the matched step so the caller can refuse to accept it twice.
+func Match(secret, code string, now time.Time) (step int64, ok bool) {
 	code = strings.TrimSpace(code)
 	if len(code) != 6 {
-		return false
+		return 0, false
 	}
 	for _, d := range []time.Duration{0, -30 * time.Second, 30 * time.Second} {
-		want, err := Code(secret, now.Add(d))
+		t := now.Add(d)
+		want, err := Code(secret, t)
 		if err == nil && subtle.ConstantTimeCompare([]byte(want), []byte(code)) == 1 {
-			return true
+			return t.Unix() / 30, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 // URI is the otpauth:// link encoded in QR codes.

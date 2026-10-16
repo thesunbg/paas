@@ -40,6 +40,7 @@
     { key: 'max_databases', label: 'Databases per team', hint: '' },
     { key: 'max_memory_mb', label: 'Memory per instance (MB)', hint: '' },
     { key: 'max_replicas', label: 'Replicas per service', hint: 'Including autoscaling' },
+    { key: 'max_teams', label: 'Teams per user', hint: 'Owned teams, including the personal one' },
     { key: 'max_signups_per_ip_per_day', label: 'Sign-ups per IP per day', hint: 'Against spam' },
   ];
 </script>

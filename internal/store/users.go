@@ -71,6 +71,22 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	return err
 }
 
+// RevokeCredentials drops a user's API tokens and every session except keepSessionHash ("" keeps none).
+func (s *Store) RevokeCredentials(ctx context.Context, userID, keepSessionHash string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1 AND token_hash <> $2`, userID, keepSessionHash); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM api_tokens WHERE user_id=$1`, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) PurgeExpiredSessions(ctx context.Context) {
 	_, _ = s.DB.Exec(ctx, `DELETE FROM sessions WHERE expires_at < now()`)
 }
@@ -206,6 +222,12 @@ func (s *Store) RemoveMember(ctx context.Context, teamID, userID string) error {
 func (s *Store) SetTOTP(ctx context.Context, userID, secretEnc string, enabled bool) error {
 	_, err := s.DB.Exec(ctx, `UPDATE users SET totp_secret_enc=$2, totp_enabled=$3 WHERE id=$1`, userID, secretEnc, enabled)
 	return err
+}
+
+// ConsumeTOTPStep records step as used; false if that step or a later one was already accepted.
+func (s *Store) ConsumeTOTPStep(ctx context.Context, userID string, step int64) (bool, error) {
+	tag, err := s.DB.Exec(ctx, `UPDATE users SET totp_last_step=$2 WHERE id=$1 AND totp_last_step < $2`, userID, step)
+	return tag.RowsAffected() == 1, err
 }
 
 func (s *Store) UserByGitHubID(ctx context.Context, id int64) (*User, error) {

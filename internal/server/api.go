@@ -18,7 +18,10 @@ import (
 
 type ctxKey int
 
-const userKey ctxKey = 1
+const (
+	userKey    ctxKey = 1
+	sessionKey ctxKey = 2 // hash of the session token that authenticated the request
+)
 
 const sessionCookie = "paas_session"
 
@@ -220,8 +223,8 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 			tok = strings.TrimPrefix(h, "Bearer ")
 		}
-		if tok == "" {
-			tok = r.URL.Query().Get("access_token") // EventSource cannot set headers
+		if tok == "" && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/logs/stream") {
+			tok = r.URL.Query().Get("access_token") // EventSource cannot set headers; URLs leak into logs, so only log streams accept it
 		}
 		if tok == "" {
 			writeError(w, http.StatusUnauthorized, "authentication required")
@@ -229,10 +232,12 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 		}
 		var user *store.User
 		var err error
+		sessionHash := ""
 		if strings.HasPrefix(tok, "paas_") {
 			user, err = s.store.UserByAPIToken(r.Context(), util.HashToken(tok))
 		} else {
-			user, err = s.store.UserBySession(r.Context(), util.HashToken(tok))
+			sessionHash = util.HashToken(tok)
+			user, err = s.store.UserBySession(r.Context(), sessionHash)
 		}
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid or expired credentials")
@@ -242,7 +247,8 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "cross-origin request rejected")
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), userKey, user)))
+		ctx := context.WithValue(r.Context(), userKey, user)
+		next(w, r.WithContext(context.WithValue(ctx, sessionKey, sessionHash)))
 	}
 }
 
@@ -259,6 +265,12 @@ func sameOrigin(r *http.Request) bool {
 func currentUser(r *http.Request) *store.User {
 	u, _ := r.Context().Value(userKey).(*store.User)
 	return u
+}
+
+// currentSessionHash is the authenticating session's token hash, empty for API tokens.
+func currentSessionHash(r *http.Request) string {
+	h, _ := r.Context().Value(sessionKey).(string)
+	return h
 }
 
 var errForbidden = errors.New("forbidden")

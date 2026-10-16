@@ -5,10 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/thesunbg/paas/internal/store"
-	"github.com/thesunbg/paas/internal/totp"
 	"github.com/thesunbg/paas/internal/util"
 )
 
@@ -194,7 +192,7 @@ func (s *Server) handleGitHub2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := "2fa:" + st.UserID
-	if !loginGuard.allowed(key) || !loginGuard.allowed(clientAddr(r)) {
+	if !loginGuard.allowed(key, maxPer2FA) || !loginGuard.allowed(clientAddr(r), maxPerIP) {
 		writeError(w, 429, "too many failed attempts; try again in 15 minutes")
 		return
 	}
@@ -204,7 +202,7 @@ func (s *Server) handleGitHub2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret, err := s.box.Decrypt(u.TOTPSecret)
-	if err != nil || !u.TOTPEnabled || !totp.Verify(secret, strings.TrimSpace(in.Code), time.Now()) {
+	if err != nil || !u.TOTPEnabled || !s.verifyTOTP(r.Context(), u.ID, secret, in.Code) {
 		loginGuard.fail(key)
 		loginGuard.fail(clientAddr(r))
 		writeJSON(w, 401, map[string]any{"error": "invalid two-factor code", "two_factor": true})
