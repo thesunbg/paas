@@ -92,6 +92,34 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, p)
 }
 
+// PATCH /api/v1/projects/{id} {name}
+func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
+	p := s.projectFor(w, r, r.PathValue("id"), "admin")
+	if p == nil {
+		return
+	}
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if name == "" || len([]rune(name)) > 80 {
+		writeError(w, 400, "name: 1-80 characters")
+		return
+	}
+	updated, err := s.store.RenameProject(r.Context(), p.ID, name)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	u := currentUser(r)
+	s.store.Audit(r.Context(), &u.ID, &p.TeamID, "project.rename", p.Slug+" "+name)
+	writeJSON(w, 200, updated)
+}
+
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	p := s.projectFor(w, r, r.PathValue("id"), "viewer")
 	if p == nil {

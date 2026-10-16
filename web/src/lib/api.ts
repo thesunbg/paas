@@ -843,6 +843,7 @@ export const api = {
   // Projects
   project: (id: string) => get<ProjectDetail>(`/projects/${e(id)}`),
   deleteProject: (id: string) => del(`/projects/${e(id)}`),
+  renameProject: (id: string, name: string) => patch<Project>(`/projects/${e(id)}`, { name }),
   createService: (project: string, input: ServiceInput) => post<CreateServiceResponse>(`/projects/${e(project)}/services`, input),
   createDatabase: (project: string, input: CreateDatabaseInput) => post<Database>(`/projects/${e(project)}/databases`, input),
   templates: () => get<Template[] | null>('/templates'),

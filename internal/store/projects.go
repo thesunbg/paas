@@ -54,6 +54,12 @@ func (s *Store) ProjectsForTeam(ctx context.Context, teamID string) ([]Project, 
 	})
 }
 
+// RenameProject changes the display name; the slug (used in domains and
+// internal DNS names) stays.
+func (s *Store) RenameProject(ctx context.Context, id, name string) (*Project, error) {
+	return scanProject(s.DB.QueryRow(ctx, `UPDATE projects SET name=$2 WHERE id=$1 RETURNING `+projectCols, id, name))
+}
+
 func (s *Store) DeleteProject(ctx context.Context, id string) error {
 	_, err := s.DB.Exec(ctx, `DELETE FROM projects WHERE id=$1`, id)
 	return err

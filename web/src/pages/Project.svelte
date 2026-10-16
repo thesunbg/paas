@@ -25,6 +25,115 @@
 
   // Preview services are grouped under their parent instead of being top-level cards.
   const topLevel = $derived((data?.services ?? []).filter((s) => !s.parent_id || !data?.services.some((p) => p.id === s.parent_id)));
+
+  // Search, filters, sort and layout. Layout and sort are remembered per browser.
+  type Svc = ProjectDetail['services'][number];
+  const PREFS = 'paas.project.view';
+  function loadPrefs(): { view: 'grid' | 'list'; sort: string } {
+    try {
+      const v = JSON.parse(localStorage.getItem(PREFS) ?? '{}');
+      return { view: v.view === 'list' ? 'list' : 'grid', sort: typeof v.sort === 'string' ? v.sort : 'status' };
+    } catch {
+      return { view: 'grid', sort: 'status' };
+    }
+  }
+  const prefs = loadPrefs();
+  let query = $state('');
+  let statusFilter = $state<'all' | 'running' | 'failed' | 'deploying' | 'idle'>('all');
+  let typeFilter = $state('all');
+  let sort = $state(prefs.sort);
+  let view = $state<'grid' | 'list'>(prefs.view);
+  let searchEl = $state<HTMLInputElement | null>(null);
+  $effect(() => {
+    const v = JSON.stringify({ view, sort });
+    try {
+      localStorage.setItem(PREFS, v);
+    } catch {
+      /* private mode */
+    }
+  });
+
+  const statusGroup = (s: string) =>
+    s === 'running' ? 'running' : s === 'failed' ? 'failed' : s === 'deploying' || s === 'created' ? 'deploying' : 'idle';
+  const statusRank: Record<string, number> = { failed: 0, deploying: 1, running: 2, idle: 3 };
+  const counts = $derived.by(() => {
+    const c: Record<string, number> = { all: topLevel.length, running: 0, failed: 0, deploying: 0, idle: 0 };
+    for (const s of topLevel) c[statusGroup(s.status)]++;
+    return c;
+  });
+  const types = $derived([...new Set(topLevel.map((s) => s.type))].sort());
+
+  function haystack(s: Svc): string {
+    return [s.name, s.slug, s.type, s.status, s.url ?? '', source(s), ...previewsOf(s.id).map((p) => `${p.name} #${p.preview_pr}`)].join(' ').toLowerCase();
+  }
+  const terms = $derived(query.toLowerCase().split(/\s+/).filter(Boolean));
+  const matches = (text: string) => terms.every((t) => text.includes(t));
+  const visible = $derived.by(() => {
+    const list = topLevel.filter(
+      (s) => (statusFilter === 'all' || statusGroup(s.status) === statusFilter) && (typeFilter === 'all' || s.type === typeFilter) && matches(haystack(s)),
+    );
+    const byName = (a: Svc, b: Svc) => a.name.localeCompare(b.name);
+    if (sort === 'name') list.sort(byName);
+    else if (sort === 'recent') list.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    else if (sort === 'memory') list.sort((a, b) => b.memory_mb - a.memory_mb || byName(a, b));
+    else list.sort((a, b) => statusRank[statusGroup(a.status)] - statusRank[statusGroup(b.status)] || byName(a, b));
+    return list;
+  });
+  const visibleDBs = $derived(
+    (data?.databases ?? []).filter((d) => matches([d.name, d.engine, d.mode, d.status, d.version ?? ''].join(' ').toLowerCase())),
+  );
+  const filtered = $derived(terms.length > 0 || statusFilter !== 'all' || typeFilter !== 'all');
+  function clearFilters() {
+    query = '';
+    statusFilter = 'all';
+    typeFilter = 'all';
+  }
+
+  // "/" focuses the search box, Escape clears it.
+  function onKey(e: KeyboardEvent) {
+    const t = e.target as HTMLElement;
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    if (e.key === '/' && !typing) {
+      e.preventDefault();
+      searchEl?.focus();
+    }
+  }
+
+  // Rename (display name only; the slug in domains stays).
+  let editing = $state(false);
+  let newName = $state('');
+  let renaming = $state(false);
+  function startRename() {
+    if (!data) return;
+    newName = data.project.name;
+    editing = true;
+  }
+  async function rename(e?: Event) {
+    e?.preventDefault();
+    if (!data) return;
+    const name = newName.trim();
+    if (!name || name === data.project.name) {
+      editing = false;
+      return;
+    }
+    renaming = true;
+    try {
+      data.project = await api.renameProject(data.project.id, name);
+      editing = false;
+      toast.success('Project renamed');
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      renaming = false;
+    }
+  }
+  function focusSelect(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  }
+
+  // "Add from…" menu (templates, compose).
+  let addOpen = $state(false);
   const previewsOf = (id: string) => (data?.services ?? []).filter((s) => s.parent_id === id).sort((a, b) => (b.preview_pr ?? 0) - (a.preview_pr ?? 0));
 
   async function load() {
@@ -72,6 +181,8 @@
   }
 </script>
 
+<svelte:window onkeydown={onKey} />
+
 <div class="page">
   {#if !data && !error}
     <Loading rows={4} />
@@ -81,16 +192,45 @@
     {@const p = data.project}
     <div class="crumbs"><a href={href('/')}>Projects</a><Icon name="chevron" size={12} /><span>{p.name}</span></div>
     <div class="page-head">
-      <div>
-        <h1>{p.name}</h1>
+      <div style="min-width:0">
+        {#if editing}
+          <form class="rename" onsubmit={rename}>
+            <input
+              class="title-input"
+              bind:value={newName}
+              maxlength="80"
+              aria-label="Project name"
+              use:focusSelect
+              onkeydown={(e) => e.key === 'Escape' && (editing = false)}
+              disabled={renaming}
+            />
+            <button class="primary sm" disabled={renaming || !newName.trim()}>{#if renaming}<span class="spinner"></span>{/if}Save</button>
+            <button type="button" class="sm" onclick={() => (editing = false)} disabled={renaming}>Cancel</button>
+          </form>
+        {:else}
+          <div class="row nowrap title">
+            <h1 class="truncate">{p.name}</h1>
+            {#if can('admin', p.team_id)}
+              <button class="ghost icon sm" aria-label="Rename project" title="Rename project" onclick={startRename}><Icon name="pencil" size={14} /></button>
+            {/if}
+          </div>
+        {/if}
         <p class="sub">
-          <span class="mono">{p.slug}</span> · {plural(topLevel.length, 'service')}{data.services.length > topLevel.length ? ` (+${plural(data.services.length - topLevel.length, 'preview')})` : ''} · {plural(data.databases.length, 'database')} · created {relTime(p.created_at)}
+          <span class="mono" title="Used in domains and internal DNS names; it does not change when the project is renamed">{p.slug}</span> · {plural(topLevel.length, 'service')}{data.services.length > topLevel.length ? ` (+${plural(data.services.length - topLevel.length, 'preview')})` : ''} · {plural(data.databases.length, 'database')} · created {relTime(p.created_at)}
         </p>
       </div>
       <div class="row">
         {#if can('developer', p.team_id)}
-          <button onclick={() => (tplOpen = true)}><Icon name="grid" />Templates</button>
-          <button onclick={() => (composeOpen = true)}><Icon name="upload" />Import compose</button>
+          <div class="menu-wrap">
+            <button class="add-from" onclick={() => (addOpen = !addOpen)} aria-haspopup="menu" aria-expanded={addOpen}><Icon name="grid" />Add from<Icon name="chevdown" size={12} /></button>
+            {#if addOpen}
+              <div class="menu-backdrop" role="presentation" onclick={() => (addOpen = false)}></div>
+              <div class="menu" role="menu">
+                <button role="menuitem" onclick={() => ((addOpen = false), (tplOpen = true))}><Icon name="grid" /><span><b>Template</b><br /><span class="faint small">WordPress, n8n and more</span></span></button>
+                <button role="menuitem" onclick={() => ((addOpen = false), (composeOpen = true))}><Icon name="upload" /><span><b>docker-compose file</b><br /><span class="faint small">Paste or upload a compose file</span></span></button>
+              </div>
+            {/if}
+          </div>
           <button onclick={() => (dbOpen = true)}><Icon name="database" />New database</button>
           <a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />New service</a>
         {/if}
@@ -101,8 +241,51 @@
     </div>
     <ErrorMsg {error} />
 
+    {#if topLevel.length > 0 || data.databases.length > 0}
+      <div class="toolbar">
+        <label class="search">
+          <Icon name="search" size={14} />
+          <input
+            type="search"
+            bind:this={searchEl}
+            bind:value={query}
+            placeholder="Search services and databases"
+            aria-label="Search services and databases"
+            onkeydown={(e) => e.key === 'Escape' && (query = '')}
+          />
+          {#if !query}<kbd class="faint">/</kbd>{/if}
+        </label>
+        <div class="seg" role="group" aria-label="Filter by status">
+          {#each [['all', 'All'], ['running', 'Running'], ['failed', 'Failed'], ['deploying', 'Deploying'], ['idle', 'Stopped']] as [k, label] (k)}
+            {#if k === 'all' || counts[k] > 0}
+              <button class:sel={statusFilter === k} class:bad={k === 'failed'} aria-pressed={statusFilter === k} onclick={() => (statusFilter = k as typeof statusFilter)}>
+                {#if k !== 'all'}<span class="dot {k === 'idle' ? 'stopped' : k}"></span>{/if}{label}<span class="count">{counts[k]}</span>
+              </button>
+            {/if}
+          {/each}
+        </div>
+        <span class="spacer"></span>
+        {#if types.length > 1}
+          <select bind:value={typeFilter} aria-label="Filter by type">
+            <option value="all">All types</option>
+            {#each types as t (t)}<option value={t}>{t}</option>{/each}
+          </select>
+        {/if}
+        <select bind:value={sort} aria-label="Sort">
+          <option value="status">Sort: status</option>
+          <option value="name">Sort: name</option>
+          <option value="recent">Sort: recently updated</option>
+          <option value="memory">Sort: memory</option>
+        </select>
+        <div class="seg" role="group" aria-label="Layout">
+          <button class:sel={view === 'grid'} aria-pressed={view === 'grid'} aria-label="Grid" title="Grid" onclick={() => (view = 'grid')}><Icon name="grid" size={14} /></button>
+          <button class:sel={view === 'list'} aria-pressed={view === 'list'} aria-label="List" title="List" onclick={() => (view = 'list')}><Icon name="list" size={14} /></button>
+        </div>
+      </div>
+    {/if}
+
     <section class="stack">
-      <h2 class="section-title">Services</h2>
+      <h2 class="section-title">Services{#if filtered && topLevel.length}<span class="faint small"> · {visible.length} of {topLevel.length}</span>{/if}</h2>
       {#if data.services.length === 0}
         <div class="card empty">
           <Icon name="box" size={28} />
@@ -115,11 +298,42 @@
             </div>
           {/if}
         </div>
+      {:else if visible.length === 0}
+        <div class="card empty">
+          <Icon name="search" size={24} />
+          <p>No services match{query ? ` “${query}”` : ' these filters'}.</p>
+          <button onclick={clearFilters}>Clear filters</button>
+        </div>
+      {:else if view === 'list'}
+        <div class="card table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Status</th><th class="hide-sm">Source</th><th>URL</th><th class="hide-sm num">Instances</th><th class="hide-sm num">Memory</th></tr></thead>
+            <tbody>
+              {#each visible as s (s.id)}
+                {@const pvs = previewsOf(s.id)}
+                <tr class="clickable" class:failed={s.status === 'failed'} onclick={() => navigate(`/services/${s.id}`)}>
+                  <td>
+                    <a href={href(`/services/${s.id}`)} class="row nowrap name"><Icon name={typeIcon[s.type] ?? 'box'} size={14} /><b>{s.name}</b></a>
+                    <span class="badge {typeBadge[s.type] ?? ''}">{s.type}</span>
+                    {#if pvs.length}<span class="badge purple">{plural(pvs.length, 'preview')}</span>{/if}
+                  </td>
+                  <td><Status status={s.status} /></td>
+                  <td class="hide-sm faint small mono truncate cell-src" title={source(s)}>{source(s)}</td>
+                  <td class="small">
+                    {#if s.url}<a href={s.url} target="_blank" rel="noreferrer" onclick={(e) => e.stopPropagation()} class="truncate url-cell">{s.url.replace(/^https?:\/\//, '')}</a>{:else}<span class="faint">{s.type === 'cron' ? s.spec.schedule + ' UTC' : '—'}</span>{/if}
+                  </td>
+                  <td class="hide-sm num muted small">{s.type === 'static' || s.type === 'cron' ? '—' : `${s.instances}/${s.spec.replicas}`}</td>
+                  <td class="hide-sm num muted small">{s.type === 'static' || s.type === 'cron' ? '—' : `${mb(s.memory_mb)} / ${mb(s.spec.resources.memory_limit_mb)}`}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {:else}
         <div class="svc-grid">
-          {#each topLevel as s (s.id)}
+          {#each visible as s (s.id)}
             {@const pvs = previewsOf(s.id)}
-            <div class="card svc">
+            <div class="card svc" class:failed={s.status === 'failed'}>
               <a class="cover" href={href(`/services/${s.id}`)} aria-label="Open {s.name}"></a>
               <div class="between nowrap">
                 <div class="row nowrap" style="min-width:0">
@@ -170,19 +384,21 @@
     </section>
 
     <section class="stack" style="margin-top:28px">
-      <h2 class="section-title">Databases</h2>
+      <h2 class="section-title">Databases{#if terms.length && data.databases.length}<span class="faint small"> · {visibleDBs.length} of {data.databases.length}</span>{/if}</h2>
       {#if data.databases.length === 0}
         <div class="card empty">
           <Icon name="database" size={28} />
           <p>No databases. Add PostgreSQL, MySQL, Redis or MongoDB.</p>
           {#if can('developer', p.team_id)}<button onclick={() => (dbOpen = true)}><Icon name="plus" />New database</button>{/if}
         </div>
+      {:else if visibleDBs.length === 0}
+        <p class="faint small">No databases match “{query}”.</p>
       {:else}
         <div class="card table-wrap">
           <table>
             <thead><tr><th>Name</th><th>Engine</th><th>Mode</th><th class="hide-sm">Size</th><th>Status</th><th class="hide-sm">Last backup</th></tr></thead>
             <tbody>
-              {#each data.databases as d (d.id)}
+              {#each visibleDBs as d (d.id)}
                 <tr class="clickable" onclick={() => navigate(`/databases/${d.id}`)}>
                   <td><a href={href(`/databases/${d.id}`)}><Icon name="database" size={14} /> {d.name}</a></td>
                   <td>{engineLabel[d.engine] ?? d.engine} <span class="faint small">{d.version ?? ""}</span></td>
@@ -205,6 +421,169 @@
 </div>
 
 <style>
+  .title {
+    gap: 6px;
+  }
+  .title h1 {
+    min-width: 0;
+  }
+  .rename {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .title-input {
+    font-size: 20px;
+    font-weight: 600;
+    padding: 2px 8px;
+    height: 36px;
+    width: min(420px, 100%);
+    flex: 0 1 auto;
+  }
+  .menu-wrap {
+    position: relative;
+  }
+  .menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+  }
+  .menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 21;
+    min-width: 260px;
+    padding: 6px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .menu button {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    padding: 8px 10px;
+    height: auto;
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .menu button:hover {
+    background: var(--bg-hover);
+  }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1 1 260px;
+    max-width: 380px;
+    color: var(--text-dim);
+  }
+  .search :global(svg) {
+    position: absolute;
+    left: 10px;
+    pointer-events: none;
+  }
+  .search input {
+    width: 100%;
+    padding-left: 32px;
+    padding-right: 28px;
+  }
+  .search kbd {
+    position: absolute;
+    right: 8px;
+    font-size: 11px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 0 5px;
+    pointer-events: none;
+  }
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 2px;
+    gap: 2px;
+    background: var(--bg-input);
+  }
+  .seg button {
+    border: 0;
+    background: transparent;
+    height: 28px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-dim);
+    border-radius: 6px;
+  }
+  .seg button:hover {
+    color: var(--text);
+  }
+  .seg button.sel {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+  .seg button.bad .count {
+    color: var(--red);
+  }
+  .count {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-faint, var(--text-dim));
+    font-size: 12px;
+  }
+  .spacer {
+    flex: 1;
+  }
+  .toolbar select {
+    width: auto;
+    height: 34px;
+  }
+  .section-title .faint {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+  }
+  .svc.failed {
+    border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+  }
+  tr.failed td:first-child {
+    box-shadow: inset 3px 0 0 var(--red);
+  }
+  .name {
+    display: inline-flex;
+    gap: 6px;
+    margin-right: 6px;
+    color: var(--text);
+  }
+  .cell-src {
+    max-width: 260px;
+  }
+  .url-cell {
+    display: inline-block;
+    max-width: 280px;
+    vertical-align: bottom;
+  }
+  .num {
+    text-align: right;
+    white-space: nowrap;
+  }
   .svc-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
