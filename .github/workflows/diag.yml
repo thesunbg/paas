@@ -18,19 +18,18 @@ jobs:
           set +e
           . /etc/paas/db.env
           q() { psql "$PAAS_DATABASE_URL" -X -P pager=off -c "$1"; }
-          echo "== nodes"; q "select name, address, status, roles, last_seen_at, net_index from nodes"
-          echo "== databases"; q "select d.name, d.engine, d.mode, d.status, left(d.error,200) err, s.slug server from databases d left join services s on s.id=d.server_service_id"
-          echo "== services"; q "select s.slug, p.slug proj, s.type, s.status, n.name pin from services s join projects p on p.id=s.project_id left join nodes n on n.id=s.node_id order by p.slug, s.slug"
-          echo "== instances"; q "select s.slug, n.name node, i.ip, i.port, i.status, i.restarts from instances i join services s on s.id=i.service_id left join nodes n on n.id=i.node_id order by s.slug"
-          echo "== wordpress deployments"; q "select d.status, left(d.error,300) err, d.created_at from deployments d join services s on s.id=d.service_id where s.slug like 'wordpress%' order by d.created_at desc limit 3"
-          echo "== connectivity from control plane"
-          for ip in $(psql "$PAAS_DATABASE_URL" -XAtc "select i.ip||':'||i.port from instances i join services s on s.id=i.service_id where s.type='database' and i.status='running'"); do
-            h=${ip%:*}; p=${ip#*:}; timeout 3 bash -c "</dev/tcp/$h/$p" && echo "ok $ip" || echo "FAIL $ip"; done
-          for ip in $(psql "$PAAS_DATABASE_URL" -XAtc "select i.ip||':'||i.port from instances i join services s on s.id=i.service_id where s.slug like 'wordpress%' and i.status='running'"); do
-            h=${ip%:*}; p=${ip#*:}; timeout 3 bash -c "</dev/tcp/$h/$p" && echo "ok wp $ip" || echo "FAIL wp $ip"; done
-          echo "== mesh"; ip -br addr show paaswg0; ip route | grep -E "paaswg0|10\.10" | head; ping -c2 -W2 10.102.255.254 | tail -2
-          echo "== wordpress container log (if local)"
-          for c in $(psql "$PAAS_DATABASE_URL" -XAtc "select i.container_id from instances i join services s on s.id=i.service_id join nodes n on n.id=i.node_id where s.slug like 'wordpress%' and n.address='202.92.6.129' order by i.created_at desc limit 1"); do
-            tail -n 30 /var/lib/paas/containers/$c/output.log 2>/dev/null || ls /var/lib/paas/containers | head -3; done
-          echo "== paasd errors"; journalctl -u paasd --since "-2h" --no-pager | grep -iE "error|warn" | grep -viE "password|token" | tail -40
+          echo "== shared-mysql deployments"; psql "$PAAS_DATABASE_URL" -XAtc "select d.status||' '||d.created_at||E'\n'||d.error from deployments d join services s on s.id=d.service_id where s.slug='shared-mysql' order by d.created_at desc limit 2"
+          echo "== shared-mysql container logs"
+          for c in $(psql "$PAAS_DATABASE_URL" -XAtc "select i.container_id from instances i join services s on s.id=i.service_id where s.slug='shared-mysql' order by i.created_at desc limit 1"); do tail -n 60 /var/lib/paas/containers/$c/output.log; done
+          ls -lt /var/lib/paas/containers | head -5
+          for d in $(ls -t /var/lib/paas/containers | grep shared-mysql | head -1); do echo "-- $d"; tail -n 60 /var/lib/paas/containers/$d/output.log; done
+          ls -la /var/lib/paas/volumes/$(psql "$PAAS_DATABASE_URL" -XAtc "select id from services where slug='shared-mysql'")/data | head
+          echo "== nft"; nft list ruleset | grep -vE "^\s*$" | head -120
+          echo "== from a demo container to shared-postgres"
+          C=$(psql "$PAAS_DATABASE_URL" -XAtc "select i.container_id from instances i join services s on s.id=i.service_id where s.slug='net-empire' and i.status='running' limit 1")
+          PID=$(ctr -n paas tasks ls | awk -v c="$C" '$1==c{print $2}')
+          echo "container $C pid $PID"
+          nsenter -t $PID -n ip -br addr
+          nsenter -t $PID -n bash -c 'timeout 3 bash -c "</dev/tcp/10.101.0.67/5432" && echo ok-5432 || echo FAIL-5432'
+          nsenter -t $PID -n ip route
           SH
