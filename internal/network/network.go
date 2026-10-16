@@ -300,7 +300,37 @@ func (m *Manager) SyncFirewall() error {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("nft: %v: %s", err, out)
 	}
+	allowInIptablesForward()
 	return nil
+}
+
+// allowInIptablesForward lets container traffic through an iptables FORWARD
+// chain with a DROP policy (installed by Docker, ufw, firewalld…). Every base
+// chain on the forward hook must accept a packet, so our own isolation in
+// "inet paas" (which runs first) is not enough on such hosts. Docker's
+// DOCKER-USER chain is used when present because Docker rebuilds FORWARD.
+func allowInIptablesForward() {
+	ipt, err := exec.LookPath("iptables")
+	if err != nil {
+		return
+	}
+	chain := "FORWARD"
+	if exec.Command(ipt, "-w", "-L", "DOCKER-USER", "-n").Run() == nil {
+		chain = "DOCKER-USER"
+	}
+	for _, rule := range [][]string{
+		{"-i", "pn+", "-j", "ACCEPT"},
+		{"-o", "pn+", "-j", "ACCEPT"},
+		{"-i", MeshInterface, "-j", "ACCEPT"},
+		{"-o", MeshInterface, "-j", "ACCEPT"},
+	} {
+		if exec.Command(ipt, append([]string{"-w", "-C", chain}, rule...)...).Run() == nil {
+			continue
+		}
+		if out, err := exec.Command(ipt, append([]string{"-w", "-I", chain, "1"}, rule...)...).CombinedOutput(); err != nil {
+			slog.Warn("iptables forward rule", "chain", chain, "err", err, "out", strings.TrimSpace(string(out)))
+		}
+	}
 }
 
 // HostIP guesses the node's primary IPv4 address.

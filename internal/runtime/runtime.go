@@ -332,6 +332,7 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 		withVolumeOwner(volumeDirs),
 		oci.WithEnv(env),
 		oci.WithHostname(firstNonEmpty(req.Hostname, req.ContainerID[:12])),
+		withoutRunTmpfs,
 		oci.WithMounts(mounts),
 		oci.WithLinuxNamespace(specs.LinuxNamespace{Type: specs.NetworkNamespace, Path: m.NetNS}),
 		oci.WithNoNewPrivileges,
@@ -924,4 +925,18 @@ func withVolumeOwner(dirs []string) oci.SpecOpts {
 		}
 		return nil
 	}
+}
+
+// withoutRunTmpfs drops the empty tmpfs containerd's default spec mounts on
+// /run: like Docker, keep the image's /run (MariaDB ships /run/mysqld there).
+func withoutRunTmpfs(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+	kept := s.Mounts[:0]
+	for _, m := range s.Mounts {
+		if m.Destination == "/run" && m.Type == "tmpfs" {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	s.Mounts = kept
+	return nil
 }
