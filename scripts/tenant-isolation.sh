@@ -1,6 +1,8 @@
 #!/bin/sh
-# Phase 5 e2e: run as root on a worker node after deploy.
-#   sh e2e.sh <container-id-A> <container-id-B-of-another-project> <port-of-B>
+# Tenant network isolation check: run as root on a worker node.
+# Checks from inside container A that the host, metadata service, mesh and
+# another project are blocked while DNS, Internet and own domain work.
+#   ./scripts/tenant-isolation.sh <container-id-A> <container-id-B-of-another-project> <port-of-B>
 # Uses the host's curl inside the container's network namespace (nsenter -n).
 set -u
 A=$1; B=$2; BPORT=$3

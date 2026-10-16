@@ -35,6 +35,12 @@ Phase 1 và 3 có thể chạy song song sau Phase 0.
 
 Xem Phase 5. Tóm tắt: từ container và từ RUN step, curl tới 169.254.169.254, host:8080/:4222/:7070, IP mesh, project khác và IP private ngoài cluster đều fail. DNS, Internet, domain của chính mình :443 và shared DB đều OK. Vòng lặp curl xuyên project trong lúc restart agent: 0 lần thành công. `go test ./internal/network/...` xanh với golden.
 
+## Sau review (2026-10-16)
+
+- Sync một lần là chưa đủ: `nft flush ruleset` hay reload firewall làm mất bảng → forward policy accept → mất cách ly tới lần restart; Docker/firewalld dựng lại FORWARD DROP → `allowInIptablesForward` (trước chạy mỗi Attach) không chạy lại → đứt app→DB (lỗi của 0d732b9). Sửa: `EnsureFirewall()` mỗi 30s trong vòng lặp của agent (một goroutine, vẫn không cần mutex).
+- Migration 010 vs SERIAL: đã kiểm `max(net_index)=2` trước deploy (phase-00 0c) và paasd đã lên với migration. Giới hạn ~1021 project từng tạo (SERIAL không tái sử dụng) có từ trước, chuyển sang nhóm D/F.
+- `e2e.sh` chuyển sang `scripts/tenant-isolation.sh`.
+
 ## Rủi ro chính
 
 1. nft cũ không parse được `oifname . ip saddr & mask @set`. Phase 0 chặn sớm. Fallback: rule accept theo từng network + drop chung ở cuối + sync sau Recover (xem brainstorm).

@@ -174,12 +174,16 @@ func (a *Agent) Run(ctx context.Context) error {
 	slog.Info("agent ready", "node", a.cfg.NodeName, "id", a.nodeID, "roles", a.cfg.Roles, "address", a.cfg.NodeAddress)
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
+	fwTick := time.NewTicker(30 * time.Second)
+	defer fwTick.Stop()
 	a.heartbeat(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			a.net.DNS.Shutdown()
 			return nil
+		case <-fwTick.C:
+			a.net.EnsureFirewall()
 		case <-tick.C:
 			a.net.EnsureDNS()
 			a.heartbeat(ctx)

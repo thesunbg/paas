@@ -37,7 +37,7 @@ Mọi dòng trong bảng đúng kỳ vọng. Ghi kết quả vào cuối file n�
 
 Node chỉ có 1 project tenant (idx 2) + shared (idx 1), nên "project khác" = shared registry :5000.
 
-Từ container net-empire (10.101.0.135), `e2e.sh` exit 0:
+Từ container net-empire (10.101.0.135), `scripts/tenant-isolation.sh` exit 0:
 - blocked: 169.254.169.254, host:8080, gw:8080, host:4222, host:7070, mesh 10.101.255.254:8080, shared registry 10.101.0.69:5000
 - reachable: Internet (DNS qua gateway), paas.nguyenvando.com:443 hairpin, shared postgres :5432, mysql :3306
 
@@ -45,6 +45,6 @@ Restart `paasd` giữa vòng probe A→registry:5000 (5 lần/s, 40s): 56 probe,
 
 BuildKit (`buildctl build`): worker `network:cni`, RUN có `eth1 10.101.255.131/26`, route qua 10.101.255.129, nameserver 8.8.8.8. Internet OK; metadata, host:8080, registry, tenant đều bị chặn.
 
-Lỗi test ban đầu (đã sửa trong e2e.sh): `nsenter -n` dùng resolv.conf của host (127.0.0.53) → resolve qua gateway rồi `--resolve`; check :443 theo IP không có SNI → dùng dashboard domain.
+Lỗi test ban đầu (đã sửa trong scripts/tenant-isolation.sh): `nsenter -n` dùng resolv.conf của host (127.0.0.53) → resolve qua gateway rồi `--resolve`; check :443 theo IP không có SNI → dùng dashboard domain.
 
 Chưa test: xuyên mesh sang node khác (cluster chỉ 1 node), reboot node.

@@ -360,6 +360,23 @@ func (m *Manager) SyncFirewall() error {
 	return nil
 }
 
+// EnsureFirewall repairs what the host may undo behind our back: a flush or a
+// firewall reload removes our tables (and the forward hook falls back to
+// accept, so projects would see each other), and Docker or firewalld rebuild
+// FORWARD with a DROP policy (app-to-database traffic would stop). Both are
+// idempotent; the agent calls this periodically from a single goroutine.
+func (m *Manager) EnsureFirewall() {
+	if exec.Command("nft", "list", "table", "inet", "paas").Run() != nil ||
+		exec.Command("nft", "list", "table", "ip", "paas_nat").Run() != nil {
+		slog.Warn("nftables rules missing, re-applying")
+		if err := m.SyncFirewall(); err != nil {
+			slog.Error("firewall", "err", err)
+		}
+		return
+	}
+	allowInIptablesForward()
+}
+
 // allowInIptablesForward lets container traffic through an iptables FORWARD
 // chain with a DROP policy (installed by Docker, ufw, firewalld…). Every base
 // chain on the forward hook must accept a packet, so our own isolation in
