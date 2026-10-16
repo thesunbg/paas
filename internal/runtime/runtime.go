@@ -315,11 +315,13 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 		{Destination: "/etc/resolv.conf", Type: "bind", Source: filepath.Join(dir, "resolv.conf"), Options: []string{"rbind", "ro"}},
 		{Destination: "/etc/hosts", Type: "bind", Source: filepath.Join(dir, "hosts"), Options: []string{"rbind", "ro"}},
 	}
+	var volumeDirs []string
 	for _, v := range req.Volumes {
 		host := filepath.Join(r.dataDir, "volumes", req.ServiceID, v.Name)
 		if err := os.MkdirAll(host, 0o755); err != nil {
 			return err
 		}
+		volumeDirs = append(volumeDirs, host)
 		mounts = append(mounts, specs.Mount{Destination: v.Path, Type: "bind", Source: host, Options: []string{"rbind", "rw", "nosuid", "nodev"}})
 	}
 
@@ -327,6 +329,7 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 		oci.WithDefaultSpec(),
 		oci.WithDefaultUnixDevices,
 		oci.WithImageConfig(img),
+		withVolumeOwner(volumeDirs),
 		oci.WithEnv(env),
 		oci.WithHostname(firstNonEmpty(req.Hostname, req.ContainerID[:12])),
 		oci.WithMounts(mounts),
@@ -892,4 +895,33 @@ func (r *Runtime) RunJob(ctx context.Context, req proto.RunRequest) proto.JobRep
 	rep.Output = strings.Join(lines, "\n")
 	_ = r.Remove(context.Background(), req.ContainerID, 5*time.Second)
 	return rep
+}
+
+// withVolumeOwner hands empty, root-owned volume directories to the user the
+// image runs as (resolved by WithImageConfig), so images with a non-root USER
+// such as n8n (node, uid 1000) can write to their data directory.
+func withVolumeOwner(dirs []string) oci.SpecOpts {
+	return func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+		if s.Process == nil || s.Process.User.UID == 0 {
+			return nil
+		}
+		uid, gid := int(s.Process.User.UID), int(s.Process.User.GID)
+		for _, d := range dirs {
+			st, err := os.Stat(d)
+			if err != nil {
+				continue
+			}
+			sys, ok := st.Sys().(*syscall.Stat_t)
+			if !ok || sys.Uid != 0 {
+				continue // already owned by someone: leave it alone
+			}
+			if entries, err := os.ReadDir(d); err != nil || len(entries) > 0 {
+				continue
+			}
+			if err := os.Chown(d, uid, gid); err != nil {
+				return fmt.Errorf("chown volume %s: %w", d, err)
+			}
+		}
+		return nil
+	}
 }
