@@ -1,6 +1,9 @@
 package templates
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExpand(t *testing.T) {
 	dbs := map[string]DBValues{"wp": {Host: "shared-mysql.system.internal", Port: "3306", User: "u", Password: "p", Name: "n", URL: "mysql://u:p@h/n"}}
@@ -143,5 +146,109 @@ func TestComposeBuildOutsideRepo(t *testing.T) {
 	_, err := ParseCompose([]byte("services:\n  app:\n    build: ../..\n    ports: [\"80\"]\n"), ComposeOptions{Dir: "deploy", Repo: true})
 	if err == nil {
 		t.Fatal("a context outside the repository must be rejected")
+	}
+}
+
+// env_file pointing at an uncommitted .env: the .env.example next to it fills
+// in, its localhost MongoDB becomes a managed database, app secrets are
+// generated and third-party credentials are reported.
+func TestParseComposeEnvFile(t *testing.T) {
+	yml := []byte(`
+services:
+  backend:
+    build: { context: ., dockerfile: Dockerfile.backend }
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - SEED_ON_START=${SEED_ON_START:-courses,exercises}
+    ports: ["8888:3000"]
+    volumes: [audio-cache:/app/audio-cache]
+  frontend:
+    build: { context: ., dockerfile: Dockerfile.frontend }
+    ports: ["5566:80"]
+    depends_on: [backend]
+volumes:
+  audio-cache:
+`)
+	example := `# MongoDB (external)
+MONGODB_URI=mongodb://localhost:27017/bobi-learning
+PORT=3000
+NODE_ENV=development
+FRONTEND_URL=http://localhost:5173
+OPENAI_API_KEY=sk-your-api-key-here
+GEMINI_API_KEY=
+DEFAULT_AI_PROVIDER=openai
+JWT_SECRET=change-this-in-production
+JWT_REFRESH_SECRET=change-this-refresh-secret
+GOOGLE_CLIENT_ID=
+GOOGLE_CALLBACK_URL=http://localhost:3000/api/v1/auth/google/callback
+SMTP_FROM=Bobi Learning <noreply@bobi.vn>
+SEED_FAIL_FAST=0   # 1 = stop on failure
+`
+	plan, err := ParseCompose(yml, ComposeOptions{Repo: true, Dir: "", Files: map[string]string{".env.example": example}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Databases) != 1 || plan.Databases[0].Engine != "mongo" {
+		t.Fatalf("databases: %+v", plan.Databases)
+	}
+	var be, fe Service
+	for _, s := range plan.Services {
+		if s.Name == "backend" {
+			be = s
+		} else {
+			fe = s
+		}
+	}
+	if plan.Services[0].Name != "frontend" {
+		t.Fatalf("the entry point (nothing depends on it) comes first: %v", plan.Services[0].Name)
+	}
+	if be.Links["MONGODB_URI"] != plan.Databases[0].Name {
+		t.Fatalf("links: %+v", be.Links)
+	}
+	if be.Env["NODE_ENV"] != "production" || be.Env["PORT"] != "3000" || be.Env["DEFAULT_AI_PROVIDER"] != "openai" || be.Env["SEED_FAIL_FAST"] != "0" {
+		t.Fatalf("env: %+v", be.Env)
+	}
+	if len(be.Env["JWT_SECRET"]) != 48 || len(be.Env["JWT_REFRESH_SECRET"]) != 48 || be.Env["JWT_SECRET"] == be.Env["JWT_REFRESH_SECRET"] {
+		t.Fatalf("secrets: %q %q", be.Env["JWT_SECRET"], be.Env["JWT_REFRESH_SECRET"])
+	}
+	if be.Env["GOOGLE_CALLBACK_URL"] != "${svc.frontend.url}/api/v1/auth/google/callback" || be.Env["FRONTEND_URL"] != "${svc.frontend.url}" {
+		t.Fatalf("urls: %q %q", be.Env["GOOGLE_CALLBACK_URL"], be.Env["FRONTEND_URL"])
+	}
+	for _, k := range []string{"OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_CLIENT_ID"} {
+		if _, set := be.Env[k]; set {
+			t.Fatalf("%s must be left to the user", k)
+		}
+	}
+	if be.Env["SMTP_FROM"] != "Bobi Learning <noreply@bobi.vn>" {
+		// "<...>" reads as a placeholder; acceptable either way, but not mangled.
+		if _, set := be.Env["SMTP_FROM"]; set {
+			t.Fatalf("SMTP_FROM: %q", be.Env["SMTP_FROM"])
+		}
+	}
+	if len(fe.DependsOn) != 1 || fe.DependsOn[0] != "backend" {
+		t.Fatalf("depends_on: %v", fe.DependsOn)
+	}
+	found := false
+	for _, w := range plan.Warnings {
+		if strings.Contains(w, "OPENAI_API_KEY") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings: %v", plan.Warnings)
+	}
+}
+
+func TestParseDotenv(t *testing.T) {
+	got := ParseDotenv("export A=1\nB=\"x # y\"\nC=z # comment\n# D=no\nE='q'\nbad line\n")
+	want := [][2]string{{"A", "1"}, {"B", "x # y"}, {"C", "z"}, {"E", "q"}}
+	if len(got) != len(want) {
+		t.Fatalf("%v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%v", got)
+		}
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/thesunbg/paas/internal/detect"
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/proto"
+	"github.com/thesunbg/paas/internal/templates"
 )
 
 // Builder runs builds on a build node.
@@ -438,7 +439,20 @@ func findCompose(src, path string) (*proto.ComposeFile, error) {
 		if path == "" && (builds == 0 || len(names) < 2) {
 			continue
 		}
-		return &proto.ComposeFile{Path: rel, Content: string(data), Services: names}, nil
+		cf := &proto.ComposeFile{Path: rel, Content: string(data), Services: names, Files: map[string]string{}}
+		for _, p := range templates.ComposeEnvFiles(data, filepath.ToSlash(filepath.Dir(rel))) {
+			if p == ".." || strings.HasPrefix(p, "../") {
+				continue
+			}
+			st, err := os.Lstat(filepath.Join(src, p))
+			if err != nil || !st.Mode().IsRegular() || st.Size() > 64<<10 {
+				continue
+			}
+			if b, err := os.ReadFile(filepath.Join(src, p)); err == nil {
+				cf.Files[p] = string(b)
+			}
+		}
+		return cf, nil
 	}
 	if path != "" {
 		return nil, fmt.Errorf("compose file %s not found in the repository", path)

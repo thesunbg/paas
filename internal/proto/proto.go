@@ -285,6 +285,8 @@ type ComposeFile struct {
 	Path     string   `json:"path"` // relative to the repository root
 	Content  string   `json:"content"`
 	Services []string `json:"services"`
+	// Files are the env files it refers to (or their committed examples), by repository path.
+	Files map[string]string `json:"files,omitempty"`
 }
 
 type DetectReply struct {

@@ -126,7 +126,7 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := path.Dir(rep.Compose.Path)
-	plan, err := templates.ParseCompose([]byte(rep.Compose.Content), templates.ComposeOptions{Dir: dir, Repo: true})
+	plan, err := templates.ParseCompose([]byte(rep.Compose.Content), templates.ComposeOptions{Dir: dir, Repo: true, Files: rep.Compose.Files})
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -243,6 +243,9 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 			typ = model.TypeWorker
 		}
 		spec := model.ServiceSpec{Port: ts.Port, Replicas: 1, Image: ts.Image, Volumes: ts.Volumes, Command: ts.Command}
+		for _, d := range ts.DependsOn {
+			spec.DependsOn = append(spec.DependsOn, util.Slugify(d))
+		}
 		if ts.Health != "" {
 			spec.HealthCheck = model.HealthCheck{Type: "http", Path: ts.Health, TimeoutSec: 180}
 		} else {
@@ -293,9 +296,12 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 		out = append(out, svc)
 		svcCopy := svc
 		go func() {
-			// Deploy once the databases accept connections.
-			s.waitDatabasesReady(context.Background(), waitDBs, 10*time.Minute)
-			_, _ = s.QueueDeployment(context.Background(), svcCopy, "template", "", "", nil)
+			// Deploy once the databases accept connections and the services it
+			// depends on run (their names must resolve when it starts).
+			ctx := context.Background()
+			s.waitDatabasesReady(ctx, waitDBs, 10*time.Minute)
+			s.waitServicesUp(ctx, p.ID, svcCopy.Spec.DependsOn, 20*time.Minute)
+			_, _ = s.QueueDeployment(ctx, svcCopy, "template", "", "", nil)
 		}()
 	}
 	return out, nil
@@ -369,6 +375,10 @@ func (s *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, status, err.Error())
 		return
+	}
+	if rep.Compose != nil {
+		// The browser only needs the summary; env files can hold secrets.
+		rep.Compose.Content, rep.Compose.Files = "", nil
 	}
 	writeJSON(w, 200, rep)
 }

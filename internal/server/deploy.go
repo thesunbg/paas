@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -170,6 +171,9 @@ func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
 	_ = s.store.SetDeploymentStatus(ctx, d.ID, model.DeployActive, "")
 	_ = s.store.SupersedeOthers(ctx, svc.ID, d.ID)
 	s.hub.Log(d.ID, fmt.Sprintf("==> deployment live in %s", time.Since(start).Round(100*time.Millisecond)))
+	if d.StaticPath == "" && svc.Type != model.TypeCron {
+		s.restartDependents(ctx, svc, d.ID)
+	}
 	if doms, err := s.store.DomainsForService(ctx, svc.ID); err == nil {
 		for _, dom := range doms {
 			s.hub.Log(d.ID, "    "+s.urlFor(dom.Hostname))
@@ -648,4 +652,55 @@ func (s *Server) cleanupStatic(ctx context.Context, serviceID string) {
 	if len(remove) > 0 {
 		s.broadcastRemoveFiles(ctx, remove)
 	}
+}
+
+// restartDependents restarts the running services that depend on svc (see
+// ServiceSpec.DependsOn): its instances have new addresses now.
+func (s *Server) restartDependents(ctx context.Context, svc *store.Service, logID string) {
+	all, err := s.store.ServicesForProject(ctx, svc.ProjectID)
+	if err != nil {
+		return
+	}
+	for i := range all {
+		dep := &all[i]
+		if dep.ID == svc.ID || dep.Status != model.StatusRunning || dep.CurrentDeploymentID == nil || !slices.Contains(dep.Spec.DependsOn, svc.Slug) {
+			continue
+		}
+		s.hub.Log(logID, fmt.Sprintf("==> restarting %s, which depends on this service", dep.Slug))
+		if _, err := s.restartService(ctx, dep, nil); err != nil {
+			s.hub.Log(logID, fmt.Sprintf("    restart %s: %v", dep.Slug, err))
+		}
+	}
+}
+
+// waitServicesUp waits until the named services of a project are running (or
+// failed: a broken dependency must not hold the others back forever).
+func (s *Server) waitServicesUp(ctx context.Context, projectID string, slugs []string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for _, slug := range slugs {
+		for time.Now().Before(deadline) {
+			svc, err := s.serviceBySlug(ctx, projectID, slug)
+			if err != nil || svc.Status == model.StatusRunning || svc.Status == model.StatusFailed || svc.Status == model.StatusStopped {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
+		}
+	}
+}
+
+func (s *Server) serviceBySlug(ctx context.Context, projectID, slug string) (*store.Service, error) {
+	all, err := s.store.ServicesForProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].Slug == slug {
+			return &all[i], nil
+		}
+	}
+	return nil, fmt.Errorf("service %s not found", slug)
 }

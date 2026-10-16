@@ -29,6 +29,7 @@ type composeService struct {
 	Volumes     []any     `yaml:"volumes"`
 	Command     yaml.Node `yaml:"command"`
 	DependsOn   yaml.Node `yaml:"depends_on"`
+	EnvFile     yaml.Node `yaml:"env_file"`
 }
 
 // ComposePlan is what a docker-compose.yml turns into: services (built from the
@@ -48,6 +49,9 @@ type ComposeOptions struct {
 	Dir string
 	// Repo is set when services with a build section can be built from a repository.
 	Repo bool
+	// Files holds repository files the compose file refers to (env files and
+	// their .example variants), by path relative to the repository root.
+	Files map[string]string
 }
 
 // dbImages maps database images to managed engines.
@@ -132,10 +136,47 @@ func ParseCompose(data []byte, opt ComposeOptions) (*ComposePlan, error) {
 			primary = name
 		}
 	}
+	// The public URL others point at is the entry point: a published service
+	// nothing else depends on (the frontend, not the API behind it).
+	for _, name := range names {
+		cs := f.Services[name]
+		if !dbs[name] && len(cs.Ports) > 0 && !isDependency(name, f.Services) {
+			primary = name
+			break
+		}
+	}
 	ip.primary = primary
 	envOf := map[string]map[string]string{}
+	fileLinks := map[string]map[string]string{}
 	for _, name := range names {
-		envOf[name] = composeEnv(f.Services[name].Environment, ip)
+		if dbs[name] {
+			envOf[name] = composeEnv(f.Services[name].Environment, ip)
+			continue
+		}
+		env := map[string]string{}
+		links := map[string]string{}
+		for _, ref := range envFilePaths(f.Services[name].EnvFile) {
+			content, from, example := opt.envFile(ref)
+			if from == "" {
+				warn("%s: env file %s is not in the repository; set its variables in the service's environment", name, ref)
+				continue
+			}
+			fe, fl, missing := fileEnv(content, example, primary, plan, dbs)
+			for k, v := range fe {
+				env[k] = v
+			}
+			for k, v := range fl {
+				links[k] = v
+			}
+			if len(missing) > 0 {
+				warn("%s: set %s (from %s) in the service's environment", name, strings.Join(missing, ", "), from)
+			}
+		}
+		for k, v := range composeEnv(f.Services[name].Environment, ip) {
+			env[k] = v
+			delete(links, k)
+		}
+		envOf[name], fileLinks[name] = env, links
 	}
 
 	for _, name := range names {
@@ -187,6 +228,17 @@ func ParseCompose(data []byte, opt ComposeOptions) (*ComposePlan, error) {
 			// port comes from the Dockerfile's EXPOSE at build time.
 			svc.Port, svc.Type = DefaultBuildPort, "web"
 		}
+		for k, db := range fileLinks[name] {
+			if svc.Links == nil {
+				svc.Links = map[string]string{}
+			}
+			svc.Links[k] = db
+		}
+		for _, d := range dependsOn(cs.DependsOn) {
+			if !dbs[d] {
+				svc.DependsOn = append(svc.DependsOn, d)
+			}
+		}
 		for k, v := range envOf[name] {
 			if db, ok := dbURLRef(v, dbs); ok {
 				if svc.Links == nil {
@@ -229,9 +281,18 @@ func ParseCompose(data []byte, opt ComposeOptions) (*ComposePlan, error) {
 		}
 		plan.Services = append(plan.Services, svc)
 	}
+	rank := func(s Service) int {
+		switch {
+		case s.Name == primary:
+			return 0
+		case !s.Private:
+			return 1
+		}
+		return 2
+	}
 	sort.SliceStable(plan.Services, func(i, j int) bool {
-		// Public services first: the first one takes a custom domain.
-		return !plan.Services[i].Private && plan.Services[j].Private
+		// The entry point first (it takes a custom domain), then public services.
+		return rank(plan.Services[i]) < rank(plan.Services[j])
 	})
 	for _, v := range ip.missing() {
 		warn("%s is not set; set it in the service's environment", v)
@@ -496,4 +557,189 @@ func firstNonEmpty(v ...string) string {
 		}
 	}
 	return ""
+}
+
+func dependsOn(n yaml.Node) []string {
+	var out []string
+	switch n.Kind {
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			out = append(out, c.Value)
+		}
+	case yaml.MappingNode:
+		for i := 0; i < len(n.Content); i += 2 {
+			out = append(out, n.Content[i].Value)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// envFilePaths lists a service's env_file entries (string, list, or list of {path}).
+func envFilePaths(n yaml.Node) []string {
+	var out []string
+	switch n.Kind {
+	case yaml.ScalarNode:
+		out = append(out, n.Value)
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			switch c.Kind {
+			case yaml.ScalarNode:
+				out = append(out, c.Value)
+			case yaml.MappingNode:
+				for i := 0; i+1 < len(c.Content); i += 2 {
+					if c.Content[i].Value == "path" {
+						out = append(out, c.Content[i+1].Value)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// EnvFileCandidates are the repository files that can stand in for env file
+// ref of a compose file in dir: the file itself (rarely committed), then its
+// example variants.
+func EnvFileCandidates(dir, ref string) []string {
+	p := path.Clean(path.Join(firstNonEmpty(dir, "."), ref))
+	d := path.Dir(p)
+	out := []string{p}
+	for _, suf := range []string{".example", ".sample", ".template", ".dist", ".defaults"} {
+		out = append(out, p+suf)
+	}
+	return append(out, path.Join(d, ".env.example"), path.Join(d, ".env.sample"), path.Join(d, "example.env"))
+}
+
+func (opt ComposeOptions) envFile(ref string) (content, from string, example bool) {
+	for i, c := range EnvFileCandidates(opt.Dir, ref) {
+		if v, ok := opt.Files[c]; ok {
+			return v, c, i > 0
+		}
+	}
+	return "", "", false
+}
+
+// ParseDotenv reads KEY=value lines (export prefix, quotes and trailing
+// comments allowed).
+func ParseDotenv(content string) [][2]string {
+	var out [][2]string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		k, v, ok := strings.Cut(line, "=")
+		k = strings.TrimSpace(k)
+		if !ok || !envKey.MatchString(k) {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
+			if end := strings.IndexByte(v[1:], v[0]); end >= 0 {
+				v = v[1 : end+1]
+			}
+		} else if i := strings.Index(v, " #"); i >= 0 {
+			v = strings.TrimSpace(v[:i])
+		}
+		out = append(out, [2]string{k, v})
+	}
+	return out
+}
+
+var (
+	envKey           = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	selfSecret       = regexp.MustCompile(`(?i)^(JWT|SESSION|COOKIE|AUTH|NEXTAUTH|ENCRYPTION|SIGNING|CSRF|APP|SECRET)[A-Z0-9_]*(SECRET|_KEY|_SALT)$|^SECRET(_KEY)?(_BASE)?$|^SALT$`)
+	placeholderValue = regexp.MustCompile(`(?i)your[-_ ]|change[-_ ]?(this|me|it)|replace[-_ ]?me|example\.(com|org)|xxxx|^<[^>]+>$|^\.\.\.$|_here$|-here$`)
+	dbSchemes        = map[string]string{"postgres": "postgres", "postgresql": "postgres", "mysql": "mysql", "mariadb": "mysql", "mongodb": "mongo", "mongodb+srv": "mongo", "redis": "redis", "rediss": "redis"}
+)
+
+func localHost(h string) bool {
+	return h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "0.0.0.0" || h == "host.docker.internal"
+}
+
+// fileEnv turns an env file into service variables. Database URLs pointing at
+// the developer's machine (or written in an example file) become managed
+// databases; in example files, app secrets are generated, credentials of
+// other services (API keys, OAuth clients) are reported as missing, and
+// localhost URLs point at the public service.
+func fileEnv(content string, example bool, primary string, plan *ComposePlan, dbs map[string]bool) (env, links map[string]string, missing []string) {
+	env, links = map[string]string{}, map[string]string{}
+	for _, kv := range ParseDotenv(content) {
+		k, v := kv[0], kv[1]
+		if u, err := url.Parse(v); err == nil && u.Host != "" {
+			if engine, ok := dbSchemes[u.Scheme]; ok && (example || localHost(u.Hostname())) {
+				links[k] = ensureDB(plan, dbs, engine)
+				continue
+			}
+			if example && localHost(u.Hostname()) && (u.Scheme == "http" || u.Scheme == "https") && primary != "" {
+				rest := u.EscapedPath()
+				if u.RawQuery != "" {
+					rest += "?" + u.RawQuery
+				}
+				env[k] = "${svc." + primary + ".url}" + strings.TrimSuffix(rest, "/")
+				continue
+			}
+		}
+		if !example {
+			if v != "" {
+				env[k] = v
+			}
+			continue
+		}
+		switch {
+		case selfSecret.MatchString(k):
+			b := make([]byte, 24)
+			_, _ = rand.Read(b)
+			env[k] = hex.EncodeToString(b)
+		case v == "":
+		case secretVar.MatchString(k) || placeholderValue.MatchString(v):
+			missing = append(missing, k)
+		default:
+			env[k] = v
+		}
+	}
+	sort.Strings(missing)
+	return env, links, missing
+}
+
+// ensureDB returns the managed database of an engine, adding one to the plan
+// when the compose file has none.
+func ensureDB(plan *ComposePlan, dbs map[string]bool, engine string) string {
+	for _, d := range plan.Databases {
+		if d.Engine == engine {
+			return d.Name
+		}
+	}
+	name := engine
+	for dbs[name] {
+		name += "-db"
+	}
+	dbs[name] = true
+	plan.Databases = append(plan.Databases, Database{Name: name, Engine: engine})
+	return name
+}
+
+// ComposeEnvFiles lists the repository files that may hold the env files of a
+// compose file in dir (see EnvFileCandidates), for the build node to send along.
+func ComposeEnvFiles(data []byte, dir string) []string {
+	var f composeFile
+	if yaml.Unmarshal(data, &f) != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, cs := range f.Services {
+		for _, ref := range envFilePaths(cs.EnvFile) {
+			for _, c := range EnvFileCandidates(dir, ref) {
+				if !seen[c] {
+					seen[c] = true
+					out = append(out, c)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
