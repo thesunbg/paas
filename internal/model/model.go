@@ -100,28 +100,28 @@ type SleepPolicy struct {
 }
 
 type ServiceSpec struct {
-	Port          int               `json:"port,omitempty"`
-	Replicas      int               `json:"replicas"`
-	Resources     Resources         `json:"resources"`
-	QoS           string            `json:"qos,omitempty"`
-	RuntimeClass  string            `json:"runtime_class,omitempty"`
-	HealthCheck   HealthCheck       `json:"health_check"`
-	Sleep         SleepPolicy       `json:"sleep"`
-	Volumes       []Volume          `json:"volumes,omitempty"`
-	Command       []string          `json:"command,omitempty"`
-	Image         string            `json:"image,omitempty"` // fixed image (databases)
-	SPA           bool              `json:"spa,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`      // non-secret env baked by the system (databases)
-	Language      string            `json:"language,omitempty"` // detected language, used for runtime tuning
-	DNSAliases    []string          `json:"dns_aliases,omitempty"`
+	Port         int               `json:"port,omitempty"`
+	Replicas     int               `json:"replicas"`
+	Resources    Resources         `json:"resources"`
+	QoS          string            `json:"qos,omitempty"`
+	RuntimeClass string            `json:"runtime_class,omitempty"`
+	HealthCheck  HealthCheck       `json:"health_check"`
+	Sleep        SleepPolicy       `json:"sleep"`
+	Volumes      []Volume          `json:"volumes,omitempty"`
+	Command      []string          `json:"command,omitempty"`
+	Image        string            `json:"image,omitempty"` // fixed image (databases)
+	SPA          bool              `json:"spa,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`      // non-secret env baked by the system (databases)
+	Language     string            `json:"language,omitempty"` // detected language, used for runtime tuning
+	DNSAliases   []string          `json:"dns_aliases,omitempty"`
 	// DependsOn names services of the project (by slug) this one talks to. They
 	// start first, and it restarts after they are redeployed: programs such as
 	// nginx resolve their upstreams once at startup and would keep a stale IP.
-	DependsOn []string `json:"depends_on,omitempty"`
-	Previews      bool              `json:"previews,omitempty"` // deploy a preview for every pull request
-	Autoscale     Autoscale         `json:"autoscale"`
-	Schedule      string            `json:"schedule,omitempty"` // cron jobs: 5-field cron expression
-	JobTimeoutSec int               `json:"job_timeout_sec,omitempty"`
+	DependsOn     []string  `json:"depends_on,omitempty"`
+	Previews      bool      `json:"previews,omitempty"` // deploy a preview for every pull request
+	Autoscale     Autoscale `json:"autoscale"`
+	Schedule      string    `json:"schedule,omitempty"` // cron jobs: 5-field cron expression
+	JobTimeoutSec int       `json:"job_timeout_sec,omitempty"`
 }
 
 // Autoscale adjusts replicas between Min and Max from CPU and request rate.
