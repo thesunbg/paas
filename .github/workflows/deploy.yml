@@ -1,0 +1,99 @@
+name: deploy
+
+# Installs (or upgrades) paas on a server over SSH.
+# Needs the repository secret DEPLOY_PASSWORD (or DEPLOY_SSH_KEY) for the SSH user.
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: Server IP or hostname
+        required: true
+        default: 202.92.6.129
+      port:
+        description: SSH port
+        required: true
+        default: "24700"
+      user:
+        description: SSH user
+        required: true
+        default: root
+      domain:
+        description: Base domain for apps (empty = <ip>.sslip.io)
+        required: false
+        default: ""
+      email:
+        description: Email for automatic HTTPS (empty = HTTP only)
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-${{ inputs.host }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HOST: ${{ inputs.host }}
+      PORT: ${{ inputs.port }}
+      USER_NAME: ${{ inputs.user }}
+      SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+      SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Prepare SSH
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass >/dev/null
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          if [ -n "$SSH_KEY" ]; then
+            printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+            echo "SSH_OPTS=-i $HOME/.ssh/id_deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -p $PORT" >> "$GITHUB_ENV"
+            echo "SSH_WRAP=" >> "$GITHUB_ENV"
+          elif [ -n "$SSHPASS" ]; then
+            echo "SSH_OPTS=-o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -o PubkeyAuthentication=no -p $PORT" >> "$GITHUB_ENV"
+            echo "SSH_WRAP=sshpass -e" >> "$GITHUB_ENV"
+          else
+            echo "::error::Add the repository secret DEPLOY_PASSWORD (or DEPLOY_SSH_KEY)"; exit 1
+          fi
+
+      - name: Check server
+        run: |
+          $SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" 'uname -a; cat /etc/os-release | head -2; nproc; free -m | head -2; df -h / | tail -1'
+          ARCH=$($SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" 'uname -m')
+          case "$ARCH" in x86_64|amd64) GOARCH=amd64;; aarch64|arm64) GOARCH=arm64;; *) echo "::error::unsupported arch $ARCH"; exit 1;; esac
+          echo "GOARCH=$GOARCH" >> "$GITHUB_ENV"
+
+      - name: Build paasd and paas
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH go build -trimpath -ldflags "-s -w" -o dist/paasd ./cmd/paasd
+          CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH go build -trimpath -ldflags "-s -w" -o dist/paas ./cmd/paas
+          ls -la dist
+
+      - name: Upload
+        run: |
+          SCP_OPTS=$(echo "$SSH_OPTS" | sed 's/-p /-P /')
+          $SSH_WRAP scp $SCP_OPTS dist/paasd dist/paas internal/installer/install.sh "$USER_NAME@$HOST:/tmp/"
+
+      - name: Install
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          EMAIL: ${{ inputs.email }}
+        run: |
+          ARGS="server --binary /tmp/paasd"
+          [ -n "$DOMAIN" ] && ARGS="$ARGS --domain $DOMAIN"
+          [ -n "$EMAIL" ] && ARGS="$ARGS --email $EMAIL"
+          $SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" "install -m 0755 /tmp/paas /usr/local/bin/paas && sh /tmp/install.sh $ARGS"
+
+      - name: Verify
+        run: |
+          $SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" '
+            for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 2; done; echo
+            systemctl --no-pager --lines=0 status paasd containerd buildkit | grep -E "●|Active:"
+            journalctl -u paasd --no-pager -n 25
+            . /etc/paas/paasd.env; echo "Dashboard: $PAAS_PUBLIC_URL  (or http://$(hostname -I | awk "{print \$1}"):8080)"'
