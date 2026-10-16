@@ -17,9 +17,6 @@ jobs:
           sshpass -e ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -p $PORT root@$HOST 'bash -s' <<'SH'
           set +e
           . /etc/paas/db.env
-          iptables -w -S DOCKER-USER
-          SP=$(psql "$PAAS_DATABASE_URL" -XAtc "select i.ip from instances i join services s on s.id=i.service_id where s.slug='shared-postgres' and i.status='running' limit 1")
-          C=$(psql "$PAAS_DATABASE_URL" -XAtc "select i.container_id from instances i join services s on s.id=i.service_id where s.slug='net-empire' and i.status='running' limit 1")
-          PID=$(ctr -n paas tasks ls | awk -v c="$C" '$1==c{print $2}')
-          nsenter -t $PID -n bash -c "timeout 3 bash -c '</dev/tcp/$SP/5432' && echo app-to-shared-postgres-OK || echo app-to-shared-postgres-FAIL"
+          psql "$PAAS_DATABASE_URL" -X -P pager=off -c "select s.slug, n.name, i.status, i.container_id, i.created_at from instances i join services s on s.id=i.service_id left join nodes n on n.id=i.node_id where s.slug in ('n8n','giaphaviet','wordpress') order by i.created_at desc"
+          for c in $(psql "$PAAS_DATABASE_URL" -XAtc "select i.container_id from instances i join services s on s.id=i.service_id join nodes n on n.id=i.node_id where s.slug='n8n' and n.address='202.92.6.129' order by i.created_at desc limit 1"); do echo "-- $c"; grep -vE "Starting migration|Finished migration" /var/lib/paas/containers/$c/output.log | tail -n 40; grep -c "Finished migration" /var/lib/paas/containers/$c/output.log; done
           SH
