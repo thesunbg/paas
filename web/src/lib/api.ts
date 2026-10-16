@@ -87,6 +87,7 @@ export interface ServiceSource {
   dockerfile?: string;
   image?: string;
   auto_deploy?: boolean;
+  installation_id?: number;
 }
 
 export interface BuildConfig {
@@ -633,7 +634,80 @@ const patch = <T>(p: string, b: unknown) => request<T>('PATCH', p, b);
 const del = <T = { status: string }>(p: string) => request<T>('DELETE', p);
 const e = encodeURIComponent;
 
+export interface GitHubAppStatus {
+  configured: boolean;
+  can_configure: boolean;
+  base_url: string;
+  id?: number;
+  slug?: string;
+  name?: string;
+  html_url?: string;
+  owner?: string;
+}
+
+export interface GitHubInstallation {
+  installation_id: number;
+  team_id: string;
+  account_login: string;
+  account_type: string;
+  created_at: string;
+}
+
+export interface TeamGitHub {
+  configured: boolean;
+  app_slug?: string;
+  install_url?: string;
+  installations: GitHubInstallation[];
+}
+
+export interface GitHubRepo {
+  id: number;
+  full_name: string;
+  private: boolean;
+  default_branch: string;
+  clone_url: string;
+  html_url: string;
+  description: string;
+  language: string;
+  pushed_at: string;
+  installation_id: number;
+  account: string;
+}
+
+export interface DetectInput {
+  repo: string;
+  branch?: string;
+  root_dir?: string;
+  git_token?: string;
+  dockerfile?: string;
+  installation_id?: number;
+}
+
+export interface DetectResult {
+  language: string;
+  framework: string;
+  static: boolean;
+  port: number;
+  suggested_type: ServiceType;
+  dockerfile: boolean;
+  commit_sha: string;
+  commit_message: string;
+  summary: string;
+  error?: string;
+}
+
 export const api = {
+  // GitHub App
+  githubApp: () => get<GitHubAppStatus>('/github/app'),
+  githubManifest: (organization?: string) => post<{ action_url: string; manifest: string }>('/github/app/manifest', organization ? { organization } : {}),
+  deleteGitHubApp: () => del('/github/app'),
+  teamGitHub: (team: string, ret?: string) => get<TeamGitHub>(`/teams/${e(team)}/github${ret ? '?return=' + e(ret) : ''}`),
+  githubRepos: (team: string) => get<{ repos: GitHubRepo[]; errors: string[] | null }>(`/teams/${e(team)}/github/repos`),
+  githubBranches: (team: string, installation: number, repo: string) =>
+    get<{ branches: string[] }>(`/teams/${e(team)}/github/branches?installation_id=${installation}&repo=${e(repo)}`),
+  unlinkGitHub: (team: string, installation: number) => del(`/teams/${e(team)}/github/installations/${installation}`),
+  detect: (project: string, input: DetectInput) => post<DetectResult>(`/projects/${e(project)}/detect`, input),
+
   // Auth
   setup: () => get<SetupStatus>('/setup'),
   register: (email: string, password: string, name: string) => post<AuthResponse>('/auth/register', { email, password, name }),

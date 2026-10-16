@@ -134,6 +134,28 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 
 `POST /webhooks/github/{serviceId}` — configure it in GitHub (content type `application/json`, secret = the service `webhook_secret`, event `push`). Pushes to the service branch deploy automatically; `root_dir` limits deploys to changes under that folder.
 
+## GitHub App (Vercel-style integration)
+
+One GitHub App per installation of paas, created from a manifest; teams install it on
+their GitHub accounts/organizations and pick repositories from a list.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/github/app` | Status of the app (`configured`, `slug`, `html_url`) |
+| POST | `/api/v1/github/app/manifest` | Admin. `{organization?}` → `{action_url, manifest}`; the browser POSTs `manifest` as a form field to `action_url` |
+| GET | `/api/v1/github/app/callback` | GitHub redirects here after creating the app (stores its keys encrypted) |
+| DELETE | `/api/v1/github/app` | Admin. Forget the app |
+| GET | `/api/v1/teams/{team}/github` | Connected installations and a signed `install_url` |
+| GET | `/api/v1/github/installed` | GitHub redirects here after installing; the OAuth code proves the user can access the installation |
+| GET | `/api/v1/teams/{team}/github/repos` | Repositories granted to the team's installations |
+| GET | `/api/v1/teams/{team}/github/branches?installation_id=&repo=owner/name` | Branches |
+| DELETE | `/api/v1/teams/{team}/github/installations/{id}` | Team admin. Unlink |
+| POST | `/api/v1/webhooks/github-app` | App webhook (push, pull_request, installation), HMAC-verified |
+| POST | `/api/v1/projects/{id}/detect` | `{repo, branch, root_dir?, installation_id? \| git_token?}` → detected language, framework, suggested type and port |
+
+A service created with `source.installation_id` clones with short-lived installation tokens and
+receives pushes and pull requests through the app webhook (no per-repository webhook needed).
+
 ## Advanced features
 
 ### Service fields (create / PATCH)

@@ -11,6 +11,7 @@
   import CopyField from '../components/CopyField.svelte';
   import Notifications from './settings/Notifications.svelte';
   import TwoFactor from './settings/TwoFactor.svelte';
+  import GitHub from './settings/GitHub.svelte';
 
   let { tab = 'tokens' }: { tab?: string } = $props();
 
@@ -20,6 +21,7 @@
     { id: 'security', label: 'Two-factor auth' },
     { id: 'members', label: 'Team members' },
     { id: 'notifications', label: 'Notifications' },
+    { id: 'github', label: 'GitHub' },
   ];
 
   // Tokens
@@ -288,6 +290,8 @@
         <TwoFactor />
       {:else if tab === 'notifications'}
         <Notifications />
+      {:else if tab === 'github'}
+        <GitHub />
       {:else}
         <p class="muted">Unknown section.</p>
       {/if}

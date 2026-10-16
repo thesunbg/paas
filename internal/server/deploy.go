@@ -226,9 +226,9 @@ func (s *Server) buildDeployment(ctx context.Context, svc *store.Service, d *sto
 	}
 	_ = s.store.UpdateDeploymentBuild(ctx, d.ID, node.ID)
 	d.BuildNodeID = &node.ID
-	token, err := s.box.Decrypt(svc.GitTokenEnc)
+	token, err := s.gitToken(ctx, svc)
 	if err != nil {
-		return fmt.Errorf("decrypt git token: %w", err)
+		return fmt.Errorf("git credentials: %w", err)
 	}
 	env, err := s.userEnv(ctx, svc)
 	if err != nil {

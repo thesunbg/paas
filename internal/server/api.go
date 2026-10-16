@@ -35,6 +35,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	mux.HandleFunc("POST /api/v1/webhooks/github/{id}", s.handleGitHubWebhook)
+	mux.HandleFunc("POST /api/v1/webhooks/github-app", s.handleGitHubAppWebhook)
+	mux.HandleFunc("GET /api/v1/github/app/callback", s.handleGitHubAppCallback)
+	mux.HandleFunc("GET /api/v1/github/installed", s.handleGitHubInstalled)
 
 	h("GET /api/v1/me", s.handleMe)
 	h("POST /api/v1/me/password", s.handleChangePassword)
@@ -52,6 +55,13 @@ func (s *Server) routes() http.Handler {
 	h("POST /api/v1/teams/{team}/members", s.handleAddMember)
 	h("DELETE /api/v1/teams/{team}/members/{user}", s.handleRemoveMember)
 	h("GET /api/v1/teams/{team}/projects", s.handleListProjects)
+	h("GET /api/v1/teams/{team}/github", s.handleTeamGitHub)
+	h("GET /api/v1/teams/{team}/github/repos", s.handleGitHubRepos)
+	h("GET /api/v1/teams/{team}/github/branches", s.handleGitHubBranches)
+	h("DELETE /api/v1/teams/{team}/github/installations/{installation}", s.handleUnlinkGitHubInstallation)
+	h("GET /api/v1/github/app", s.handleGitHubAppStatus)
+	h("POST /api/v1/github/app/manifest", s.handleGitHubAppManifest)
+	h("DELETE /api/v1/github/app", s.handleDeleteGitHubApp)
 	h("POST /api/v1/teams/{team}/projects", s.handleCreateProject)
 
 	h("GET /api/v1/projects/{id}", s.handleGetProject)
@@ -59,6 +69,7 @@ func (s *Server) routes() http.Handler {
 	h("POST /api/v1/projects/{id}/services", s.handleCreateService)
 	h("POST /api/v1/projects/{id}/databases", s.handleCreateDatabase)
 	h("POST /api/v1/projects/{id}/templates/{template}", s.handleInstallTemplate)
+	h("POST /api/v1/projects/{id}/detect", s.handleDetect)
 	h("POST /api/v1/projects/{id}/compose", s.handleImportCompose)
 	h("GET /api/v1/templates", s.handleListTemplates)
 

@@ -72,6 +72,14 @@ paas logs api -f
 
 Then add the webhook URL shown on the service page to the GitHub repository (events: `push`, plus `pull_request` for previews). Every push deploys automatically.
 
+## Connect GitHub
+
+Open **Settings → GitHub → Create GitHub App** (administrator, once). GitHub creates a private
+app for your server and sends you back. Then **Connect GitHub account**, choose the repositories
+to grant, and in **New service** pick a repository from the list: language, type and port are
+detected automatically, and pushes / pull requests deploy without manual webhooks or tokens.
+The server's `PAAS_PUBLIC_URL` must be reachable from GitHub.
+
 ## High availability
 
 Run several control planes against the same (highly available) PostgreSQL:

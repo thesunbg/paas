@@ -116,12 +116,12 @@
 
     const src =
       kind === 'git'
-        ? { kind: 'git' as const, repo: repo.trim(), branch: branch.trim() || 'main', root_dir: rootDir.trim() || undefined, dockerfile: dockerfile.trim() || undefined }
+        ? { kind: 'git' as const, repo: repo.trim(), branch: branch.trim() || 'main', root_dir: rootDir.trim() || undefined, dockerfile: dockerfile.trim() || undefined, installation_id: s0.source.installation_id || undefined }
         : { kind: 'image' as const, image: image.trim() };
     const curSrc =
       s.source.kind === 'image'
         ? { kind: 'image', image: s.source.image }
-        : { kind: 'git', repo: s.source.repo, branch: s.source.branch, root_dir: s.source.root_dir || undefined, dockerfile: s.source.dockerfile || undefined };
+        : { kind: 'git', repo: s.source.repo, branch: s.source.branch, root_dir: s.source.root_dir || undefined, dockerfile: s.source.dockerfile || undefined, installation_id: s.source.installation_id || undefined };
     if (!same(src, curSrc)) p.source = src;
     if (kind === 'git' && autoDeploy !== (s.source.auto_deploy ?? true)) p.auto_deploy = autoDeploy;
     if (clearToken) p.git_token = '';
@@ -248,11 +248,15 @@
             <label class="field"><span>Root directory</span><input class="mono" bind:value={rootDir} placeholder="/" /></label>
             <label class="field"><span>Dockerfile</span><input class="mono" bind:value={dockerfile} placeholder="auto-detect" /></label>
           </div>
+          {#if s0.source.installation_id}
+          <p class="hint">Connected through the GitHub App — no token needed.</p>
+          {:else}
           <label class="field">
             <span>Access token</span>
             <input type="password" class="mono" bind:value={gitToken} placeholder={detail.service.has_git_token ? '•••••••• (set — leave blank to keep)' : 'not set'} autocomplete="off" disabled={clearToken} />
           </label>
           {#if detail.service.has_git_token}<label class="check small"><input type="checkbox" bind:checked={clearToken} />Remove the stored token</label>{/if}
+          {/if}
           <label class="check small"><input type="checkbox" bind:checked={autoDeploy} />Deploy automatically on push</label>
         {:else}
           <label class="field"><span>Image</span><input class="mono" bind:value={image} spellcheck="false" /></label>
@@ -416,7 +420,14 @@
   </form>
 
   <aside class="stack-lg">
-    {#if s0.source.kind !== 'image'}
+    {#if s0.source.kind !== 'image' && s0.source.installation_id}
+      <div class="card">
+        <div class="card-head"><h3>GitHub</h3></div>
+        <div class="card-body stack">
+          <p class="small">Connected through the GitHub App. Pushes to <code>{s0.source.branch || 'main'}</code>{s0.source.root_dir ? ` touching ${s0.source.root_dir}/` : ''} deploy automatically{detail.service.source.auto_deploy ? '' : ' (auto-deploy is currently off)'}; commit statuses{previews ? ' and PR previews' : ''} are reported on GitHub.</p>
+        </div>
+      </div>
+    {:else if s0.source.kind !== 'image'}
       <div class="card">
         <div class="card-head"><h3>GitHub webhook</h3></div>
         <div class="card-body stack">

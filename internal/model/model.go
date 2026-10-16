@@ -64,6 +64,8 @@ type ServiceSource struct {
 	Dockerfile string `json:"dockerfile,omitempty"`
 	Image      string `json:"image,omitempty"`
 	AutoDeploy bool   `json:"auto_deploy"`
+	// InstallationID selects the GitHub App installation used for clones, statuses and comments.
+	InstallationID int64 `json:"installation_id,omitempty"`
 }
 
 type BuildConfig struct {

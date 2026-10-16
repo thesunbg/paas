@@ -45,6 +45,7 @@ const (
 	CmdPush        = "push"
 	CmdJob         = "job"
 	CmdTransfer    = "transfer"
+	CmdDetect      = "detect"
 )
 
 type RegisterRequest struct {
@@ -255,4 +256,26 @@ type TransferRequest struct {
 	Method string `json:"method"`
 	URL    string `json:"url"`
 	Path   string `json:"path"`
+}
+
+// DetectRequest asks a build node to inspect a repository without building it.
+type DetectRequest struct {
+	Repo       string `json:"repo"`
+	Branch     string `json:"branch"`
+	RootDir    string `json:"root_dir,omitempty"`
+	GitToken   string `json:"git_token,omitempty"`
+	Dockerfile string `json:"dockerfile,omitempty"`
+}
+
+type DetectReply struct {
+	Language      string `json:"language"`
+	Framework     string `json:"framework,omitempty"`
+	Static        bool   `json:"static"`
+	Port          int    `json:"port,omitempty"`
+	SuggestedType string `json:"suggested_type"` // web | static | worker
+	Dockerfile    bool   `json:"dockerfile"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
+	CommitMessage string `json:"commit_message,omitempty"`
+	Summary       string `json:"summary"`
+	Error         string `json:"error,omitempty"`
 }

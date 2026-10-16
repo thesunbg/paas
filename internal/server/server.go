@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"github.com/thesunbg/paas/internal/github"
 	"log/slog"
 	"net/http"
 	"os"
@@ -68,6 +69,9 @@ type Server struct {
 	traffic *traffic
 	scaleMu sync.Mutex
 	scale   map[string]*scaleState
+
+	ghMu sync.Mutex
+	gh   *github.Client
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.

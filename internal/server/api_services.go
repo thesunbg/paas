@@ -198,6 +198,10 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	if err := s.checkInstallation(r.Context(), p.TeamID, svc.Source.InstallationID); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
 	if in.Domain != "" {
 		if err := validHostname(in.Domain); err != nil {
 			writeError(w, 400, err.Error())
@@ -363,6 +367,10 @@ func (s *Server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 	before := svc.Spec
 	if err := s.applyInput(svc, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if err := s.checkInstallation(r.Context(), p.TeamID, svc.Source.InstallationID); err != nil {
 		writeError(w, 400, err.Error())
 		return
 	}

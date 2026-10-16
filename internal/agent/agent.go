@@ -129,9 +129,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		{proto.CmdPush, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handlePush) }},
 		{proto.CmdJob, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleJob) }},
 		{proto.CmdTransfer, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleTransfer) }},
+		{proto.CmdDetect, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleDetect) }},
 	}
 	for _, s := range subs {
-		if s.cmd == proto.CmdBuild && a.builder == nil {
+		if (s.cmd == proto.CmdBuild || s.cmd == proto.CmdDetect || s.cmd == proto.CmdPush) && a.builder == nil {
 			continue
 		}
 		sub, err := s.fn(a.nc, proto.AgentSubject(a.nodeID, s.cmd))
@@ -543,4 +544,11 @@ func (a *Agent) handleTransfer(ctx context.Context, req *proto.TransferRequest) 
 		return &proto.GenericReply{Error: "method must be GET or PUT"}
 	}
 	return &proto.GenericReply{}
+}
+
+func (a *Agent) handleDetect(ctx context.Context, req *proto.DetectRequest) *proto.DetectReply {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	rep := a.builder.Inspect(ctx, *req)
+	return &rep
 }

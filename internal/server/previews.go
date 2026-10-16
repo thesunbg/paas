@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -124,7 +123,7 @@ func (s *Server) ensurePreview(ctx context.Context, parent *store.Service, ev pu
 	pr := ev.Number
 	prv := &store.Service{
 		ProjectID: parent.ProjectID, Name: fmt.Sprintf("%s (PR #%d)", parent.Name, pr), Slug: fmt.Sprintf("%s-pr-%d", parent.Slug, pr),
-		Type: parent.Type, Source: model.ServiceSource{Kind: "git", Repo: repo, Branch: ev.PullRequest.Head.Ref, RootDir: parent.Source.RootDir, Dockerfile: parent.Source.Dockerfile},
+		Type: parent.Type, Source: model.ServiceSource{Kind: "git", Repo: repo, Branch: ev.PullRequest.Head.Ref, RootDir: parent.Source.RootDir, Dockerfile: parent.Source.Dockerfile, InstallationID: parent.Source.InstallationID},
 		Build: parent.Build, Spec: spec, GitTokenEnc: parent.GitTokenEnc, WebhookSecret: util.RandomToken(20),
 		ParentID: &parent.ID, PreviewPR: &pr,
 	}
@@ -145,14 +144,10 @@ func (s *Server) ensurePreview(ctx context.Context, parent *store.Service, ev pu
 	return created, true, nil
 }
 
-// commentPreview posts the preview URL on the pull request (needs a git token).
+// commentPreview posts the preview URL on the pull request (needs GitHub access).
 func (s *Server) commentPreview(parent, preview *store.Service, pr int) {
 	m := githubRepoRe.FindStringSubmatch(parent.Source.Repo)
-	if m == nil || parent.GitTokenEnc == "" {
-		return
-	}
-	token, err := s.box.Decrypt(parent.GitTokenEnc)
-	if err != nil || token == "" {
+	if m == nil || (parent.GitTokenEnc == "" && parent.Source.InstallationID == 0) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -163,12 +158,8 @@ func (s *Server) commentPreview(parent, preview *store.Service, pr int) {
 		urls = append(urls, s.urlFor(d.Hostname))
 	}
 	body := fmt.Sprintf("🚀 Preview deployment for **%s**: %s\n\nIt updates on every push and is removed when this pull request is closed.", parent.Name, strings.Join(urls, ", "))
-	payload, _ := json.Marshal(map[string]string{"body": body})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/comments", m[1], m[2], pr), bytes.NewReader(payload))
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	if resp, err := http.DefaultClient.Do(req); err == nil {
-		resp.Body.Close()
+	if err := s.githubPost(ctx, parent, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", m[1], m[2], pr), map[string]string{"body": body}); err != nil {
+		slog.Debug("github comment", "err", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -67,7 +68,11 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid signature")
 		return
 	}
-	event := r.Header.Get("X-GitHub-Event")
+	s.handleGitHubEvent(w, r, svc, r.Header.Get("X-GitHub-Event"), body)
+}
+
+// handleGitHubEvent acts on a verified push or pull_request event for one service.
+func (s *Server) handleGitHubEvent(w http.ResponseWriter, r *http.Request, svc *store.Service, event string, body []byte) {
 	if event == "ping" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pong"})
 		return
@@ -134,38 +139,74 @@ func touchesPath(ev pushEvent, prefix string) bool {
 	return false
 }
 
-// reportCommitStatus posts a commit status to GitHub when the service has a token.
+// reportCommitStatus posts a commit status to GitHub when the service has GitHub access.
 func (s *Server) reportCommitStatus(ctx context.Context, svc *store.Service, d *store.Deployment, state string) {
-	if svc == nil || d == nil || svc.GitTokenEnc == "" || d.CommitSHA == "" || svc.Source.Kind != "git" {
+	if svc == nil || d == nil || d.CommitSHA == "" || svc.Source.Kind != "git" || !validSHA(d.CommitSHA) {
+		return
+	}
+	if svc.GitTokenEnc == "" && svc.Source.InstallationID == 0 {
 		return
 	}
 	m := githubRepoRe.FindStringSubmatch(svc.Source.Repo)
 	if m == nil {
 		return
 	}
-	token, err := s.box.Decrypt(svc.GitTokenEnc)
-	if err != nil || token == "" {
-		return
-	}
 	desc := map[string]string{"pending": "Deploying…", "success": "Deployed", "failure": "Deployment failed"}[state]
-	payload, _ := json.Marshal(map[string]string{
+	payload := map[string]string{
 		"state": state, "context": "paas/" + svc.Slug, "description": desc,
 		"target_url": fmt.Sprintf("%s/#/services/%s/deployments/%s", s.cfg.PublicURL, svc.ID, d.ID),
-	})
+	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
-		url := fmt.Sprintf("https://api.github.com/repos/%s/%s/statuses/%s", m[1], m[2], d.CommitSHA)
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Accept", "application/vnd.github+json")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
+		if err := s.githubPost(ctx, svc, fmt.Sprintf("/repos/%s/%s/statuses/%s", m[1], m[2], d.CommitSHA), payload); err != nil {
 			slog.Debug("github status", "err", err)
-			return
 		}
-		resp.Body.Close()
 	}()
+}
+
+// githubPost calls the GitHub API for a service with its app installation or personal token.
+func (s *Server) githubPost(ctx context.Context, svc *store.Service, path string, body any) error {
+	if svc.Source.InstallationID != 0 {
+		c, err := s.githubApp(ctx)
+		if err != nil {
+			return err
+		}
+		return c.Post(ctx, svc.Source.InstallationID, path, body)
+	}
+	token, err := s.box.Decrypt(svc.GitTokenEnc)
+	if err != nil || token == "" {
+		return errors.New("no git token")
+	}
+	payload, _ := json.Marshal(body)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com"+path, bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("github %s: HTTP %d", path, resp.StatusCode)
+	}
+	return nil
+}
+
+// gitToken returns the credential used to clone a service's repository.
+func (s *Server) gitToken(ctx context.Context, svc *store.Service) (string, error) {
+	if svc.Source.InstallationID != 0 {
+		c, err := s.githubApp(ctx)
+		if err != nil {
+			return "", err
+		}
+		return c.Token(ctx, svc.Source.InstallationID)
+	}
+	token, err := s.box.Decrypt(svc.GitTokenEnc)
+	if err != nil {
+		return "", fmt.Errorf("decrypt git token: %w", err)
+	}
+	return token, nil
 }
 
 var _ = model.TypeWeb

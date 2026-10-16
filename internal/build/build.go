@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/thesunbg/paas/internal/detect"
+	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/proto"
 )
 
@@ -330,4 +331,45 @@ func declaredArgs(dockerfile string) map[string]bool {
 		out[m[1]] = true
 	}
 	return out
+}
+
+// Inspect clones a repository and reports what it would be built as.
+func (b *Builder) Inspect(ctx context.Context, req proto.DetectRequest) proto.DetectReply {
+	work, err := os.MkdirTemp(b.WorkDir, "detect-")
+	if err != nil {
+		if err := os.MkdirAll(b.WorkDir, 0o755); err != nil {
+			return proto.DetectReply{Error: err.Error()}
+		}
+		if work, err = os.MkdirTemp(b.WorkDir, "detect-"); err != nil {
+			return proto.DetectReply{Error: err.Error()}
+		}
+	}
+	defer os.RemoveAll(work)
+	src := filepath.Join(work, "src")
+	sha, msg, err := b.checkout(ctx, proto.BuildRequest{Repo: req.Repo, Branch: req.Branch, GitToken: req.GitToken}, src, func(string) {})
+	if err != nil {
+		return proto.DetectReply{Error: err.Error()}
+	}
+	root := src
+	if req.RootDir != "" && req.RootDir != "/" && req.RootDir != "." {
+		root = filepath.Join(src, filepath.Clean("/"+req.RootDir))
+		if _, err := os.Stat(root); err != nil || !strings.HasPrefix(root, src) {
+			return proto.DetectReply{Error: fmt.Sprintf("root directory %q not found in repository", req.RootDir)}
+		}
+	}
+	plan, err := detect.Detect(root, detect.Options{ServiceType: model.TypeWeb, Dockerfile: req.Dockerfile})
+	if err != nil {
+		return proto.DetectReply{CommitSHA: sha, CommitMessage: msg, Error: err.Error()}
+	}
+	rep := proto.DetectReply{
+		Language: plan.Language, Framework: plan.Framework, Static: plan.Static, Port: plan.Port,
+		Dockerfile: plan.UserDockerfile != "", CommitSHA: sha, CommitMessage: msg, Summary: plan.Summary(), SuggestedType: model.TypeWeb,
+	}
+	if plan.Static {
+		rep.SuggestedType = model.TypeStatic
+	}
+	if rep.Port == 0 && !plan.Static {
+		rep.Port = detect.DefaultPort
+	}
+	return rep
 }

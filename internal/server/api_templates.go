@@ -9,6 +9,7 @@ import (
 
 	"github.com/thesunbg/paas/internal/databases"
 	"github.com/thesunbg/paas/internal/model"
+	"github.com/thesunbg/paas/internal/proto"
 	"github.com/thesunbg/paas/internal/resources"
 	"github.com/thesunbg/paas/internal/store"
 	"github.com/thesunbg/paas/internal/templates"
@@ -163,4 +164,54 @@ func (s *Server) waitDatabasesReady(ctx context.Context, ids []string, timeout t
 			time.Sleep(2 * time.Second)
 		}
 	}
+}
+
+// handleDetect inspects a repository on a build node so the UI can preselect type and port.
+func (s *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
+	p := s.projectFor(w, r, r.PathValue("id"), "developer")
+	if p == nil {
+		return
+	}
+	var in struct {
+		proto.DetectRequest
+		InstallationID int64 `json:"installation_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if in.Repo == "" {
+		writeError(w, 400, "repo is required")
+		return
+	}
+	if in.Branch == "" {
+		in.Branch = "main"
+	}
+	if in.InstallationID != 0 {
+		if err := s.checkInstallation(r.Context(), p.TeamID, in.InstallationID); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		tok, err := s.gitToken(r.Context(), &store.Service{Source: model.ServiceSource{InstallationID: in.InstallationID}})
+		if err != nil {
+			writeError(w, 502, err.Error())
+			return
+		}
+		in.GitToken = tok
+	}
+	node, err := s.pickBuildNode(r.Context())
+	if err != nil {
+		writeError(w, 503, err.Error())
+		return
+	}
+	var rep proto.DetectReply
+	if err := s.requestAgent(r.Context(), node.ID, proto.CmdDetect, in.DetectRequest, &rep, 3*time.Minute); err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	if rep.Error != "" {
+		writeJSON(w, 422, rep)
+		return
+	}
+	writeJSON(w, 200, rep)
 }
