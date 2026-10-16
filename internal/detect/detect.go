@@ -302,12 +302,7 @@ func (d *detector) node() (*Plan, error) {
 	if prisma {
 		plan.Prisma = prismaInfo(d.dir, pkg.Prisma.Schema)
 		if plan.Prisma != nil && start != "" && b.StartCmd == "" {
-			// Apply the schema before the app starts (the database may be new).
-			if plan.Prisma.Migrations {
-				start = "npx prisma migrate deploy && " + start
-			} else {
-				start = "npx prisma db push --skip-generate && " + start
-			}
+			start = prismaStart(plan.Prisma) + start
 		}
 	}
 
@@ -346,6 +341,32 @@ var (
 	prismaURLEnvRe   = regexp.MustCompile(`(?s)datasource\s+\w+\s*\{.*?url\s*=\s*env\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)`)
 )
 
+// prismaStart prepares the database before the app starts: a new SQLite file
+// starts from the committed one, migrations are applied, then db push adds
+// whatever the migrations miss (schemas edited with db push only). Failures are
+// reported but do not stop the app, which shows its own error.
+func prismaStart(p *proto.Prisma) string {
+	var b strings.Builder
+	env := firstNonEmptyStr(p.URLEnv, "DATABASE_URL")
+	if p.SeedFile != "" {
+		fmt.Fprintf(&b, `f="${%[1]s#file:}"; case "$%[1]s" in file:/*) if [ ! -s "$f" ]; then mkdir -p "$(dirname "$f")" && cp %[2]s "$f" && echo "prisma: initial data from %[2]s"; fi;; esac; `, env, shQuote(p.SeedFile))
+	}
+	if p.Migrations {
+		b.WriteString(`npx prisma migrate deploy || echo "prisma migrate deploy failed"; `)
+	}
+	b.WriteString(`npx prisma db push --skip-generate || echo "prisma db push failed"; `)
+	return b.String()
+}
+
+func firstNonEmptyStr(v ...string) string {
+	for _, s := range v {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // prismaInfo reads the datasource of the Prisma schema (prisma/schema.prisma,
 // the package.json "prisma.schema" path, or a prisma/schema/ folder).
 func prismaInfo(dir, configured string) *proto.Prisma {
@@ -380,6 +401,15 @@ func prismaInfo(dir, configured string) *proto.Prisma {
 			info.URLEnv = u[1]
 		}
 		info.Migrations = exists(filepath.Join(filepath.Dir(p), "migrations"))
+		if info.Provider == "sqlite" {
+			// A database file committed next to the schema is the app's initial data.
+			for _, name := range []string{"dev.db", "data.db", "db.sqlite", "database.db", "prod.db"} {
+				if f := filepath.Join(filepath.Dir(p), name); exists(f) {
+					info.SeedFile, _ = filepath.Rel(dir, f)
+					break
+				}
+			}
+		}
 		return info
 	}
 	return nil

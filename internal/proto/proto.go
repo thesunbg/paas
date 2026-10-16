@@ -296,7 +296,8 @@ type PITRPrepareRequest struct {
 
 // Prisma describes the database a Prisma app expects, so the platform can provide it.
 type Prisma struct {
-	Provider   string `json:"provider"`          // sqlite | postgresql | mysql | ...
-	URLEnv     string `json:"url_env,omitempty"` // env var named in url = env("...")
-	Migrations bool   `json:"migrations"`        // prisma/migrations exists
+	Provider   string `json:"provider"`            // sqlite | postgresql | mysql | ...
+	URLEnv     string `json:"url_env,omitempty"`   // env var named in url = env("...")
+	Migrations bool   `json:"migrations"`          // prisma/migrations exists
+	SeedFile   string `json:"seed_file,omitempty"` // SQLite file committed in the repository (initial data)
 }

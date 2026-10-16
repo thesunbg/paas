@@ -169,13 +169,20 @@ func TestPrismaInfo(t *testing.T) {
 	if p.Prisma == nil || p.Prisma.Provider != "sqlite" || p.Prisma.URLEnv != "DATABASE_URL" || !p.Prisma.Migrations {
 		t.Fatalf("prisma info %+v", p.Prisma)
 	}
-	if !strings.Contains(p.Dockerfile, "npx prisma migrate deploy && npm run start") {
+	if !strings.Contains(p.Dockerfile, "npx prisma migrate deploy || ") || !strings.Contains(p.Dockerfile, "npx prisma db push --skip-generate || ") {
 		t.Fatalf("start command does not apply migrations:\n%s", p.Dockerfile)
 	}
+	// A committed SQLite file seeds a new database.
+	write(t, dir, map[string]string{"prisma/dev.db": "SQLite format 3"})
+	p, _ = Detect(dir, Options{ServiceType: model.TypeWeb})
+	if p.Prisma.SeedFile != "prisma/dev.db" || !strings.Contains(p.Dockerfile, "cp 'prisma/dev.db'") {
+		t.Fatalf("seed: %+v\n%s", p.Prisma, p.Dockerfile)
+	}
+	os.Remove(filepath.Join(dir, "prisma", "dev.db"))
 	// Without migrations the schema is pushed.
 	os.RemoveAll(filepath.Join(dir, "prisma", "migrations"))
 	p, _ = Detect(dir, Options{ServiceType: model.TypeWeb})
-	if !strings.Contains(p.Dockerfile, "npx prisma db push --skip-generate && npm run start") {
+	if strings.Contains(p.Dockerfile, "migrate deploy") || !strings.Contains(p.Dockerfile, "npx prisma db push --skip-generate || ") {
 		t.Fatalf("expected db push:\n%s", p.Dockerfile)
 	}
 }
