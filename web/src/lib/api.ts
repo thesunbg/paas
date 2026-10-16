@@ -764,7 +764,41 @@ export interface DetectResult {
   summary: string;
   prisma?: { provider: string; url_env?: string; migrations: boolean };
   compose?: { path: string; services: string[] };
+  compose_plan?: ComposePlan;
+  env?: EnvHint[];
+  env_file?: string;
   error?: string;
+}
+
+export interface EnvHint {
+  key: string;
+  kind: 'value' | 'generated' | 'required' | 'optional' | 'database' | 'url';
+  value?: string;
+  hint?: string;
+}
+
+export interface EnvInput {
+  key: string;
+  required: boolean;
+  placeholder?: string;
+  hint?: string;
+  from?: string;
+}
+
+export interface ComposePlan {
+  services: {
+    name: string;
+    public: boolean;
+    port?: number;
+    dockerfile?: string;
+    image?: string;
+    links?: Record<string, string>;
+    depends_on?: string[];
+    inputs: EnvInput[];
+    env_count: number;
+  }[];
+  databases: { name: string; engine: string; version?: string }[];
+  warnings: string[];
 }
 
 export interface ImportRepoInput {
@@ -774,6 +808,7 @@ export interface ImportRepoInput {
   git_token?: string;
   compose_path?: string;
   domain?: string;
+  env?: Record<string, Record<string, string>>;
 }
 
 export interface TeamLimits {

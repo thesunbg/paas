@@ -1,7 +1,6 @@
 package templates
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -229,14 +228,41 @@ SEED_FAIL_FAST=0   # 1 = stop on failure
 	if len(fe.DependsOn) != 1 || fe.DependsOn[0] != "backend" {
 		t.Fatalf("depends_on: %v", fe.DependsOn)
 	}
-	found := false
-	for _, w := range plan.Warnings {
-		if strings.Contains(w, "OPENAI_API_KEY") {
-			found = true
-		}
+	in := map[string]EnvInput{}
+	for _, i := range be.Inputs {
+		in[i.Key] = i
 	}
-	if !found {
-		t.Fatalf("warnings: %v", plan.Warnings)
+	if i := in["OPENAI_API_KEY"]; !i.Required || i.Placeholder != "sk-your-api-key-here" || i.From != ".env.example" {
+		t.Fatalf("OPENAI_API_KEY input: %+v", i)
+	}
+	if i, ok := in["GOOGLE_CLIENT_ID"]; !ok || i.Required {
+		t.Fatalf("GOOGLE_CLIENT_ID is optional: %+v", in)
+	}
+	if _, ok := in["NODE_ENV"]; ok {
+		t.Fatal("variables the compose file sets are not inputs")
+	}
+	if len(fe.Inputs) != 0 {
+		t.Fatalf("frontend inputs: %+v", fe.Inputs)
+	}
+}
+
+func TestExampleEnv(t *testing.T) {
+	hints := ExampleEnv("# AI Providers (at least one required)\nOPENAI_API_KEY=sk-your-key\nGEMINI_API_KEY=\n\nDATABASE_URL=postgresql://u:p@localhost:5432/app\nAPP_URL=http://localhost:3000/\nJWT_SECRET=dev\nLOG_LEVEL=info # debug, info or warn\n")
+	got := map[string]EnvHint{}
+	for _, h := range hints {
+		got[h.Key] = h
+	}
+	if h := got["OPENAI_API_KEY"]; h.Kind != "required" || h.Hint != "AI Providers (at least one required)" {
+		t.Fatalf("%+v", h)
+	}
+	if h := got["GEMINI_API_KEY"]; h.Kind != "optional" || h.Hint != "AI Providers (at least one required)" {
+		t.Fatalf("%+v", h)
+	}
+	if h := got["DATABASE_URL"]; h.Kind != "database" || h.Value != "postgres" || h.Hint != "" {
+		t.Fatalf("%+v", h)
+	}
+	if got["APP_URL"].Kind != "url" || got["JWT_SECRET"].Kind != "generated" || got["LOG_LEVEL"].Value != "info" || got["LOG_LEVEL"].Hint != "debug, info or warn" {
+		t.Fatalf("%+v", got)
 	}
 }
 

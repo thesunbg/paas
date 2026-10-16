@@ -384,6 +384,7 @@ func (b *Builder) Inspect(ctx context.Context, req proto.DetectRequest) proto.De
 	if rep.Port == 0 && !plan.Static {
 		rep.Port = detect.DefaultPort
 	}
+	rep.EnvFile, rep.Env = exampleEnv(root, src)
 	return rep
 }
 
@@ -458,4 +459,26 @@ func findCompose(src, path string) (*proto.ComposeFile, error) {
 		return nil, fmt.Errorf("compose file %s not found in the repository", path)
 	}
 	return nil, nil
+}
+
+// exampleEnv reads the example env file of an app directory, if it has one.
+func exampleEnv(root, src string) (string, []proto.EnvHint) {
+	for _, n := range []string{".env.example", ".env.sample", "example.env", ".env.template", ".env.dist", ".env.defaults"} {
+		p := filepath.Join(root, n)
+		st, err := os.Lstat(p)
+		if err != nil || !st.Mode().IsRegular() || st.Size() > 64<<10 {
+			continue
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var out []proto.EnvHint
+		for _, h := range templates.ExampleEnv(string(b)) {
+			out = append(out, proto.EnvHint{Key: h.Key, Kind: h.Kind, Value: h.Value, Hint: h.Hint})
+		}
+		rel, _ := filepath.Rel(src, p)
+		return filepath.ToSlash(rel), out
+	}
+	return "", nil
 }

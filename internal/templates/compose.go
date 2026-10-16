@@ -148,6 +148,7 @@ func ParseCompose(data []byte, opt ComposeOptions) (*ComposePlan, error) {
 	ip.primary = primary
 	envOf := map[string]map[string]string{}
 	fileLinks := map[string]map[string]string{}
+	inputs := map[string][]EnvInput{}
 	for _, name := range names {
 		if dbs[name] {
 			envOf[name] = composeEnv(f.Services[name].Environment, ip)
@@ -161,15 +162,16 @@ func ParseCompose(data []byte, opt ComposeOptions) (*ComposePlan, error) {
 				warn("%s: env file %s is not in the repository; set its variables in the service's environment", name, ref)
 				continue
 			}
-			fe, fl, missing := fileEnv(content, example, primary, plan, dbs)
+			fe, fl, in := fileEnv(content, example, primary, plan, dbs)
 			for k, v := range fe {
 				env[k] = v
 			}
 			for k, v := range fl {
 				links[k] = v
 			}
-			if len(missing) > 0 {
-				warn("%s: set %s (from %s) in the service's environment", name, strings.Join(missing, ", "), from)
+			for _, i := range in {
+				i.From = from
+				inputs[name] = append(inputs[name], i)
 			}
 		}
 		for k, v := range composeEnv(f.Services[name].Environment, ip) {
@@ -227,6 +229,11 @@ func ParseCompose(data []byte, opt ComposeOptions) (*ComposePlan, error) {
 			// Another service depends on it: most likely an internal API. The
 			// port comes from the Dockerfile's EXPOSE at build time.
 			svc.Port, svc.Type = DefaultBuildPort, "web"
+		}
+		for _, in := range inputs[name] {
+			if _, set := envOf[name][in.Key]; !set {
+				svc.Inputs = append(svc.Inputs, in)
+			}
 		}
 		for k, db := range fileLinks[name] {
 			if svc.Links == nil {
@@ -620,30 +627,57 @@ func (opt ComposeOptions) envFile(ref string) (content, from string, example boo
 	return "", "", false
 }
 
+type dotenvEntry struct{ key, value, comment string }
+
 // ParseDotenv reads KEY=value lines (export prefix, quotes and trailing
 // comments allowed).
 func ParseDotenv(content string) [][2]string {
 	var out [][2]string
+	for _, e := range parseDotenv(content) {
+		out = append(out, [2]string{e.key, e.value})
+	}
+	return out
+}
+
+// parseDotenv also keeps the comment block right above each variable
+// (a blank line ends it), or the comment after its value.
+func parseDotenv(content string) []dotenvEntry {
+	var out []dotenvEntry
+	var comment []string
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
+			comment = nil
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			if c := strings.TrimSpace(strings.TrimLeft(line, "#")); c != "" && !strings.Contains(c, "=") {
+				comment = append(comment, c)
+			}
 			continue
 		}
 		line = strings.TrimPrefix(line, "export ")
 		k, v, ok := strings.Cut(line, "=")
 		k = strings.TrimSpace(k)
 		if !ok || !envKey.MatchString(k) {
+			comment = nil
 			continue
 		}
 		v = strings.TrimSpace(v)
+		trailing := ""
 		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
 			if end := strings.IndexByte(v[1:], v[0]); end >= 0 {
 				v = v[1 : end+1]
 			}
 		} else if i := strings.Index(v, " #"); i >= 0 {
+			trailing = strings.TrimSpace(v[i+2:])
 			v = strings.TrimSpace(v[:i])
 		}
-		out = append(out, [2]string{k, v})
+		hint := strings.Join(comment, " ")
+		if trailing != "" {
+			hint = trailing
+		}
+		out = append(out, dotenvEntry{key: k, value: v, comment: hint})
 	}
 	return out
 }
@@ -659,49 +693,103 @@ func localHost(h string) bool {
 	return h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "0.0.0.0" || h == "host.docker.internal"
 }
 
-// fileEnv turns an env file into service variables. Database URLs pointing at
-// the developer's machine (or written in an example file) become managed
-// databases; in example files, app secrets are generated, credentials of
-// other services (API keys, OAuth clients) are reported as missing, and
-// localhost URLs point at the public service.
-func fileEnv(content string, example bool, primary string, plan *ComposePlan, dbs map[string]bool) (env, links map[string]string, missing []string) {
-	env, links = map[string]string{}, map[string]string{}
-	for _, kv := range ParseDotenv(content) {
-		k, v := kv[0], kv[1]
+// EnvHint is a variable of an example env file and what the platform makes of it.
+type EnvHint struct {
+	Key   string `json:"key"`
+	Kind  string `json:"kind"`            // value | generated | required | optional | database | url
+	Value string `json:"value,omitempty"` // value, generated secret, placeholder (required), engine (database) or path (url)
+	Hint  string `json:"hint,omitempty"`  // the comment above it in the file
+}
+
+// EnvInput is a variable the user has to (required) or may (optional) fill in.
+type EnvInput struct {
+	Key         string `json:"key"`
+	Required    bool   `json:"required"`
+	Placeholder string `json:"placeholder,omitempty"`
+	Hint        string `json:"hint,omitempty"`
+	From        string `json:"from,omitempty"` // the example file it comes from
+}
+
+// ExampleEnv classifies the variables of an example env file: defaults are
+// kept, app secrets generated, credentials of other services (API keys,
+// OAuth clients) and placeholders must be filled in, empty ones may be,
+// database URLs call for a database and localhost URLs for the public URL.
+func ExampleEnv(content string) []EnvHint {
+	var out []EnvHint
+	for _, e := range parseDotenv(content) {
+		h := EnvHint{Key: e.key, Hint: e.comment}
+		v := e.value
 		if u, err := url.Parse(v); err == nil && u.Host != "" {
-			if engine, ok := dbSchemes[u.Scheme]; ok && (example || localHost(u.Hostname())) {
-				links[k] = ensureDB(plan, dbs, engine)
+			if engine, ok := dbSchemes[u.Scheme]; ok {
+				h.Kind, h.Value = "database", engine
+				out = append(out, h)
 				continue
 			}
-			if example && localHost(u.Hostname()) && (u.Scheme == "http" || u.Scheme == "https") && primary != "" {
+			if localHost(u.Hostname()) && (u.Scheme == "http" || u.Scheme == "https") {
 				rest := u.EscapedPath()
 				if u.RawQuery != "" {
 					rest += "?" + u.RawQuery
 				}
-				env[k] = "${svc." + primary + ".url}" + strings.TrimSuffix(rest, "/")
+				h.Kind, h.Value = "url", strings.TrimSuffix(rest, "/")
+				out = append(out, h)
 				continue
 			}
 		}
-		if !example {
+		switch {
+		case selfSecret.MatchString(e.key):
+			b := make([]byte, 24)
+			_, _ = rand.Read(b)
+			h.Kind, h.Value = "generated", hex.EncodeToString(b)
+		case v == "":
+			h.Kind = "optional"
+		case secretVar.MatchString(e.key) || placeholderValue.MatchString(v):
+			h.Kind, h.Value = "required", v
+		default:
+			h.Kind, h.Value = "value", v
+		}
+		out = append(out, h)
+	}
+	return out
+}
+
+// fileEnv turns an env file into service variables. Database URLs pointing at
+// the developer's machine (or written in an example file) become managed
+// databases; an example file is read with ExampleEnv, and what it cannot fill
+// becomes inputs for the user.
+func fileEnv(content string, example bool, primary string, plan *ComposePlan, dbs map[string]bool) (env, links map[string]string, inputs []EnvInput) {
+	env, links = map[string]string{}, map[string]string{}
+	if !example {
+		for _, kv := range ParseDotenv(content) {
+			k, v := kv[0], kv[1]
+			if u, err := url.Parse(v); err == nil && u.Host != "" {
+				if engine, ok := dbSchemes[u.Scheme]; ok && localHost(u.Hostname()) {
+					links[k] = ensureDB(plan, dbs, engine)
+					continue
+				}
+			}
 			if v != "" {
 				env[k] = v
 			}
-			continue
 		}
-		switch {
-		case selfSecret.MatchString(k):
-			b := make([]byte, 24)
-			_, _ = rand.Read(b)
-			env[k] = hex.EncodeToString(b)
-		case v == "":
-		case secretVar.MatchString(k) || placeholderValue.MatchString(v):
-			missing = append(missing, k)
-		default:
-			env[k] = v
+		return env, links, nil
+	}
+	for _, h := range ExampleEnv(content) {
+		switch h.Kind {
+		case "database":
+			links[h.Key] = ensureDB(plan, dbs, h.Value)
+		case "url":
+			if primary != "" {
+				env[h.Key] = "${svc." + primary + ".url}" + h.Value
+			}
+		case "generated", "value":
+			env[h.Key] = h.Value
+		case "required":
+			inputs = append(inputs, EnvInput{Key: h.Key, Required: true, Placeholder: h.Value, Hint: h.Hint})
+		case "optional":
+			inputs = append(inputs, EnvInput{Key: h.Key, Hint: h.Hint})
 		}
 	}
-	sort.Strings(missing)
-	return env, links, missing
+	return env, links, inputs
 }
 
 // ensureDB returns the managed database of an engine, adding one to the plan

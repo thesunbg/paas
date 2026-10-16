@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/thesunbg/paas/internal/databases"
@@ -98,6 +99,8 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 		GitToken       string `json:"git_token"`
 		ComposePath    string `json:"compose_path"`
 		Domain         string `json:"domain"`
+		// Env holds the values the user filled in, by service: {"backend": {"OPENAI_API_KEY": "…"}}.
+		Env map[string]map[string]string `json:"env"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeError(w, 400, err.Error())
@@ -130,6 +133,27 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
+	}
+	for i := range plan.Services {
+		svc := &plan.Services[i]
+		for k, v := range in.Env[svc.Name] {
+			if !envKeyRe.MatchString(k) {
+				writeError(w, 400, "invalid environment variable name "+k)
+				return
+			}
+			if v != "" {
+				svc.Env[k] = v
+			}
+		}
+		var unset []string
+		for _, i := range svc.Inputs {
+			if _, set := svc.Env[i.Key]; i.Required && !set {
+				unset = append(unset, i.Key)
+			}
+		}
+		if len(unset) > 0 {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %s not set yet (add in the service's Environment)", svc.Name, strings.Join(unset, ", ")))
+		}
 	}
 	if err := s.checkCounts(r, p.TeamID, 0, len(plan.Services), len(plan.Databases)); err != nil {
 		writeError(w, 403, err.Error())
@@ -376,9 +400,54 @@ func (s *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, err.Error())
 		return
 	}
+	out := struct {
+		*proto.DetectReply
+		ComposePlan *composePreview `json:"compose_plan,omitempty"`
+	}{DetectReply: rep}
 	if rep.Compose != nil {
+		if plan, err := templates.ParseCompose([]byte(rep.Compose.Content), templates.ComposeOptions{Dir: path.Dir(rep.Compose.Path), Repo: true, Files: rep.Compose.Files}); err == nil {
+			out.ComposePlan = previewOf(plan)
+		}
 		// The browser only needs the summary; env files can hold secrets.
 		rep.Compose.Content, rep.Compose.Files = "", nil
 	}
-	writeJSON(w, 200, rep)
+	writeJSON(w, 200, out)
+}
+
+// composePreview is what importing a compose file will create, for the UI to
+// show (and collect missing variables) before anything is created.
+type composePreview struct {
+	Services  []previewService     `json:"services"`
+	Databases []templates.Database `json:"databases"`
+	Warnings  []string             `json:"warnings"`
+}
+
+type previewService struct {
+	Name       string               `json:"name"`
+	Public     bool                 `json:"public"`
+	Port       int                  `json:"port,omitempty"`
+	Dockerfile string               `json:"dockerfile,omitempty"`
+	Image      string               `json:"image,omitempty"`
+	Links      map[string]string    `json:"links,omitempty"`
+	DependsOn  []string             `json:"depends_on,omitempty"`
+	Inputs     []templates.EnvInput `json:"inputs"`
+	EnvCount   int                  `json:"env_count"`
+}
+
+func previewOf(plan *templates.ComposePlan) *composePreview {
+	out := &composePreview{Services: []previewService{}, Databases: plan.Databases, Warnings: plan.Warnings}
+	for _, s := range plan.Services {
+		ps := previewService{
+			Name: s.Name, Public: !s.Private && s.Port > 0 && s.Type != "worker", Port: s.Port, Image: s.Image,
+			Links: s.Links, DependsOn: s.DependsOn, Inputs: s.Inputs, EnvCount: len(s.Env),
+		}
+		if ps.Inputs == nil {
+			ps.Inputs = []templates.EnvInput{}
+		}
+		if s.Build != nil {
+			ps.Dockerfile = path.Join(s.Build.RootDir, firstNonEmpty(s.Build.Dockerfile, "Dockerfile"))
+		}
+		out.Services = append(out.Services, ps)
+	}
+	return out
 }

@@ -10,6 +10,7 @@
   import Loading from '../components/Loading.svelte';
   import Icon from '../components/Icon.svelte';
   import EnvEditor from '../components/EnvEditor.svelte';
+  import EnvInputs from '../components/EnvInputs.svelte';
   import CronField from '../components/CronField.svelte';
   import AutoscaleFields from '../components/AutoscaleFields.svelte';
   import { parseCron } from '../lib/cron';
@@ -214,6 +215,11 @@
   // A docker-compose file describing several services: create them all at once.
   let importing = $state(false);
   let importWarnings = $state<string[]>([]);
+  let composeEnv = $state<Record<string, Record<string, string>>>({});
+  const composeServices = $derived(detected?.compose_plan?.services ?? []);
+  $effect(() => {
+    for (const s of composeServices) if (!composeEnv[s.name]) composeEnv[s.name] = {};
+  });
   async function importAll() {
     if (!detected?.compose) return;
     importing = true;
@@ -225,6 +231,7 @@
         installation_id: installationId,
         git_token: !installationId && gitToken.trim() ? gitToken.trim() : undefined,
         compose_path: detected.compose.path,
+        env: composeEnv,
       });
       const n = r.services?.length ?? 0;
       const d = r.databases?.length ?? 0;
@@ -240,6 +247,24 @@
       importing = false;
     }
   }
+
+  // Variables from the app's .env.example: defaults and generated secrets go
+  // straight into the environment, the rest is asked for.
+  let exampleValues = $state<Record<string, string>>({});
+  let exampleApplied = $state('');
+  const exampleInputs = $derived(
+    (detected?.env ?? [])
+      .filter((h) => h.kind === 'required' || h.kind === 'optional')
+      .map((h) => ({ key: h.key, required: h.kind === 'required', placeholder: h.value, hint: h.hint })),
+  );
+  const exampleNotes = $derived((detected?.env ?? []).filter((h) => h.kind === 'database' || h.kind === 'url'));
+  $effect(() => {
+    const env = detected?.env;
+    if (!env?.length || exampleApplied === detectKey) return;
+    exampleApplied = detectKey;
+    const add = env.filter((h) => (h.kind === 'value' || h.kind === 'generated') && !envRows.some((r) => r.key === h.key)).map((h) => ({ key: h.key, value: h.value ?? '' }));
+    envRows = [...envRows.filter((r) => r.key || r.value), ...add];
+  });
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
@@ -265,7 +290,7 @@
           : { image: image.trim() },
       size,
       sleep: type === 'web' && sleepEnabled && !autoscale.enabled ? { enabled: true, idle_minutes: idleMinutes } : { enabled: false },
-      env: rowsToMap(envRows),
+      env: { ...Object.fromEntries(Object.entries(exampleValues).filter(([k, v]) => v.trim() !== '' && !envRows.some((r) => r.key === k))), ...rowsToMap(envRows) },
       auto_deploy: sourceKind === 'git' ? autoDeploy : undefined,
       deploy: true,
     };
@@ -412,12 +437,12 @@
             {:else}
             <label class="field">
               <span>Repository URL</span>
-              <input class="mono" bind:value={repo} placeholder="https://github.com/acme/app" autocomplete="off" spellcheck="false" />
+              <input class="mono" bind:value={repo} onchange={detect} placeholder="https://github.com/acme/app" autocomplete="off" spellcheck="false" />
             </label>
             <div class="grid-2">
               <label class="field">
                 <span>Branch</span>
-                <input class="mono" bind:value={branch} placeholder="main" spellcheck="false" />
+                <input class="mono" bind:value={branch} onchange={detect} placeholder="main" spellcheck="false" />
               </label>
               <label class="field">
                 <span>Root directory <span class="faint">(optional)</span></span>
@@ -442,6 +467,29 @@
                     {#each detected.compose.services as s, i (s)}<code>{s}</code>{i < detected.compose.services.length - 1 ? ', ' : ''}{/each}.
                     <br /><span class="faint small">Services with a <code>build</code> section are built from this repository with their Dockerfile; database containers become managed databases, linked automatically. Secrets the file expects are generated.</span>
                   </div>
+                  {#if detected.compose_plan}
+                    {@const cp = detected.compose_plan}
+                    <ul class="plan">
+                      {#each cp.services as ps (ps.name)}
+                        <li>
+                          <div class="row nowrap">
+                            <Icon name={ps.public ? 'globe' : 'box'} size={14} />
+                            <b>{ps.name}</b>
+                            <span class="faint small mono truncate">{ps.dockerfile ?? ps.image}{ps.port ? ` · :${ps.port}` : ''}{ps.public ? ' · public' : ' · private'}{ps.depends_on?.length ? ` · after ${ps.depends_on.join(', ')}` : ''}</span>
+                          </div>
+                          {#if ps.links && Object.keys(ps.links).length}
+                            <div class="faint small">{#each Object.entries(ps.links) as [k, db] (k)}<code>{k}</code> ← database <b>{db}</b> {/each}</div>
+                          {/if}
+                          {#if ps.inputs.length && composeEnv[ps.name]}
+                            <EnvInputs inputs={ps.inputs} bind:values={composeEnv[ps.name]} disabled={importing} />
+                          {/if}
+                        </li>
+                      {/each}
+                      {#each cp.databases as d (d.name)}
+                        <li><div class="row nowrap"><Icon name="database" size={14} /><b>{d.name}</b><span class="faint small">managed {d.engine}{d.version ? ' ' + d.version : ''}</span></div></li>
+                      {/each}
+                    </ul>
+                  {/if}
                   {#if importWarnings.length}
                     <div class="alert warn small">
                       <div><b>Created, with warnings</b><ul>{#each importWarnings as w, i (i)}<li>{w}</li>{/each}</ul></div>
@@ -564,6 +612,20 @@
               <h3>Environment variables</h3>
               <p class="hint">Encrypted at rest. Paste a .env file to import many at once.</p>
             </div>
+            {#if detected?.env?.length}
+              <div class="compose">
+                <div class="small">
+                  Read <code>{detected.env_file}</code>: defaults and generated secrets are filled in below{exampleInputs.length ? '; fill in what only you know' : ''}.
+                </div>
+                {#if exampleInputs.length}<EnvInputs inputs={exampleInputs} bind:values={exampleValues} />{/if}
+                {#each exampleNotes as n (n.key)}
+                  <div class="faint small">
+                    <code>{n.key}</code>
+                    {#if n.kind === 'database'}expects a {n.value} database: create one in the project and link it as <code>{n.key}</code>{detected.prisma ? ' (Prisma: done automatically)' : ''}.{:else}points at localhost: set it to this service's public URL{n.value ? ` + ${n.value}` : ''} after it is created.{/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
             <EnvEditor bind:rows={envRows} masked />
           </div>
           {#if type === 'web' || type === 'static'}
@@ -808,6 +870,24 @@
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--bg-elev-2);
+  }
+  .plan {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .plan li {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-input);
   }
   .compose {
     display: flex;

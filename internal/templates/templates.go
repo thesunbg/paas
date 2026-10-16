@@ -27,6 +27,8 @@ type Service struct {
 	Private bool `json:"private,omitempty"`
 	// Links are environment variables that receive a database's URL (env -> database name).
 	Links map[string]string `json:"links,omitempty"`
+	// Inputs are variables the user fills in before the services are created.
+	Inputs []EnvInput `json:"inputs,omitempty"`
 	// DependsOn names services (of the same plan) to start first.
 	DependsOn []string `json:"depends_on,omitempty"`
 }

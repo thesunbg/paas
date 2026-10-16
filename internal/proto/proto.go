@@ -280,6 +280,14 @@ type DetectRequest struct {
 	ComposePath string `json:"compose_path,omitempty"`
 }
 
+// EnvHint is a variable of an example env file (see templates.ExampleEnv).
+type EnvHint struct {
+	Key   string `json:"key"`
+	Kind  string `json:"kind"`
+	Value string `json:"value,omitempty"`
+	Hint  string `json:"hint,omitempty"`
+}
+
 // ComposeFile is a docker-compose file found in a repository.
 type ComposeFile struct {
 	Path     string   `json:"path"` // relative to the repository root
@@ -302,7 +310,10 @@ type DetectReply struct {
 	Prisma        *Prisma `json:"prisma,omitempty"`
 	// Compose is set when the repository has a docker-compose file describing several services.
 	Compose *ComposeFile `json:"compose,omitempty"`
-	Error   string       `json:"error,omitempty"`
+	// Env lists the variables of the example env file next to the app (.env.example).
+	Env     []EnvHint `json:"env,omitempty"`
+	EnvFile string    `json:"env_file,omitempty"`
+	Error   string    `json:"error,omitempty"`
 }
 
 // PITRPrepareRequest lays out a PostgreSQL data directory for point-in-time
