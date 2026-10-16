@@ -59,7 +59,7 @@ func Manifest(name, baseURL string) map[string]any {
 			"url":    baseURL + "/api/v1/webhooks/github-app",
 			"active": true,
 		},
-		"public":          false,
+		"public":          true, // other GitHub users must be able to sign in and install it
 		"setup_on_update": true,
 		// Ask the installing user to authorize too, so the callback can prove
 		// they really have access to the installation they bring back.

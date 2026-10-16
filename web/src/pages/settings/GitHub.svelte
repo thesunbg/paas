@@ -90,7 +90,7 @@
       <Loading />
     {:else if !app.configured}
       <p>
-        Connect GitHub like Vercel: create a private <b>GitHub App</b> for this server in one click, then install it on your account or organization and choose
+        Connect GitHub like Vercel: create a <b>GitHub App</b> for this server in one click, then install it on your account or organization and choose
         which repositories it may access. Builds, push deploys, PR previews and commit statuses then work without personal tokens or manual webhooks.
       </p>
       {#if app.can_configure}
@@ -111,6 +111,10 @@
       <p>
         GitHub App <a href={app.html_url} target="_blank" rel="noreferrer"><b>{app.name}</b></a>
         {#if app.owner}<span class="faint">owned by {app.owner}</span>{/if}
+      </p>
+      <p class="hint">
+        Other people can only sign in with GitHub or connect their accounts when the app is <b>public</b>; a private app shows them a 404 page.
+        Check it under <a href={`${app.html_url?.replace('/apps/', '/settings/apps/')}/advanced`} target="_blank" rel="noreferrer">app settings → Advanced → Make public</a>.
       </p>
       {#if teamGH}
         <div class="section-title">Connected accounts for {team?.name}</div>
