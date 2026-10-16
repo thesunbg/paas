@@ -8,3 +8,7 @@
 6. Repo `https://<IP private nội bộ>/x.git` → bị từ chối trước clone.
 
 Xong khi: cả 6 bước khớp mô tả, và các service đang chạy redeploy vẫn bình thường.
+
+## Kết quả (2026-10-16)
+
+Redeploy `vietnam-maps` (deployment 2565f54e, commit 9639415) trên build node đã chạy bản e59236a: clone qua IP ghim cùng token scoped OK. Dockerfile sinh ra có `--mount=type=cache,id=ea298a47-…/root/.npm` (project id). Build 2m40s, deployment `active`. Token API tạm đã được xoá. Bước 1–3 và 6 (các ca tấn công) chỉ được cover bằng unit test, chưa chạy trên node.
