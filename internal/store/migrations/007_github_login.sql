@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN github_id BIGINT UNIQUE;
+ALTER TABLE users ADD COLUMN github_login TEXT;

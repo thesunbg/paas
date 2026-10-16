@@ -14,7 +14,12 @@ export interface User {
   name: string;
   is_admin: boolean;
   totp_enabled?: boolean;
+  github_login?: string;
   created_at: string;
+}
+
+export interface UserSummary extends User {
+  teams: number;
 }
 
 export interface Team {
@@ -34,6 +39,7 @@ export interface SetupStatus {
   needs_setup: boolean;
   allow_signup: boolean;
   base_domain: string;
+  github_login?: boolean;
 }
 
 export interface AuthResponse {
@@ -711,6 +717,13 @@ export interface SystemSettings {
 }
 
 export const api = {
+  users: () => get<UserSummary[]>('/users'),
+  createUser: (u: { email: string; name?: string; password?: string; is_admin?: boolean }) => post<{ user: User; password?: string }>('/users', u),
+  updateUser: (id: string, u: { name?: string; is_admin?: boolean; password?: string; reset_password?: boolean; disable_2fa?: boolean }) =>
+    patch<{ user: User; password?: string }>(`/users/${e(id)}`, u),
+  deleteUser: (id: string) => del(`/users/${e(id)}`),
+  unlinkMyGitHub: () => del('/me/github'),
+  githubLogin2FA: (pending: string, code: string) => post<AuthResponse>('/auth/github/2fa', { pending, code }),
   systemSettings: () => get<SystemSettings>('/admin/settings'),
   putSystemSettings: (s: Partial<SystemSettings>) => put<SystemSettings>('/admin/settings', s),
   // GitHub App

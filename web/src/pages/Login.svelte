@@ -18,6 +18,13 @@
   let codeInput: HTMLInputElement | undefined = $state();
   let error = $state('');
 
+  // Results of "Continue with GitHub" come back as #/login?github_error=… or ?github_2fa=…
+  const params = new URLSearchParams(location.hash.split('?')[1] ?? '');
+  const ghPending = params.get('github_2fa') ?? '';
+  if (params.get('github_error')) error = params.get('github_error')!;
+  if (ghPending) needCode = true;
+  if (params.has('github_error') || ghPending) history.replaceState(null, '', '#/');
+
   const isSetup = $derived(setup.needs_setup);
 
   async function submit(e: SubmitEvent) {
@@ -33,7 +40,8 @@
     }
     busy = true;
     try {
-      if (mode === 'register') await api.register(email.trim(), password, name.trim());
+      if (ghPending) await api.githubLogin2FA(ghPending, code.trim());
+      else if (mode === 'register') await api.register(email.trim(), password, name.trim());
       else await api.login(email.trim(), password, needCode ? code.trim() : undefined);
       if (wantsSignup) history.replaceState(null, '', '#/');
       await onauthed();
@@ -87,6 +95,7 @@
           <input bind:value={name} autocomplete="name" placeholder="Ada Lovelace" />
         </label>
       {/if}
+      {#if !ghPending}
       <label class="field">
         <span>Email</span>
         <input type="email" bind:value={email} required autocomplete="email" placeholder="you@example.com" readonly={needCode} />
@@ -95,6 +104,7 @@
         <span>Password</span>
         <input type="password" bind:value={password} required autocomplete={mode === 'login' ? 'current-password' : 'new-password'} minlength={mode === 'register' ? 8 : undefined} />
       </label>
+      {/if}
       {#if needCode && mode === 'login'}
         <label class="field">
           <span>Authentication code</span>
@@ -124,13 +134,38 @@
         {#if busy}<span class="spinner"></span>{/if}
         {#if isSetup}Create administrator{:else if mode === 'register'}Create account{:else if needCode}Verify{:else}Sign in{/if}
       </button>
-      {#if needCode}<button type="button" class="ghost sm" onclick={() => ((needCode = false), (code = ''), (error = ''))}>Use a different account</button>{/if}
+      {#if needCode && !ghPending}<button type="button" class="ghost sm" onclick={() => ((needCode = false), (code = ''), (error = ''))}>Use a different account</button>{/if}
+      {#if setup.github_login && !needCode}
+        <div class="or"><span>or</span></div>
+        <a class="btn gh" href="/api/v1/auth/github">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          Continue with GitHub
+        </a>
+      {/if}
     </form>
 
   </div>
 </div>
 
 <style>
+  .or {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-faint);
+    font-size: 12px;
+  }
+  .or::before,
+  .or::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--border);
+  }
+  .gh {
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+  }
   .tabs {
     display: flex;
     gap: 4px;
@@ -191,21 +226,5 @@
   .code {
     letter-spacing: 0.3em;
     font-size: 16px;
-  }
-  .switch {
-    text-align: center;
-    font-size: 13px;
-  }
-  .link {
-    background: none;
-    border: 0;
-    color: var(--accent);
-    padding: 0;
-    height: auto;
-    font-weight: 500;
-  }
-  .link:hover:not(:disabled) {
-    background: none;
-    text-decoration: underline;
   }
 </style>

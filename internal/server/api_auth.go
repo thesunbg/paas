@@ -27,7 +27,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	signup, _ := s.store.GetSetting(r.Context(), settingAllowSignup)
-	writeJSON(w, 200, map[string]any{"needs_setup": n == 0, "allow_signup": signup == "true", "base_domain": s.cfg.BaseDomain})
+	_, ghErr := s.githubApp(r.Context())
+	writeJSON(w, 200, map[string]any{"needs_setup": n == 0, "allow_signup": signup == "true", "base_domain": s.cfg.BaseDomain, "github_login": ghErr == nil && n > 0})
 }
 
 type credentialsInput struct {
@@ -148,16 +149,25 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.User) {
-	tok := util.RandomToken(32)
-	if err := s.store.CreateSession(r.Context(), util.HashToken(tok), u.ID, time.Now().Add(sessionTTL)); err != nil {
+	tok, err := s.newSession(w, r, u)
+	if err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	writeJSON(w, 200, map[string]any{"user": u, "token": tok})
+}
+
+// newSession creates a session and sets its cookie.
+func (s *Server) newSession(w http.ResponseWriter, r *http.Request, u *store.User) (string, error) {
+	tok := util.RandomToken(32)
+	if err := s.store.CreateSession(r.Context(), util.HashToken(tok), u.ID, time.Now().Add(sessionTTL)); err != nil {
+		return "", err
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", MaxAge: int(sessionTTL.Seconds()),
 	})
-	writeJSON(w, 200, map[string]any{"user": u, "token": tok})
+	return tok, nil
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

@@ -134,6 +134,23 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 
 `POST /webhooks/github/{serviceId}` — configure it in GitHub (content type `application/json`, secret = the service `webhook_secret`, event `push`). Pushes to the service branch deploy automatically; `root_dir` limits deploys to changes under that folder.
 
+## Accounts (administrators)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/users` | All accounts with team counts |
+| POST | `/api/v1/users` | `{email, name?, password?, is_admin?}`; without a password one is generated and returned once |
+| PATCH | `/api/v1/users/{id}` | `{name?, is_admin?, password?, reset_password?, disable_2fa?}` |
+| DELETE | `/api/v1/users/{id}` | |
+
+## Sign in with GitHub
+
+Uses the GitHub App's user authorization (no separate OAuth app). `GET /api/v1/auth/github` starts it;
+GitHub returns to the app callback URL. Accounts are matched by linked GitHub id, then by verified email;
+otherwise a new account is created when sign-up is open. Accounts with 2FA finish with
+`POST /api/v1/auth/github/2fa {pending, code}`. Signed-in users link with `GET /api/v1/me/github/link`
+and unlink with `DELETE /api/v1/me/github`.
+
 ## Sign-up and team limits (administrators)
 
 | Method | Path | Notes |

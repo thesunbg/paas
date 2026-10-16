@@ -309,6 +309,15 @@ func (s *Server) handleGitHubInstalled(w http.ResponseWriter, r *http.Request) {
 	fail := func(ret, msg string) {
 		http.Redirect(w, r, withQuery(ret, "github_error", msg), http.StatusFound)
 	}
+	// "Sign in with GitHub" and account linking return to the same callback URL.
+	if st, err := s.verifyState(ctx, q.Get("state"), "login"); err == nil {
+		s.finishGitHubLogin(w, r, st)
+		return
+	}
+	if st, err := s.verifyState(ctx, q.Get("state"), "link"); err == nil {
+		s.finishGitHubLink(w, r, st)
+		return
+	}
 	st, err := s.verifyState(ctx, q.Get("state"), "install")
 	if err != nil {
 		// Installed or changed from GitHub's own settings page: nothing to link.
@@ -345,7 +354,12 @@ func (s *Server) handleGitHubInstalled(w http.ResponseWriter, r *http.Request) {
 		fail(ret, "GitHub did not return an authorization code; enable \"Request user authorization (OAuth) during installation\" on the app")
 		return
 	}
-	ids, err := c.UserInstallationIDs(ctx, code)
+	userToken, err := c.UserToken(ctx, code)
+	if err != nil {
+		fail(ret, err.Error())
+		return
+	}
+	ids, err := c.UserInstallationIDs(ctx, userToken)
 	if err != nil {
 		fail(ret, err.Error())
 		return

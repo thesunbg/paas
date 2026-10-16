@@ -71,6 +71,7 @@ func Manifest(name, baseURL string) map[string]any {
 			"statuses":      "write",
 			"pull_requests": "write",
 			"issues":        "write",
+			"emails":        "read",
 		},
 		"default_events": []string{"push", "pull_request"},
 	}
@@ -285,24 +286,28 @@ func (c *Client) Post(ctx context.Context, installationID int64, path string, bo
 	return do(ctx, http.MethodPost, API+path, "token "+tok, body, nil)
 }
 
-// UserInstallationIDs exchanges an OAuth code (from the install callback) for a
-// user token and returns the installations of this app that user can access.
-func (c *Client) UserInstallationIDs(ctx context.Context, code string) (map[int64]bool, error) {
+// UserToken exchanges an OAuth code from a GitHub redirect for a user token.
+func (c *Client) UserToken(ctx context.Context, code string) (string, error) {
 	var tok struct {
 		AccessToken string `json:"access_token"`
 		Error       string `json:"error_description"`
 	}
 	body := map[string]string{"client_id": c.app.ClientID, "client_secret": c.app.ClientSecret, "code": code}
 	if err := do(ctx, http.MethodPost, Web+"/login/oauth/access_token", "", body, &tok); err != nil {
-		return nil, err
+		return "", err
 	}
 	if tok.AccessToken == "" {
-		return nil, fmt.Errorf("github oauth: %s", firstNonEmpty(tok.Error, "no access token"))
+		return "", fmt.Errorf("github oauth: %s", firstNonEmpty(tok.Error, "no access token"))
 	}
+	return tok.AccessToken, nil
+}
+
+// UserInstallationIDs returns the installations of this app the user token can access.
+func (c *Client) UserInstallationIDs(ctx context.Context, userToken string) (map[int64]bool, error) {
 	var res struct {
 		Installations []Installation `json:"installations"`
 	}
-	if err := do(ctx, http.MethodGet, API+"/user/installations?per_page=100", "token "+tok.AccessToken, nil, &res); err != nil {
+	if err := do(ctx, http.MethodGet, API+"/user/installations?per_page=100", "token "+userToken, nil, &res); err != nil {
 		return nil, err
 	}
 	ids := map[int64]bool{}
@@ -310,6 +315,42 @@ func (c *Client) UserInstallationIDs(ctx context.Context, code string) (map[int6
 		ids[in.ID] = true
 	}
 	return ids, nil
+}
+
+// User is the GitHub account behind a user token.
+type User struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+	Name  string `json:"name"`
+	// Email is verified (GitHub only shows verified addresses as public or primary).
+	Email string `json:"email"`
+}
+
+// CurrentUser returns the account and its verified primary email when visible.
+func (c *Client) CurrentUser(ctx context.Context, userToken string) (*User, error) {
+	var u User
+	if err := do(ctx, http.MethodGet, API+"/user", "token "+userToken, nil, &u); err != nil {
+		return nil, err
+	}
+	// Needs the "Email addresses" account permission; fall back to the public email.
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := do(ctx, http.MethodGet, API+"/user/emails", "token "+userToken, nil, &emails); err == nil {
+		for _, e := range emails {
+			if e.Primary && e.Verified {
+				u.Email = e.Email
+			}
+		}
+	}
+	return &u, nil
+}
+
+// AuthorizeURL starts "Sign in with GitHub"; GitHub returns to the app's callback URL.
+func (c *Client) AuthorizeURL(state string) string {
+	return fmt.Sprintf("%s/login/oauth/authorize?client_id=%s&state=%s", Web, url.QueryEscape(c.app.ClientID), url.QueryEscape(state))
 }
 
 func firstNonEmpty(v ...string) string {

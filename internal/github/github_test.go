@@ -108,7 +108,11 @@ func TestUserInstallationIDs(t *testing.T) {
 	defer srv.Close()
 	API, Web = srv.URL, srv.URL
 	c, _ := NewClient(app)
-	ids, err := c.UserInstallationIDs(t.Context(), "abc")
+	tok, err := c.UserToken(t.Context(), "abc")
+	if err != nil || tok != "ghu_x" {
+		t.Fatalf("token %q %v", tok, err)
+	}
+	ids, err := c.UserInstallationIDs(t.Context(), tok)
 	if err != nil || !ids[7] || !ids[9] || ids[8] {
 		t.Fatalf("ids %v %v", ids, err)
 	}

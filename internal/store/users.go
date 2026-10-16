@@ -15,14 +15,16 @@ type User struct {
 	IsAdmin      bool      `json:"is_admin"`
 	TOTPEnabled  bool      `json:"totp_enabled"`
 	TOTPSecret   string    `json:"-"`
+	GitHubID     int64     `json:"-"`
+	GitHubLogin  string    `json:"github_login,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-const userCols = `id, email, name, password_hash, is_admin, totp_enabled, totp_secret_enc, created_at`
+const userCols = `id, email, name, password_hash, is_admin, totp_enabled, totp_secret_enc, COALESCE(github_id, 0), COALESCE(github_login, ''), created_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.TOTPEnabled, &u.TOTPSecret, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.TOTPEnabled, &u.TOTPSecret, &u.GitHubID, &u.GitHubLogin, &u.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -60,7 +62,7 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash, userID string, exp
 }
 
 func (s *Store) UserBySession(ctx context.Context, tokenHash string) (*User, error) {
-	return scanUser(s.DB.QueryRow(ctx, `SELECT u.id, u.email, u.name, u.password_hash, u.is_admin, u.totp_enabled, u.totp_secret_enc, u.created_at
+	return scanUser(s.DB.QueryRow(ctx, `SELECT u.id, u.email, u.name, u.password_hash, u.is_admin, u.totp_enabled, u.totp_secret_enc, COALESCE(u.github_id, 0), COALESCE(u.github_login, ''), u.created_at
 		FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at > now()`, tokenHash))
 }
 
@@ -109,7 +111,7 @@ func (s *Store) DeleteAPIToken(ctx context.Context, userID, id string) error {
 func (s *Store) UserByAPIToken(ctx context.Context, tokenHash string) (*User, error) {
 	u, err := scanUser(s.DB.QueryRow(ctx, `UPDATE api_tokens t SET last_used_at=now() FROM users u
 		WHERE t.token_hash=$1 AND u.id=t.user_id
-		RETURNING u.id, u.email, u.name, u.password_hash, u.is_admin, u.totp_enabled, u.totp_secret_enc, u.created_at`, tokenHash))
+		RETURNING u.id, u.email, u.name, u.password_hash, u.is_admin, u.totp_enabled, u.totp_secret_enc, COALESCE(u.github_id, 0), COALESCE(u.github_login, ''), u.created_at`, tokenHash))
 	return u, err
 }
 
@@ -203,5 +205,47 @@ func (s *Store) RemoveMember(ctx context.Context, teamID, userID string) error {
 
 func (s *Store) SetTOTP(ctx context.Context, userID, secretEnc string, enabled bool) error {
 	_, err := s.DB.Exec(ctx, `UPDATE users SET totp_secret_enc=$2, totp_enabled=$3 WHERE id=$1`, userID, secretEnc, enabled)
+	return err
+}
+
+func (s *Store) UserByGitHubID(ctx context.Context, id int64) (*User, error) {
+	return scanUser(s.DB.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE github_id=$1`, id))
+}
+
+// LinkGitHub attaches (or with id 0 detaches) a GitHub account.
+func (s *Store) LinkGitHub(ctx context.Context, userID string, id int64, login string) error {
+	if id == 0 {
+		_, err := s.DB.Exec(ctx, `UPDATE users SET github_id=NULL, github_login=NULL WHERE id=$1`, userID)
+		return err
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE users SET github_id=$2, github_login=$3 WHERE id=$1`, userID, id, login)
+	return err
+}
+
+// UserSummary is a user with the number of teams they belong to (admin listing).
+type UserSummary struct {
+	User
+	Teams int `json:"teams"`
+}
+
+func (s *Store) ListUsers(ctx context.Context) ([]UserSummary, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+userCols+`, (SELECT count(*) FROM memberships m WHERE m.user_id=users.id) FROM users ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserSummary{}
+	for rows.Next() {
+		var u UserSummary
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.TOTPEnabled, &u.TOTPSecret, &u.GitHubID, &u.GitHubLogin, &u.CreatedAt, &u.Teams); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateUser(ctx context.Context, id, name string, admin bool) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET name=$2, is_admin=$3 WHERE id=$1`, id, name, admin)
 	return err
 }

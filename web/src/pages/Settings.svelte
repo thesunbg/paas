@@ -13,17 +13,19 @@
   import TwoFactor from './settings/TwoFactor.svelte';
   import GitHub from './settings/GitHub.svelte';
   import System from './settings/System.svelte';
+  import Users from './settings/Users.svelte';
+  import GitHubSignIn from './settings/GitHubSignIn.svelte';
 
   let { tab = 'tokens' }: { tab?: string } = $props();
 
   const tabs = [
     { id: 'tokens', label: 'API tokens' },
     { id: 'password', label: 'Password' },
-    { id: 'security', label: 'Two-factor auth' },
+    { id: 'security', label: 'Security' },
     { id: 'members', label: 'Team members' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'github', label: 'GitHub' },
-    ...(session.me?.user.is_admin ? [{ id: 'system', label: 'System' }] : []),
+    ...(session.me?.user.is_admin ? [{ id: 'users', label: 'Users' }, { id: 'system', label: 'System' }] : []),
   ];
 
   // Tokens
@@ -289,11 +291,16 @@
           {/if}
         </div>
       {:else if tab === 'security'}
-        <TwoFactor />
+        <div class="stack-lg">
+          <TwoFactor />
+          <GitHubSignIn />
+        </div>
       {:else if tab === 'notifications'}
         <Notifications />
       {:else if tab === 'github'}
         <GitHub />
+      {:else if tab === 'users' && session.me?.user.is_admin}
+        <Users />
       {:else if tab === 'system' && session.me?.user.is_admin}
         <System />
       {:else}
