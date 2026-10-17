@@ -29,8 +29,27 @@ func scanProject(row pgx.Row) (*Project, error) {
 	return &p, nil
 }
 
+// netIndexCooldown keeps a deleted project's network index unused long enough for
+// nodes that were offline at deletion to reconnect and stop its containers.
+const netIndexCooldown = "24 hours"
+
+// CreateProject allocates the lowest free network index (1..1021, see
+// network.MaxProjects); concurrent creates that pick the same one retry.
 func (s *Store) CreateProject(ctx context.Context, teamID, name, slug string) (*Project, error) {
-	return scanProject(s.q(ctx).QueryRow(ctx, `INSERT INTO projects (team_id, name, slug) VALUES ($1,$2,$3) RETURNING `+projectCols, teamID, name, slug))
+	for attempt := 0; ; attempt++ {
+		p, err := scanProject(s.q(ctx).QueryRow(ctx, `INSERT INTO projects (team_id, name, slug, net_index)
+			SELECT $1, $2, $3, min(i) FROM generate_series(1, 1021) i
+			WHERE i NOT IN (SELECT net_index FROM projects)
+			  AND i NOT IN (SELECT net_index FROM net_index_released WHERE released_at > now() - interval '`+netIndexCooldown+`')
+			RETURNING `+projectCols, teamID, name, slug))
+		if err != nil && isNotNullViolation(err) {
+			return nil, errors.New("no free project network: every slot is in use or cooling down")
+		}
+		if err != nil && attempt < 5 && isConstraint(err, "projects_net_index_key") {
+			continue
+		}
+		return p, err
+	}
 }
 
 func (s *Store) ProjectByID(ctx context.Context, id string) (*Project, error) {
@@ -62,7 +81,9 @@ func (s *Store) RenameProject(ctx context.Context, id, name string) (*Project, e
 }
 
 func (s *Store) DeleteProject(ctx context.Context, id string) error {
-	_, err := s.q(ctx).Exec(ctx, `DELETE FROM projects WHERE id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `WITH d AS (DELETE FROM projects WHERE id=$1 RETURNING net_index)
+		INSERT INTO net_index_released (net_index) SELECT net_index FROM d
+		ON CONFLICT (net_index) DO UPDATE SET released_at = now()`, id)
 	return err
 }
 

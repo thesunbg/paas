@@ -96,6 +96,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
+func isConstraint(err error, name string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.ConstraintName == name
+}
+
+func isNotNullViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23502"
+}
+
 // IsUniqueViolation reports whether err is a unique constraint violation.
 func IsUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
