@@ -288,6 +288,9 @@ func TestEnrollRefusesControlPlaneName(t *testing.T) {
 		t.Fatalf("cp nkey = %q", before)
 	}
 	_, pub := newNkey(t)
+	if code, _ := enroll(t, h, "bogus", "cp-1", pub); code != 401 {
+		t.Fatalf("bad token with cp name = %d, want 401 (no name probing)", code)
+	}
 	tok := joinToken(t, s, time.Hour, "worker")
 	if code, _ := enroll(t, h, tok, "cp-1", pub); code != 409 {
 		t.Fatalf("enroll as cp name = %d, want 409", code)

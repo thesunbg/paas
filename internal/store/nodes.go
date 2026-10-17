@@ -171,22 +171,23 @@ func (s *Store) EnrollNode(ctx context.Context, hash []byte, name, nkey string, 
 		if _, err := tx.Exec(ctx, `LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 			return err
 		}
-		var old *string
-		if err := tx.QueryRow(ctx, `SELECT nkey FROM nodes WHERE name=$1`, name).Scan(&old); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		if old != nil {
-			if strings.HasPrefix(*old, internalNkeyPrefix) {
-				return ErrNodeNameReserved // returned before the token is consumed; the tx rolls back anyway
-			}
-			oldNkey = *old
-		}
 		if err := tx.QueryRow(ctx, `UPDATE join_tokens SET used_at=now() WHERE hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING roles`,
 			hash).Scan(&roles); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrInvalidJoinToken
 			}
 			return err
+		}
+		// The name is checked only after a valid token, so a bad token cannot probe node names.
+		var old *string
+		if err := tx.QueryRow(ctx, `SELECT nkey FROM nodes WHERE name=$1`, name).Scan(&old); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if old != nil {
+			if strings.HasPrefix(*old, internalNkeyPrefix) {
+				return ErrNodeNameReserved // rollback un-consumes the token
+			}
+			oldNkey = *old
 		}
 		var err error
 		n, err = scanNode(tx.QueryRow(ctx, `INSERT INTO nodes (name, roles, nkey, status, last_seen_at) VALUES ($1,$2,$3,'online',now())
