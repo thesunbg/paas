@@ -31,17 +31,17 @@ func scanJob(row pgx.Row) (*JobRun, error) {
 }
 
 func (s *Store) CreateJobRun(ctx context.Context, serviceID, nodeID, containerID, trigger string) (*JobRun, error) {
-	return scanJob(s.DB.QueryRow(ctx, `INSERT INTO job_runs (service_id, node_id, container_id, trigger) VALUES ($1,$2,$3,$4) RETURNING `+jobCols,
+	return scanJob(s.q(ctx).QueryRow(ctx, `INSERT INTO job_runs (service_id, node_id, container_id, trigger) VALUES ($1,$2,$3,$4) RETURNING `+jobCols,
 		serviceID, nodeID, containerID, trigger))
 }
 
 func (s *Store) FinishJobRun(ctx context.Context, id, status string, exitCode int, output string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE job_runs SET status=$2, exit_code=$3, output=$4, finished_at=now() WHERE id=$1`, id, status, exitCode, output)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE job_runs SET status=$2, exit_code=$3, output=$4, finished_at=now() WHERE id=$1`, id, status, exitCode, output)
 	return err
 }
 
 func (s *Store) JobRuns(ctx context.Context, serviceID string, limit int) ([]JobRun, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+jobCols+` FROM job_runs WHERE service_id=$1 ORDER BY started_at DESC LIMIT $2`, serviceID, limit)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+jobCols+` FROM job_runs WHERE service_id=$1 ORDER BY started_at DESC LIMIT $2`, serviceID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -56,22 +56,22 @@ func (s *Store) JobRuns(ctx context.Context, serviceID string, limit int) ([]Job
 
 func (s *Store) RunningJob(ctx context.Context, serviceID string) (bool, error) {
 	var n int
-	err := s.DB.QueryRow(ctx, `SELECT count(*) FROM job_runs WHERE service_id=$1 AND status='running' AND started_at > now() - interval '1 day'`, serviceID).Scan(&n)
+	err := s.q(ctx).QueryRow(ctx, `SELECT count(*) FROM job_runs WHERE service_id=$1 AND status='running' AND started_at > now() - interval '1 day'`, serviceID).Scan(&n)
 	return n > 0, err
 }
 
 // FailInterruptedJobs marks jobs left running by a control plane restart.
 func (s *Store) FailInterruptedJobs(ctx context.Context) error {
-	_, err := s.DB.Exec(ctx, `UPDATE job_runs SET status='failed', output=output || E'\n(interrupted by control plane restart)', finished_at=now() WHERE status='running'`)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE job_runs SET status='failed', output=output || E'\n(interrupted by control plane restart)', finished_at=now() WHERE status='running'`)
 	return err
 }
 
 func (s *Store) PurgeJobRuns(ctx context.Context, keep int) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM job_runs j WHERE id IN (
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM job_runs j WHERE id IN (
 		SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY service_id ORDER BY started_at DESC) rn FROM job_runs) x WHERE rn > $1)`, keep)
 	return err
 }
 
 func (s *Store) JobRunByID(ctx context.Context, id string) (*JobRun, error) {
-	return scanJob(s.DB.QueryRow(ctx, `SELECT `+jobCols+` FROM job_runs WHERE id=$1`, id))
+	return scanJob(s.q(ctx).QueryRow(ctx, `SELECT `+jobCols+` FROM job_runs WHERE id=$1`, id))
 }

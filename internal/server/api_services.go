@@ -517,7 +517,7 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, fmt.Sprintf("services are limited to %d replicas", l.MaxReplicas))
 		return
 	}
-	if err := s.scaleService(r.Context(), svc, in.Replicas); err != nil {
+	if err := s.scaleService(context.WithoutCancel(r.Context()), svc, in.Replicas); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			writeUpdateError(w, err)
 			return

@@ -41,7 +41,7 @@ func newLockFixture(t *testing.T) *lockFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.store.DB.Exec(ctx, `UPDATE nodes SET last_seen_at = now() - interval '1 minute' WHERE id=$1`, nb.ID); err != nil {
+	if _, err := s.store.Q(ctx).Exec(ctx, `UPDATE nodes SET last_seen_at = now() - interval '1 minute' WHERE id=$1`, nb.ID); err != nil {
 		t.Fatal(err)
 	}
 	return &lockFixture{s: s, project: proj, buildID: bn.ID, nodeB: nb}
@@ -168,7 +168,7 @@ func TestReconcileRunsDuringBuilds(t *testing.T) {
 func TestReconcileSkipsLockedService(t *testing.T) {
 	f := newLockFixture(t)
 	s := f.s
-	if _, err := s.store.DB.Exec(context.Background(), `UPDATE nodes SET status='offline' WHERE id=$1`, f.nodeB.ID); err != nil {
+	if _, err := s.store.Q(context.Background()).Exec(context.Background(), `UPDATE nodes SET status='offline' WHERE id=$1`, f.nodeB.ID); err != nil {
 		t.Fatal(err)
 	}
 	svc := f.seedService(t, "locked", model.InstLost)

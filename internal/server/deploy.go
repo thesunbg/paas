@@ -40,8 +40,10 @@ func (s *Server) QueueDeployment(ctx context.Context, svc *store.Service, trigge
 	if err != nil {
 		return nil, err
 	}
-	// A newer commit makes older queued deployments of the same service pointless.
-	_ = s.store.CancelOlderQueued(ctx, svc.ID, d.ID)
+	// A newer commit makes older queued webhook deployments of the same service pointless.
+	if trigger == "webhook" {
+		_ = s.store.CancelOlderQueued(ctx, svc.ID, d.ID)
+	}
 	s.hub.Log(d.ID, fmt.Sprintf("==> deployment queued (%s)", trigger))
 	kickDeploys()
 	return d, nil
@@ -64,7 +66,7 @@ func (s *Server) deployWorker(ctx context.Context) {
 			sem <- struct{}{}
 			go func(d *store.Deployment) {
 				defer func() { <-sem; kickDeploys() }()
-				s.runDeployment(context.WithoutCancel(ctx), d)
+				s.runDeployment(ctx, d)
 			}(d)
 		}
 		select {
@@ -194,7 +196,7 @@ func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
 	if d.Trigger != "system" {
 		s.notify(ctx, s.teamOfService(ctx, svc), "deploy.succeeded", fmt.Sprintf("%s deployed in %s (%s)", svc.Slug, time.Since(start).Round(100*time.Millisecond), firstNonEmpty(shortSHA(d.CommitSHA), d.Trigger)), map[string]any{"service": svc.ID, "deployment": d.ID})
 	}
-	go s.cleanupStatic(context.Background(), svc.ID)
+	go s.cleanupStatic(ctx, svc.ID)
 }
 
 func (s *Server) urlFor(host string) string {
@@ -375,14 +377,6 @@ func (s *Server) instancesOf(ctx context.Context, serviceID string) []store.Inst
 
 // startInstance schedules and starts one instance of a deployment, returning it when healthy.
 func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *store.Project, d *store.Deployment, logID string, exclude map[string]bool) (*store.Instance, error) {
-	nodes, err := s.store.Nodes(ctx)
-	if err != nil {
-		return nil, err
-	}
-	committed, err := s.store.NodeCommitted(ctx)
-	if err != nil {
-		return nil, err
-	}
 	spread := map[string]int{}
 	for _, in := range s.instancesOf(ctx, svc.ID) {
 		if in.DeploymentID != nil && *in.DeploymentID == d.ID {
@@ -393,21 +387,19 @@ func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *st
 	if svc.NodeID != nil {
 		pinned = *svc.NodeID
 	}
-	node, err := scheduler.Pick(nodes, committed, scheduler.Request{
-		Resources: svc.Spec.Resources, QoS: svc.Spec.QoS, RuntimeClass: svc.Spec.RuntimeClass,
-		PinnedNode: pinned, Spread: spread, Exclude: exclude,
-	})
-	if err != nil {
-		return nil, err
-	}
 	env, err := s.runtimeEnv(ctx, svc, proj)
 	if err != nil {
 		return nil, err
 	}
 	containerID := fmt.Sprintf("%s-%s-%s", util.Slugify(svc.Slug), util.ShortID(d.ID), util.RandomToken(3))
-	inst, err := s.store.CreateInstance(ctx, &store.Instance{
-		ServiceID: svc.ID, DeploymentID: &d.ID, NodeID: node.ID, ContainerID: containerID, Port: svc.Spec.Port,
+	inst, node, err := s.store.PlaceInstance(ctx, &store.Instance{
+		ServiceID: svc.ID, DeploymentID: &d.ID, ContainerID: containerID, Port: svc.Spec.Port,
 		Status: model.InstStarting, MemoryRequestMB: svc.Spec.Resources.MemoryRequestMB, CPURequestMillis: svc.Spec.Resources.CPURequestMillis,
+	}, func(nodes []store.Node, committed map[string][2]int) (*store.Node, error) {
+		return scheduler.Pick(nodes, committed, scheduler.Request{
+			Resources: svc.Spec.Resources, QoS: svc.Spec.QoS, RuntimeClass: svc.Spec.RuntimeClass,
+			PinnedNode: pinned, Spread: spread, Exclude: exclude,
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -566,7 +558,7 @@ func (s *Server) redeploy(ctx context.Context, svc *store.Service, from *store.D
 		return nil, err
 	}
 	// Keep where the artifact lives so other nodes can still fetch it from the internal registry.
-	_, _ = s.store.DB.Exec(ctx, `UPDATE deployments SET detected=$2, build_node_id=$3, pushed_image=$4 WHERE id=$1`,
+	_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE deployments SET detected=$2, build_node_id=$3, pushed_image=$4 WHERE id=$1`,
 		d.ID, from.Detected, from.BuildNodeID, from.PushedImage)
 	s.hub.Log(d.ID, fmt.Sprintf("==> %s of deployment %s", trigger, util.ShortID(from.ID)))
 	kickDeploys()
@@ -586,7 +578,7 @@ func (s *Server) scaleService(ctx context.Context, svc *store.Service, replicas 
 		return err
 	}
 	*svc = *fresh
-	go s.reconcileService(context.Background(), svc.ID)
+	go s.reconcileService(ctx, svc.ID) // callers pass a ctx that outlives the request (API: WithoutCancel)
 	return nil
 }
 
@@ -674,7 +666,7 @@ func (s *Server) cleanupStatic(ctx context.Context, serviceID string) {
 			remove = append(remove, d.StaticPath)
 			keep[d.StaticPath] = true // dedupe
 		}
-		_, _ = s.store.DB.Exec(ctx, `UPDATE deployments SET static_path='' WHERE id=$1`, d.ID)
+		_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE deployments SET static_path='' WHERE id=$1`, d.ID)
 	}
 	if len(remove) > 0 {
 		s.broadcastRemoveFiles(ctx, remove)

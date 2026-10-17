@@ -57,7 +57,7 @@ func scanNode(row pgx.Row) (*Node, error) {
 // It also allocates the node's network index (its slice of the cluster address space).
 func (s *Store) UpsertNode(ctx context.Context, r *proto.RegisterRequest, maxNodes int) (*Node, error) {
 	var n *Node
-	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, s.q(ctx), func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 			return err
 		}
@@ -84,11 +84,15 @@ func (s *Store) UpsertNode(ctx context.Context, r *proto.RegisterRequest, maxNod
 }
 
 func (s *Store) NodeByID(ctx context.Context, id string) (*Node, error) {
-	return scanNode(s.DB.QueryRow(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=$1`, id))
+	return scanNode(s.q(ctx).QueryRow(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=$1`, id))
 }
 
 func (s *Store) Nodes(ctx context.Context) ([]Node, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+nodeCols+` FROM nodes ORDER BY created_at`)
+	return queryNodes(ctx, s.q(ctx))
+}
+
+func queryNodes(ctx context.Context, q Querier) ([]Node, error) {
+	rows, err := q.Query(ctx, `SELECT `+nodeCols+` FROM nodes ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -102,14 +106,14 @@ func (s *Store) Nodes(ctx context.Context) ([]Node, error) {
 }
 
 func (s *Store) NodeHeartbeat(ctx context.Context, id string, usage proto.NodeUsage) error {
-	_, err := s.DB.Exec(ctx, `UPDATE nodes SET usage=$2, last_seen_at=now(),
+	_, err := s.q(ctx).Exec(ctx, `UPDATE nodes SET usage=$2, last_seen_at=now(),
 		status = CASE WHEN status='offline' THEN 'online' ELSE status END WHERE id=$1`, id, usage)
 	return err
 }
 
 // MarkStaleNodesOffline flags nodes without a heartbeat for longer than d and returns their ids.
 func (s *Store) MarkStaleNodesOffline(ctx context.Context, d time.Duration) ([]string, error) {
-	rows, err := s.DB.Query(ctx, `UPDATE nodes SET status='offline' WHERE status='online' AND last_seen_at < now() - $1::interval RETURNING id`,
+	rows, err := s.q(ctx).Query(ctx, `UPDATE nodes SET status='offline' WHERE status='online' AND last_seen_at < now() - $1::interval RETURNING id`,
 		d.String())
 	if err != nil {
 		return nil, err
@@ -118,13 +122,13 @@ func (s *Store) MarkStaleNodesOffline(ctx context.Context, d time.Duration) ([]s
 }
 
 func (s *Store) UpdateNodeSettings(ctx context.Context, id, status string, overMem, overCPU float64, reservedMB int, labels map[string]string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE nodes SET status=$2, overcommit_memory=$3, overcommit_cpu=$4, reserved_mb=$5, labels=$6 WHERE id=$1`,
+	_, err := s.q(ctx).Exec(ctx, `UPDATE nodes SET status=$2, overcommit_memory=$3, overcommit_cpu=$4, reserved_mb=$5, labels=$6 WHERE id=$1`,
 		id, status, overMem, overCPU, reservedMB, labels)
 	return err
 }
 
 func (s *Store) DeleteNode(ctx context.Context, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM nodes WHERE id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM nodes WHERE id=$1`, id)
 	return err
 }
 
@@ -175,42 +179,46 @@ func collectInstances(rows pgx.Rows, err error) ([]Instance, error) {
 }
 
 func (s *Store) CreateInstance(ctx context.Context, i *Instance) (*Instance, error) {
-	return scanInstance(s.DB.QueryRow(ctx, `INSERT INTO instances (service_id, deployment_id, node_id, container_id, port, status, memory_request_mb, cpu_request_millis)
+	return insertInstance(ctx, s.q(ctx), i)
+}
+
+func insertInstance(ctx context.Context, q Querier, i *Instance) (*Instance, error) {
+	return scanInstance(q.QueryRow(ctx, `INSERT INTO instances (service_id, deployment_id, node_id, container_id, port, status, memory_request_mb, cpu_request_millis)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+instanceCols,
 		i.ServiceID, i.DeploymentID, i.NodeID, i.ContainerID, i.Port, i.Status, i.MemoryRequestMB, i.CPURequestMillis))
 }
 
 func (s *Store) InstanceByID(ctx context.Context, id string) (*Instance, error) {
-	return scanInstance(s.DB.QueryRow(ctx, `SELECT `+instanceCols+` FROM instances WHERE id=$1`, id))
+	return scanInstance(s.q(ctx).QueryRow(ctx, `SELECT `+instanceCols+` FROM instances WHERE id=$1`, id))
 }
 
 func (s *Store) SetInstanceRunning(ctx context.Context, id, ip string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE instances SET status='running', ip=$2, updated_at=now() WHERE id=$1`, id, ip)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE instances SET status='running', ip=$2, updated_at=now() WHERE id=$1`, id, ip)
 	return err
 }
 
 func (s *Store) SetInstanceStatus(ctx context.Context, id, status string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE instances SET status=$2, updated_at=now() WHERE id=$1`, id, status)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE instances SET status=$2, updated_at=now() WHERE id=$1`, id, status)
 	return err
 }
 
 func (s *Store) DeleteInstance(ctx context.Context, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM instances WHERE id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM instances WHERE id=$1`, id)
 	return err
 }
 
 func (s *Store) InstancesForService(ctx context.Context, serviceID string) ([]Instance, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+instanceCols+` FROM instances WHERE service_id=$1 ORDER BY created_at`, serviceID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+instanceCols+` FROM instances WHERE service_id=$1 ORDER BY created_at`, serviceID)
 	return collectInstances(rows, err)
 }
 
 func (s *Store) InstancesForNode(ctx context.Context, nodeID string) ([]Instance, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+instanceCols+` FROM instances WHERE node_id=$1`, nodeID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+instanceCols+` FROM instances WHERE node_id=$1`, nodeID)
 	return collectInstances(rows, err)
 }
 
 func (s *Store) AllInstances(ctx context.Context) ([]Instance, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+instanceCols+` FROM instances ORDER BY created_at`)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+instanceCols+` FROM instances ORDER BY created_at`)
 	return collectInstances(rows, err)
 }
 
@@ -220,7 +228,7 @@ func (s *Store) ApplyContainerStatus(ctx context.Context, nodeID string, c proto
 	if !c.Running {
 		status = "failed"
 	}
-	_, err := s.DB.Exec(ctx, `UPDATE instances SET memory_usage_mb=$3, memory_peak_mb=GREATEST(memory_peak_mb, $3), cpu_usage_millis=$4,
+	_, err := s.q(ctx).Exec(ctx, `UPDATE instances SET memory_usage_mb=$3, memory_peak_mb=GREATEST(memory_peak_mb, $3), cpu_usage_millis=$4,
 		restarts=$5, ip=CASE WHEN $6<>'' THEN $6 ELSE ip END,
 		status = CASE WHEN status IN ('running','failed') THEN $7 ELSE status END, updated_at=now()
 		WHERE node_id=$1 AND container_id=$2`, nodeID, c.ContainerID, c.MemoryMB, c.CPUMillis, c.Restarts, c.IP, status)
@@ -229,7 +237,11 @@ func (s *Store) ApplyContainerStatus(ctx context.Context, nodeID string, c proto
 
 // NodeCommitted sums resource requests of live instances per node.
 func (s *Store) NodeCommitted(ctx context.Context) (map[string][2]int, error) {
-	rows, err := s.DB.Query(ctx, `SELECT node_id, COALESCE(sum(memory_request_mb),0), COALESCE(sum(cpu_request_millis),0)
+	return nodeCommitted(ctx, s.q(ctx))
+}
+
+func nodeCommitted(ctx context.Context, q Querier) (map[string][2]int, error) {
+	rows, err := q.Query(ctx, `SELECT node_id, COALESCE(sum(memory_request_mb),0), COALESCE(sum(cpu_request_millis),0)
 		FROM instances WHERE status IN ('starting','running') GROUP BY node_id`)
 	if err != nil {
 		return nil, err
@@ -245,4 +257,39 @@ func (s *Store) NodeCommitted(ctx context.Context) (map[string][2]int, error) {
 		out[id] = [2]int{mem, cpu}
 	}
 	return out, rows.Err()
+}
+
+// PlaceInstance picks a node and records the instance under one advisory lock, so concurrent
+// placements see each other's reservations instead of all fitting into the same free space.
+// pick gets the nodes and committed resources as read inside the lock.
+func (s *Store) PlaceInstance(ctx context.Context, inst *Instance, pick func(nodes []Node, committed map[string][2]int) (*Node, error)) (*Instance, *Node, error) {
+	tx, err := s.q(ctx).Begin(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('placement'))`); err != nil {
+		return nil, nil, err
+	}
+	nodes, err := queryNodes(ctx, tx)
+	if err != nil {
+		return nil, nil, err
+	}
+	committed, err := nodeCommitted(ctx, tx)
+	if err != nil {
+		return nil, nil, err
+	}
+	node, err := pick(nodes, committed)
+	if err != nil {
+		return nil, nil, err
+	}
+	inst.NodeID = node.ID
+	out, err := insertInstance(ctx, tx, inst)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return out, node, nil
 }

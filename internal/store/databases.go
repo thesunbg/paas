@@ -74,52 +74,52 @@ func collectDatabases(rows pgx.Rows, err error) ([]Database, error) {
 }
 
 func (s *Store) CreateDatabase(ctx context.Context, d *Database) (*Database, error) {
-	return scanDatabase(s.DB.QueryRow(ctx, `INSERT INTO databases (project_id, name, engine, mode, db_name, username, password_enc, size_preset, backup_schedule_hours, version)
+	return scanDatabase(s.q(ctx).QueryRow(ctx, `INSERT INTO databases (project_id, name, engine, mode, db_name, username, password_enc, size_preset, backup_schedule_hours, version)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+databaseCols,
 		d.ProjectID, d.Name, d.Engine, d.Mode, d.DBName, d.Username, d.PasswordEnc, d.SizePreset, d.BackupScheduleHours, d.Version))
 }
 
 func (s *Store) DatabaseByID(ctx context.Context, id string) (*Database, error) {
-	return scanDatabase(s.DB.QueryRow(ctx, `SELECT `+databaseCols+` FROM databases WHERE id=$1`, id))
+	return scanDatabase(s.q(ctx).QueryRow(ctx, `SELECT `+databaseCols+` FROM databases WHERE id=$1`, id))
 }
 
 func (s *Store) DatabasesForProject(ctx context.Context, projectID string) ([]Database, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+databaseCols+` FROM databases WHERE project_id=$1 ORDER BY created_at`, projectID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+databaseCols+` FROM databases WHERE project_id=$1 ORDER BY created_at`, projectID)
 	return collectDatabases(rows, err)
 }
 
 func (s *Store) AllDatabases(ctx context.Context) ([]Database, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+databaseCols+` FROM databases ORDER BY created_at`)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+databaseCols+` FROM databases ORDER BY created_at`)
 	return collectDatabases(rows, err)
 }
 
 func (s *Store) DatabasesOnServer(ctx context.Context, serverServiceID string) ([]Database, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+databaseCols+` FROM databases WHERE server_service_id=$1`, serverServiceID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+databaseCols+` FROM databases WHERE server_service_id=$1`, serverServiceID)
 	return collectDatabases(rows, err)
 }
 
 func (s *Store) SetDatabaseServer(ctx context.Context, id, serverServiceID string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE databases SET server_service_id=$2 WHERE id=$1`, id, serverServiceID)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE databases SET server_service_id=$2 WHERE id=$1`, id, serverServiceID)
 	return err
 }
 
 func (s *Store) SetDatabaseStatus(ctx context.Context, id, status, errMsg string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE databases SET status=$2, error=$3 WHERE id=$1`, id, status, errMsg)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE databases SET status=$2, error=$3 WHERE id=$1`, id, status, errMsg)
 	return err
 }
 
 func (s *Store) SetDatabaseMode(ctx context.Context, id, mode string, serverServiceID *string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE databases SET mode=$2, server_service_id=$3 WHERE id=$1`, id, mode, serverServiceID)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE databases SET mode=$2, server_service_id=$3 WHERE id=$1`, id, mode, serverServiceID)
 	return err
 }
 
 func (s *Store) DeleteDatabase(ctx context.Context, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM databases WHERE id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM databases WHERE id=$1`, id)
 	return err
 }
 
 func (s *Store) TouchDatabaseBackup(ctx context.Context, id string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE databases SET last_backup_at=now() WHERE id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE databases SET last_backup_at=now() WHERE id=$1`, id)
 	return err
 }
 
@@ -132,13 +132,13 @@ type DatabaseLink struct {
 }
 
 func (s *Store) LinkDatabase(ctx context.Context, serviceID, databaseID, envName string) error {
-	_, err := s.DB.Exec(ctx, `INSERT INTO service_databases (service_id, database_id, env_name) VALUES ($1,$2,$3)
+	_, err := s.q(ctx).Exec(ctx, `INSERT INTO service_databases (service_id, database_id, env_name) VALUES ($1,$2,$3)
 		ON CONFLICT (service_id, database_id) DO UPDATE SET env_name=EXCLUDED.env_name`, serviceID, databaseID, envName)
 	return err
 }
 
 func (s *Store) UnlinkDatabase(ctx context.Context, serviceID, databaseID string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM service_databases WHERE service_id=$1 AND database_id=$2`, serviceID, databaseID)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM service_databases WHERE service_id=$1 AND database_id=$2`, serviceID, databaseID)
 	return err
 }
 
@@ -151,7 +151,7 @@ func (s *Store) LinksForDatabase(ctx context.Context, databaseID string) ([]Data
 }
 
 func (s *Store) queryLinks(ctx context.Context, where string, arg string) ([]DatabaseLink, error) {
-	rows, err := s.DB.Query(ctx, `SELECT service_id, database_id, env_name FROM service_databases `+where, arg)
+	rows, err := s.q(ctx).Query(ctx, `SELECT service_id, database_id, env_name FROM service_databases `+where, arg)
 	if err != nil {
 		return nil, err
 	}
@@ -189,20 +189,20 @@ func scanBackup(row pgx.Row) (*Backup, error) {
 }
 
 func (s *Store) CreateBackup(ctx context.Context, databaseID, nodeID, path string) (*Backup, error) {
-	return scanBackup(s.DB.QueryRow(ctx, `INSERT INTO backups (database_id, node_id, path) VALUES ($1,$2,$3) RETURNING `+backupCols, databaseID, nodeID, path))
+	return scanBackup(s.q(ctx).QueryRow(ctx, `INSERT INTO backups (database_id, node_id, path) VALUES ($1,$2,$3) RETURNING `+backupCols, databaseID, nodeID, path))
 }
 
 func (s *Store) FinishBackup(ctx context.Context, id, status, errMsg string, size int64) error {
-	_, err := s.DB.Exec(ctx, `UPDATE backups SET status=$2, error=$3, size_bytes=$4, finished_at=now() WHERE id=$1`, id, status, errMsg, size)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE backups SET status=$2, error=$3, size_bytes=$4, finished_at=now() WHERE id=$1`, id, status, errMsg, size)
 	return err
 }
 
 func (s *Store) BackupByID(ctx context.Context, id string) (*Backup, error) {
-	return scanBackup(s.DB.QueryRow(ctx, `SELECT `+backupCols+` FROM backups WHERE id=$1`, id))
+	return scanBackup(s.q(ctx).QueryRow(ctx, `SELECT `+backupCols+` FROM backups WHERE id=$1`, id))
 }
 
 func (s *Store) BackupsForDatabase(ctx context.Context, databaseID string) ([]Backup, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 ORDER BY created_at DESC LIMIT 50`, databaseID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 ORDER BY created_at DESC LIMIT 50`, databaseID)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func (s *Store) BackupsForDatabase(ctx context.Context, databaseID string) ([]Ba
 
 // OldBackups returns completed backups beyond the newest `keep` for a database.
 func (s *Store) OldBackups(ctx context.Context, databaseID string, keep int) ([]Backup, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='dump' AND status<>'running' ORDER BY created_at DESC OFFSET $2`, databaseID, keep)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='dump' AND status<>'running' ORDER BY created_at DESC OFFSET $2`, databaseID, keep)
 	if err != nil {
 		return nil, err
 	}
@@ -231,12 +231,12 @@ func (s *Store) OldBackups(ctx context.Context, databaseID string, keep int) ([]
 }
 
 func (s *Store) DeleteBackup(ctx context.Context, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM backups WHERE id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM backups WHERE id=$1`, id)
 	return err
 }
 
 func (s *Store) SetBackupS3Key(ctx context.Context, id, key string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE backups SET s3_key=$2 WHERE id=$1`, id, key)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE backups SET s3_key=$2 WHERE id=$1`, id, key)
 	return err
 }
 
@@ -252,7 +252,7 @@ func (s *Store) UpdateDatabaseOptions(ctx context.Context, id string, fn func(*D
 			return DBOptions{}, err
 		}
 		var next DBOptions
-		err = s.DB.QueryRow(ctx, `UPDATE databases SET options=$2, options_version=options_version+1 WHERE id=$1 AND options_version=$3 RETURNING options`,
+		err = s.q(ctx).QueryRow(ctx, `UPDATE databases SET options=$2, options_version=options_version+1 WHERE id=$1 AND options_version=$3 RETURNING options`,
 			id, db.Options, db.OptionsVersion).Scan(&next)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue
@@ -264,7 +264,7 @@ func (s *Store) UpdateDatabaseOptions(ctx context.Context, id string, fn func(*D
 
 // UsedPublicPorts lists the external ports already given to databases.
 func (s *Store) UsedPublicPorts(ctx context.Context) (map[int]bool, error) {
-	rows, err := s.DB.Query(ctx, `SELECT (options->>'public_port')::int FROM databases WHERE (options->>'public_port') IS NOT NULL`)
+	rows, err := s.q(ctx).Query(ctx, `SELECT (options->>'public_port')::int FROM databases WHERE (options->>'public_port') IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -288,13 +288,13 @@ type DBMetric struct {
 }
 
 func (s *Store) InsertDBMetric(ctx context.Context, dbID string, m DBMetric) error {
-	_, err := s.DB.Exec(ctx, `INSERT INTO db_metrics (database_id, ts, size_bytes, connections) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+	_, err := s.q(ctx).Exec(ctx, `INSERT INTO db_metrics (database_id, ts, size_bytes, connections) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
 		dbID, m.TS, m.SizeBytes, m.Connections)
 	return err
 }
 
 func (s *Store) DBMetrics(ctx context.Context, dbID string, since time.Time) ([]DBMetric, error) {
-	rows, err := s.DB.Query(ctx, `SELECT ts, size_bytes, connections FROM db_metrics WHERE database_id=$1 AND ts >= $2 ORDER BY ts`, dbID, since)
+	rows, err := s.q(ctx).Query(ctx, `SELECT ts, size_bytes, connections FROM db_metrics WHERE database_id=$1 AND ts >= $2 ORDER BY ts`, dbID, since)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +311,7 @@ func (s *Store) DBMetrics(ctx context.Context, dbID string, since time.Time) ([]
 }
 
 func (s *Store) PruneDBMetrics(ctx context.Context, before time.Time) {
-	_, _ = s.DB.Exec(ctx, `DELETE FROM db_metrics WHERE ts < $1`, before)
+	_, _ = s.q(ctx).Exec(ctx, `DELETE FROM db_metrics WHERE ts < $1`, before)
 }
 
 // DBUser is an extra login on a database.
@@ -324,7 +324,7 @@ type DBUser struct {
 }
 
 func (s *Store) DBUsers(ctx context.Context, dbID string) ([]DBUser, error) {
-	rows, err := s.DB.Query(ctx, `SELECT database_id, username, role, password_enc, created_at FROM db_users WHERE database_id=$1 ORDER BY created_at`, dbID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT database_id, username, role, password_enc, created_at FROM db_users WHERE database_id=$1 ORDER BY created_at`, dbID)
 	if err != nil {
 		return nil, err
 	}
@@ -342,39 +342,39 @@ func (s *Store) DBUsers(ctx context.Context, dbID string) ([]DBUser, error) {
 
 func (s *Store) DBUser(ctx context.Context, dbID, username string) (*DBUser, error) {
 	var u DBUser
-	err := s.DB.QueryRow(ctx, `SELECT database_id, username, role, password_enc, created_at FROM db_users WHERE database_id=$1 AND username=$2`, dbID, username).
+	err := s.q(ctx).QueryRow(ctx, `SELECT database_id, username, role, password_enc, created_at FROM db_users WHERE database_id=$1 AND username=$2`, dbID, username).
 		Scan(&u.DatabaseID, &u.Username, &u.Role, &u.PasswordEnc, &u.CreatedAt)
 	return &u, notFound(err)
 }
 
 func (s *Store) CreateDBUser(ctx context.Context, u DBUser) error {
-	_, err := s.DB.Exec(ctx, `INSERT INTO db_users (database_id, username, role, password_enc) VALUES ($1,$2,$3,$4)`, u.DatabaseID, u.Username, u.Role, u.PasswordEnc)
+	_, err := s.q(ctx).Exec(ctx, `INSERT INTO db_users (database_id, username, role, password_enc) VALUES ($1,$2,$3,$4)`, u.DatabaseID, u.Username, u.Role, u.PasswordEnc)
 	return err
 }
 
 func (s *Store) SetDBUserPassword(ctx context.Context, dbID, username, enc string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE db_users SET password_enc=$3 WHERE database_id=$1 AND username=$2`, dbID, username, enc)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE db_users SET password_enc=$3 WHERE database_id=$1 AND username=$2`, dbID, username, enc)
 	return err
 }
 
 func (s *Store) DeleteDBUser(ctx context.Context, dbID, username string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM db_users WHERE database_id=$1 AND username=$2`, dbID, username)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM db_users WHERE database_id=$1 AND username=$2`, dbID, username)
 	return err
 }
 
 func (s *Store) SetDatabaseSize(ctx context.Context, id, size string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE databases SET size_preset=$2 WHERE id=$1`, id, size)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE databases SET size_preset=$2 WHERE id=$1`, id, size)
 	return err
 }
 
 // CreateBaseBackup records a PITR base backup.
 func (s *Store) CreateBaseBackup(ctx context.Context, databaseID, nodeID, path string) (*Backup, error) {
-	return scanBackup(s.DB.QueryRow(ctx, `INSERT INTO backups (database_id, node_id, path, kind) VALUES ($1,$2,$3,'base') RETURNING `+backupCols, databaseID, nodeID, path))
+	return scanBackup(s.q(ctx).QueryRow(ctx, `INSERT INTO backups (database_id, node_id, path, kind) VALUES ($1,$2,$3,'base') RETURNING `+backupCols, databaseID, nodeID, path))
 }
 
 // BaseBackups lists completed PITR base backups, newest first.
 func (s *Store) BaseBackups(ctx context.Context, databaseID string) ([]Backup, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='base' AND status='completed' ORDER BY created_at DESC`, databaseID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='base' AND status='completed' ORDER BY created_at DESC`, databaseID)
 	if err != nil {
 		return nil, err
 	}

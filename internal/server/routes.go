@@ -114,7 +114,7 @@ func (s *Server) publishRoutes(ctx context.Context) {
 
 // dnsTable maps <service>.<project>.internal to the IPs of running instances.
 func (s *Server) dnsTable(ctx context.Context) (*model.DNSTable, error) {
-	rows, err := s.store.DB.Query(ctx, `SELECT s.slug, p.slug, i.ip FROM instances i
+	rows, err := s.store.Q(ctx).Query(ctx, `SELECT s.slug, p.slug, i.ip FROM instances i
 		JOIN services s ON s.id=i.service_id JOIN projects p ON p.id=s.project_id
 		WHERE i.status='running' AND i.ip<>''`)
 	if err != nil {
@@ -134,7 +134,7 @@ func (s *Server) dnsTable(ctx context.Context) (*model.DNSTable, error) {
 		return nil, err
 	}
 	// Aliases (HA databases) resolve to the instances of the service holding them.
-	arows, err := s.store.DB.Query(ctx, `SELECT a.alias, i.ip FROM services s
+	arows, err := s.store.Q(ctx).Query(ctx, `SELECT a.alias, i.ip FROM services s
 		CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(s.spec->'dns_aliases', '[]'::jsonb)) AS a(alias)
 		JOIN instances i ON i.service_id=s.id WHERE i.status='running' AND i.ip<>''`)
 	if err != nil {

@@ -108,7 +108,7 @@ func (s *Server) recordMetrics(ctx context.Context, services []store.Service, by
 			mem += in.MemoryUsageMB
 			cpu += in.CPUUsageMillis
 		}
-		_, _ = s.store.DB.Exec(ctx, `INSERT INTO service_metrics (service_id, ts, instances, memory_mb, cpu_millis, requests, errors_5xx)
+		_, _ = s.store.Q(ctx).Exec(ctx, `INSERT INTO service_metrics (service_id, ts, instances, memory_mb, cpu_millis, requests, errors_5xx)
 			VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, svc.ID, now, len(ins), mem, cpu, req, errs)
 	}
 	committed, _ := s.store.NodeCommitted(ctx)
@@ -117,12 +117,12 @@ func (s *Server) recordMetrics(ctx context.Context, services []store.Service, by
 			if n.Status == "offline" {
 				continue
 			}
-			_, _ = s.store.DB.Exec(ctx, `INSERT INTO node_metrics (node_id, ts, cpu_percent, memory_used_mb, memory_committed_mb)
+			_, _ = s.store.Q(ctx).Exec(ctx, `INSERT INTO node_metrics (node_id, ts, cpu_percent, memory_used_mb, memory_committed_mb)
 				VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, n.ID, now, n.Usage.CPUPercent, n.Usage.MemoryUsedMB, committed[n.ID][0])
 		}
 	}
-	_, _ = s.store.DB.Exec(ctx, `DELETE FROM service_metrics WHERE ts < now() - interval '48 hours'`)
-	_, _ = s.store.DB.Exec(ctx, `DELETE FROM node_metrics WHERE ts < now() - interval '48 hours'`)
+	_, _ = s.store.Q(ctx).Exec(ctx, `DELETE FROM service_metrics WHERE ts < now() - interval '48 hours'`)
+	_, _ = s.store.Q(ctx).Exec(ctx, `DELETE FROM node_metrics WHERE ts < now() - interval '48 hours'`)
 }
 
 // desiredReplicas computes the autoscaling target from CPU and request-rate ratios.
@@ -219,7 +219,7 @@ func (s *Server) handleServiceMetrics(w http.ResponseWriter, r *http.Request) {
 	if hours <= 0 || hours > 48 {
 		hours = 6
 	}
-	rows, err := s.store.DB.Query(r.Context(), `SELECT ts, instances, memory_mb, cpu_millis, requests, errors_5xx FROM service_metrics
+	rows, err := s.store.Q(r.Context()).Query(r.Context(), `SELECT ts, instances, memory_mb, cpu_millis, requests, errors_5xx FROM service_metrics
 		WHERE service_id=$1 AND ts > now() - make_interval(hours => $2) ORDER BY ts`, svc.ID, hours)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -241,7 +241,7 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	rows, err := s.store.DB.Query(r.Context(), `SELECT ts, cpu_percent, memory_used_mb, memory_committed_mb FROM node_metrics
+	rows, err := s.store.Q(r.Context()).Query(r.Context(), `SELECT ts, cpu_percent, memory_used_mb, memory_committed_mb FROM node_metrics
 		WHERE node_id=$1 AND ts > now() - interval '24 hours' ORDER BY ts`, r.PathValue("id"))
 	if err != nil {
 		writeError(w, 500, err.Error())

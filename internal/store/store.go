@@ -113,18 +113,18 @@ func notFound(err error) error {
 
 func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
 	var v string
-	err := s.DB.QueryRow(ctx, `SELECT value FROM settings WHERE key=$1`, key).Scan(&v)
+	err := s.q(ctx).QueryRow(ctx, `SELECT value FROM settings WHERE key=$1`, key).Scan(&v)
 	return v, notFound(err)
 }
 
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
-	_, err := s.DB.Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1,$2)
+	_, err := s.q(ctx).Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1,$2)
 		ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, key, value)
 	return err
 }
 
 func (s *Store) Audit(ctx context.Context, userID, teamID *string, action, target string) {
-	_, _ = s.DB.Exec(ctx, `INSERT INTO audit_logs (user_id, team_id, action, target) VALUES ($1,$2,$3,$4)`, userID, teamID, action, target)
+	_, _ = s.q(ctx).Exec(ctx, `INSERT INTO audit_logs (user_id, team_id, action, target) VALUES ($1,$2,$3,$4)`, userID, teamID, action, target)
 }
 
 // AdvisoryLock takes a session advisory lock for key, polling so that waiters do not

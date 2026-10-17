@@ -262,7 +262,7 @@ func (s *Server) handleDeleteGitHubApp(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	if _, err := s.store.DB.Exec(r.Context(), `DELETE FROM settings WHERE key=$1`, settingGitHubApp); err != nil {
+	if _, err := s.store.Q(r.Context()).Exec(r.Context(), `DELETE FROM settings WHERE key=$1`, settingGitHubApp); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}

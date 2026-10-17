@@ -57,7 +57,7 @@ func (s *Server) uniqueProjectSlug(ctx context.Context, name string) string {
 	slug := base
 	for i := 0; i < 20; i++ {
 		var exists bool
-		_ = s.store.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE slug=$1)`, slug).Scan(&exists)
+		_ = s.store.Q(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE slug=$1)`, slug).Scan(&exists)
 		if !exists {
 			return slug
 		}

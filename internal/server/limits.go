@@ -51,7 +51,7 @@ func (s *Server) countTeam(ctx context.Context, teamID, what string) (int, error
 		"databases": `SELECT count(*) FROM databases d JOIN projects p ON p.id=d.project_id WHERE p.team_id=$1`,
 	}[what]
 	var n int
-	err := s.store.DB.QueryRow(ctx, q, teamID).Scan(&n)
+	err := s.store.Q(ctx).QueryRow(ctx, q, teamID).Scan(&n)
 	return n, err
 }
 

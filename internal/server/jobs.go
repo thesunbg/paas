@@ -43,7 +43,7 @@ func (s *Server) cronLoop(ctx context.Context) {
 				continue
 			}
 			go func(svc store.Service) {
-				if _, err := s.runJob(context.Background(), &svc, "schedule", true); err != nil {
+				if _, err := s.runJob(ctx, &svc, "schedule", true); err != nil {
 					slog.Warn("cron job", "service", svc.Slug, "err", err)
 				}
 			}(svc)
@@ -98,7 +98,7 @@ func (s *Server) runJob(ctx context.Context, svc *store.Service, trigger string,
 	}
 	exec := func() {
 		var rep proto.JobReply
-		err := s.requestAgent(context.Background(), node.ID, proto.CmdJob, req, &rep, time.Duration(timeout)*time.Second+15*time.Minute)
+		err := s.requestAgent(ctx, node.ID, proto.CmdJob, req, &rep, time.Duration(timeout)*time.Second+15*time.Minute)
 		status := "succeeded"
 		if err != nil {
 			rep.Error, rep.ExitCode = err.Error(), -1
@@ -110,9 +110,9 @@ func (s *Server) runJob(ctx context.Context, svc *store.Service, trigger string,
 		if rep.Error != "" {
 			out += "\n" + rep.Error
 		}
-		_ = s.store.FinishJobRun(context.Background(), run.ID, status, rep.ExitCode, out)
+		_ = s.store.FinishJobRun(ctx, run.ID, status, rep.ExitCode, out)
 		if status == "failed" {
-			s.notify(context.Background(), proj.TeamID, "job.failed", fmt.Sprintf("Job %s/%s failed (exit %d)", proj.Slug, svc.Slug, rep.ExitCode), map[string]any{"service": svc.Slug, "run": run.ID})
+			s.notify(ctx, proj.TeamID, "job.failed", fmt.Sprintf("Job %s/%s failed (exit %d)", proj.Slug, svc.Slug, rep.ExitCode), map[string]any{"service": svc.Slug, "run": run.ID})
 		}
 	}
 	if wait {

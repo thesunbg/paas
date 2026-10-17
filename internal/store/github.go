@@ -17,7 +17,7 @@ type GitHubInstallation struct {
 const ghInstCols = `installation_id, team_id, account_login, account_type, created_at`
 
 func (s *Store) UpsertGitHubInstallation(ctx context.Context, in GitHubInstallation) error {
-	_, err := s.DB.Exec(ctx, `INSERT INTO github_installations (installation_id, team_id, account_login, account_type) VALUES ($1,$2,$3,$4)
+	_, err := s.q(ctx).Exec(ctx, `INSERT INTO github_installations (installation_id, team_id, account_login, account_type) VALUES ($1,$2,$3,$4)
 		ON CONFLICT (installation_id) DO UPDATE SET team_id=EXCLUDED.team_id, account_login=EXCLUDED.account_login, account_type=EXCLUDED.account_type`,
 		in.InstallationID, in.TeamID, in.AccountLogin, in.AccountType)
 	return err
@@ -25,13 +25,13 @@ func (s *Store) UpsertGitHubInstallation(ctx context.Context, in GitHubInstallat
 
 func (s *Store) GitHubInstallation(ctx context.Context, id int64) (*GitHubInstallation, error) {
 	var g GitHubInstallation
-	err := s.DB.QueryRow(ctx, `SELECT `+ghInstCols+` FROM github_installations WHERE installation_id=$1`, id).
+	err := s.q(ctx).QueryRow(ctx, `SELECT `+ghInstCols+` FROM github_installations WHERE installation_id=$1`, id).
 		Scan(&g.InstallationID, &g.TeamID, &g.AccountLogin, &g.AccountType, &g.CreatedAt)
 	return &g, notFound(err)
 }
 
 func (s *Store) GitHubInstallationsForTeam(ctx context.Context, teamID string) ([]GitHubInstallation, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+ghInstCols+` FROM github_installations WHERE team_id=$1 ORDER BY account_login`, teamID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+ghInstCols+` FROM github_installations WHERE team_id=$1 ORDER BY account_login`, teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -48,6 +48,6 @@ func (s *Store) GitHubInstallationsForTeam(ctx context.Context, teamID string) (
 }
 
 func (s *Store) DeleteGitHubInstallation(ctx context.Context, id int64) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM github_installations WHERE installation_id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM github_installations WHERE installation_id=$1`, id)
 	return err
 }

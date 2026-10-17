@@ -126,7 +126,7 @@ func (s *Server) reconcileOnce(ctx context.Context) {
 			if n, err := s.store.NodeByID(ctx, id); err == nil {
 				s.notifyAdmins(ctx, "node.offline", fmt.Sprintf("Node %s (%s) stopped responding; rescheduling its stateless workloads", n.Name, n.Address), nil)
 			}
-			_, _ = s.store.DB.Exec(ctx, `UPDATE instances SET status='lost' WHERE node_id=$1 AND status IN ('running','starting')`, id)
+			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE instances SET status='lost' WHERE node_id=$1 AND status IN ('running','starting')`, id)
 		}
 		s.publishAll(ctx)
 	}
@@ -265,7 +265,7 @@ func (s *Server) sleepIdle(ctx context.Context, services []store.Service) {
 		if !ok {
 			continue
 		}
-		go s.putToSleep(context.Background(), svc.ID, unlock)
+		go s.putToSleep(ctx, svc.ID, unlock)
 	}
 }
 

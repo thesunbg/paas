@@ -319,6 +319,12 @@ func (s *Server) onRegister(ctx context.Context, req *proto.RegisterRequest) *pr
 
 // requestAgent sends a command to an agent and decodes the reply.
 func (s *Server) requestAgent(ctx context.Context, nodeID, cmd string, req, rep any, timeout time.Duration) error {
+	// Intentional debt: a few-ms window remains between this check and the send, so a
+	// just-deposed leader can still land one command. Remove/upgrade when a real incident
+	// happens or a non-idempotent agent command is added: move to agent-side epoch checks.
+	if err := s.store.CheckFence(ctx); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return bus.Request(ctx, s.nc, proto.AgentSubject(nodeID, cmd), req, rep)
@@ -418,7 +424,7 @@ func (s *Server) syncBaseDomain(ctx context.Context) {
 			continue
 		}
 		host := s.generatedDomain(svc.Slug, proj.Slug)
-		if _, err := s.store.DB.Exec(ctx, `UPDATE domains SET hostname=$2 WHERE id=$1`, d.ID, host); err != nil {
+		if _, err := s.store.Q(ctx).Exec(ctx, `UPDATE domains SET hostname=$2 WHERE id=$1`, d.ID, host); err != nil {
 			slog.Warn("move generated domain", "from", d.Hostname, "to", host, "err", err)
 			continue
 		}

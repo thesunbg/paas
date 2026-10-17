@@ -238,7 +238,7 @@ func (s *Server) handleUpgradeDatabase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		db.SizePreset = in.Size
-		_, _ = s.store.DB.Exec(r.Context(), `UPDATE databases SET size_preset=$2 WHERE id=$1`, db.ID, in.Size)
+		_, _ = s.store.Q(r.Context()).Exec(r.Context(), `UPDATE databases SET size_preset=$2 WHERE id=$1`, db.ID, in.Size)
 	}
 	_ = s.store.SetDatabaseStatus(r.Context(), db.ID, "upgrading", "")
 	go func() {

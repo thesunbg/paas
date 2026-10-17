@@ -30,19 +30,19 @@ func scanProject(row pgx.Row) (*Project, error) {
 }
 
 func (s *Store) CreateProject(ctx context.Context, teamID, name, slug string) (*Project, error) {
-	return scanProject(s.DB.QueryRow(ctx, `INSERT INTO projects (team_id, name, slug) VALUES ($1,$2,$3) RETURNING `+projectCols, teamID, name, slug))
+	return scanProject(s.q(ctx).QueryRow(ctx, `INSERT INTO projects (team_id, name, slug) VALUES ($1,$2,$3) RETURNING `+projectCols, teamID, name, slug))
 }
 
 func (s *Store) ProjectByID(ctx context.Context, id string) (*Project, error) {
-	return scanProject(s.DB.QueryRow(ctx, `SELECT `+projectCols+` FROM projects WHERE id=$1`, id))
+	return scanProject(s.q(ctx).QueryRow(ctx, `SELECT `+projectCols+` FROM projects WHERE id=$1`, id))
 }
 
 func (s *Store) ProjectBySlug(ctx context.Context, teamID, slug string) (*Project, error) {
-	return scanProject(s.DB.QueryRow(ctx, `SELECT `+projectCols+` FROM projects WHERE team_id=$1 AND slug=$2`, teamID, slug))
+	return scanProject(s.q(ctx).QueryRow(ctx, `SELECT `+projectCols+` FROM projects WHERE team_id=$1 AND slug=$2`, teamID, slug))
 }
 
 func (s *Store) ProjectsForTeam(ctx context.Context, teamID string) ([]Project, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+projectCols+` FROM projects WHERE team_id=$1 ORDER BY created_at`, teamID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+projectCols+` FROM projects WHERE team_id=$1 ORDER BY created_at`, teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -58,11 +58,11 @@ func (s *Store) ProjectsForTeam(ctx context.Context, teamID string) ([]Project, 
 // RenameProject changes the display name; the slug (used in domains and
 // internal DNS names) stays.
 func (s *Store) RenameProject(ctx context.Context, id, name string) (*Project, error) {
-	return scanProject(s.DB.QueryRow(ctx, `UPDATE projects SET name=$2 WHERE id=$1 RETURNING `+projectCols, id, name))
+	return scanProject(s.q(ctx).QueryRow(ctx, `UPDATE projects SET name=$2 WHERE id=$1 RETURNING `+projectCols, id, name))
 }
 
 func (s *Store) DeleteProject(ctx context.Context, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM projects WHERE id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM projects WHERE id=$1`, id)
 	return err
 }
 
@@ -118,7 +118,7 @@ func collectServices(rows pgx.Rows, err error) ([]Service, error) {
 }
 
 func (s *Store) CreateService(ctx context.Context, svc *Service) (*Service, error) {
-	return scanService(s.DB.QueryRow(ctx, `INSERT INTO services (project_id, name, slug, type, source, build, spec, git_token_enc, webhook_secret, node_id, parent_id, preview_pr)
+	return scanService(s.q(ctx).QueryRow(ctx, `INSERT INTO services (project_id, name, slug, type, source, build, spec, git_token_enc, webhook_secret, node_id, parent_id, preview_pr)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING `+serviceCols,
 		svc.ProjectID, svc.Name, svc.Slug, svc.Type, svc.Source, svc.Build, svc.Spec, svc.GitTokenEnc, svc.WebhookSecret, svc.NodeID, svc.ParentID, svc.PreviewPR))
 }
@@ -136,7 +136,7 @@ func (s *Store) UpdateService(ctx context.Context, id string, fn func(*Service) 
 		if err := fn(svc); err != nil {
 			return nil, err
 		}
-		next, err := scanService(s.DB.QueryRow(ctx, `UPDATE services SET name=$2, source=$3, build=$4, spec=$5, git_token_enc=$6, version=version+1, updated_at=now()
+		next, err := scanService(s.q(ctx).QueryRow(ctx, `UPDATE services SET name=$2, source=$3, build=$4, spec=$5, git_token_enc=$6, version=version+1, updated_at=now()
 			WHERE id=$1 AND version=$7 RETURNING `+serviceCols,
 			id, svc.Name, svc.Source, svc.Build, svc.Spec, svc.GitTokenEnc, svc.Version))
 		if errors.Is(err, ErrNotFound) {
@@ -148,41 +148,41 @@ func (s *Store) UpdateService(ctx context.Context, id string, fn func(*Service) 
 }
 
 func (s *Store) ServiceByID(ctx context.Context, id string) (*Service, error) {
-	return scanService(s.DB.QueryRow(ctx, `SELECT `+serviceCols+` FROM services WHERE id=$1`, id))
+	return scanService(s.q(ctx).QueryRow(ctx, `SELECT `+serviceCols+` FROM services WHERE id=$1`, id))
 }
 
 func (s *Store) ServicesForProject(ctx context.Context, projectID string) ([]Service, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+serviceCols+` FROM services WHERE project_id=$1 ORDER BY created_at`, projectID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+serviceCols+` FROM services WHERE project_id=$1 ORDER BY created_at`, projectID)
 	return collectServices(rows, err)
 }
 
 func (s *Store) AllServices(ctx context.Context) ([]Service, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+serviceCols+` FROM services ORDER BY created_at`)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+serviceCols+` FROM services ORDER BY created_at`)
 	return collectServices(rows, err)
 }
 
 func (s *Store) SetServiceStatus(ctx context.Context, id, status string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE services SET status=$2, updated_at=now() WHERE id=$1`, id, status)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE services SET status=$2, updated_at=now() WHERE id=$1`, id, status)
 	return err
 }
 
 func (s *Store) SetServiceCurrentDeployment(ctx context.Context, id, deploymentID, status string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE services SET current_deployment_id=$2, status=$3, updated_at=now() WHERE id=$1`, id, deploymentID, status)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE services SET current_deployment_id=$2, status=$3, updated_at=now() WHERE id=$1`, id, deploymentID, status)
 	return err
 }
 
 func (s *Store) SetServiceNode(ctx context.Context, id string, nodeID *string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE services SET node_id=$2 WHERE id=$1`, id, nodeID)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE services SET node_id=$2 WHERE id=$1`, id, nodeID)
 	return err
 }
 
 func (s *Store) TouchServiceRequest(ctx context.Context, id string, at time.Time) error {
-	_, err := s.DB.Exec(ctx, `UPDATE services SET last_request_at=GREATEST(COALESCE(last_request_at, $2), $2) WHERE id=$1`, id, at)
+	_, err := s.q(ctx).Exec(ctx, `UPDATE services SET last_request_at=GREATEST(COALESCE(last_request_at, $2), $2) WHERE id=$1`, id, at)
 	return err
 }
 
 func (s *Store) DeleteService(ctx context.Context, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM services WHERE id=$1`, id)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM services WHERE id=$1`, id)
 	return err
 }
 
@@ -194,7 +194,7 @@ type EnvVar struct {
 }
 
 func (s *Store) EnvVars(ctx context.Context, serviceID string) ([]EnvVar, error) {
-	rows, err := s.DB.Query(ctx, `SELECT key, value_enc FROM env_vars WHERE service_id=$1 ORDER BY key`, serviceID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT key, value_enc FROM env_vars WHERE service_id=$1 ORDER BY key`, serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -206,13 +206,13 @@ func (s *Store) EnvVars(ctx context.Context, serviceID string) ([]EnvVar, error)
 }
 
 func (s *Store) SetEnvVar(ctx context.Context, serviceID, key, valueEnc string) error {
-	_, err := s.DB.Exec(ctx, `INSERT INTO env_vars (service_id, key, value_enc) VALUES ($1,$2,$3)
+	_, err := s.q(ctx).Exec(ctx, `INSERT INTO env_vars (service_id, key, value_enc) VALUES ($1,$2,$3)
 		ON CONFLICT (service_id, key) DO UPDATE SET value_enc=EXCLUDED.value_enc`, serviceID, key, valueEnc)
 	return err
 }
 
 func (s *Store) DeleteEnvVar(ctx context.Context, serviceID, key string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM env_vars WHERE service_id=$1 AND key=$2`, serviceID, key)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM env_vars WHERE service_id=$1 AND key=$2`, serviceID, key)
 	return err
 }
 
@@ -228,7 +228,7 @@ type Domain struct {
 
 func (s *Store) AddDomain(ctx context.Context, serviceID, host string, generated bool) (*Domain, error) {
 	var d Domain
-	err := s.DB.QueryRow(ctx, `INSERT INTO domains (service_id, hostname, is_generated) VALUES ($1, lower($2), $3)
+	err := s.q(ctx).QueryRow(ctx, `INSERT INTO domains (service_id, hostname, is_generated) VALUES ($1, lower($2), $3)
 		RETURNING id, service_id, hostname, is_generated, created_at`, serviceID, host, generated).
 		Scan(&d.ID, &d.ServiceID, &d.Hostname, &d.IsGenerated, &d.CreatedAt)
 	return &d, err
@@ -243,7 +243,7 @@ func (s *Store) AllDomains(ctx context.Context) ([]Domain, error) {
 }
 
 func (s *Store) queryDomains(ctx context.Context, where string, args ...any) ([]Domain, error) {
-	rows, err := s.DB.Query(ctx, `SELECT id, service_id, hostname, is_generated, created_at FROM domains `+where+` ORDER BY created_at`, args...)
+	rows, err := s.q(ctx).Query(ctx, `SELECT id, service_id, hostname, is_generated, created_at FROM domains `+where+` ORDER BY created_at`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -255,15 +255,15 @@ func (s *Store) queryDomains(ctx context.Context, where string, args ...any) ([]
 }
 
 func (s *Store) DeleteDomain(ctx context.Context, serviceID, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM domains WHERE service_id=$1 AND id=$2`, serviceID, id)
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM domains WHERE service_id=$1 AND id=$2`, serviceID, id)
 	return err
 }
 
 func (s *Store) PreviewsOf(ctx context.Context, parentID string) ([]Service, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+serviceCols+` FROM services WHERE parent_id=$1 ORDER BY preview_pr`, parentID)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+serviceCols+` FROM services WHERE parent_id=$1 ORDER BY preview_pr`, parentID)
 	return collectServices(rows, err)
 }
 
 func (s *Store) PreviewFor(ctx context.Context, parentID string, pr int) (*Service, error) {
-	return scanService(s.DB.QueryRow(ctx, `SELECT `+serviceCols+` FROM services WHERE parent_id=$1 AND preview_pr=$2`, parentID, pr))
+	return scanService(s.q(ctx).QueryRow(ctx, `SELECT `+serviceCols+` FROM services WHERE parent_id=$1 AND preview_pr=$2`, parentID, pr))
 }

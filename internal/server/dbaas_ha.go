@@ -96,7 +96,7 @@ func (s *Server) createReplica(ctx context.Context, db *store.Database, primary 
 	}
 	if primary.NodeID == nil { // keep the primary where its data is
 		primary.NodeID = &pNode
-		_, _ = s.store.DB.Exec(ctx, `UPDATE services SET node_id=$2 WHERE id=$1`, primary.ID, pNode)
+		_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE services SET node_id=$2 WHERE id=$1`, primary.ID, pNode)
 	}
 	c, _, err := s.dbCreds(ctx, db)
 	if err != nil {
@@ -230,7 +230,7 @@ func (s *Server) ensureStandby(ctx context.Context, db *store.Database) error {
 	}
 	if !hadAlias {
 		s.publishDNS(ctx)
-		go s.restartLinked(context.Background(), db.ID) // switch apps to the alias
+		go s.restartLinked(ctx, db.ID) // switch apps to the alias
 	}
 	if db.Options.ReplicaServiceID != "" {
 		if _, err := s.store.ServiceByID(ctx, db.Options.ReplicaServiceID); err == nil {
@@ -301,7 +301,6 @@ func (s *Server) haTick(ctx context.Context) {
 			if !s.haBusy(db.ID) {
 				go func(id string) {
 					defer s.haDone(id)
-					ctx := context.Background()
 					unlock := s.lock("db-" + id)
 					defer unlock()
 					fresh, err := s.store.DatabaseByID(ctx, id)
@@ -385,17 +384,16 @@ func (s *Server) promoteStandby(ctx context.Context, db *store.Database, oldPrim
 		slog.Warn("delete old primary", "err", err)
 	}
 	if oldNode != "" {
-		go s.removeVolumesWhenOnline(oldNode, oldPrimary.ID)
+		go s.removeVolumesWhenOnline(ctx, oldNode, oldPrimary.ID)
 	}
 	s.publishAll(ctx)
 	if db.Options.PITR {
 		// The WAL archive continues on the new primary's node: start a fresh base backup there.
 		go func() {
-			bctx := context.Background()
-			if fresh, err := s.store.DatabaseByID(bctx, db.ID); err == nil {
+			if fresh, err := s.store.DatabaseByID(ctx, db.ID); err == nil {
 				unlock := s.lock("pitr-" + db.ID)
 				defer unlock()
-				_, _ = s.takeBaseBackup(bctx, fresh)
+				_, _ = s.takeBaseBackup(ctx, fresh)
 			}
 		}()
 	}
@@ -497,8 +495,7 @@ func (s *Server) haLoop(ctx context.Context) {
 }
 
 // removeVolumesWhenOnline frees the disk of a deleted server once its node is back (up to a day).
-func (s *Server) removeVolumesWhenOnline(nodeID, serviceID string) {
-	ctx := context.Background()
+func (s *Server) removeVolumesWhenOnline(ctx context.Context, nodeID, serviceID string) {
 	for i := 0; i < 24*60; i++ {
 		if n, err := s.store.NodeByID(ctx, nodeID); err != nil {
 			return

@@ -289,7 +289,7 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	if l := s.teamLimits(r.Context()); limited(r) && l.MaxTeams > 0 {
 		var n int
-		err := s.store.DB.QueryRow(r.Context(), `SELECT count(*) FROM memberships WHERE user_id=$1 AND role='owner'`, currentUser(r).ID).Scan(&n)
+		err := s.store.Q(r.Context()).QueryRow(r.Context(), `SELECT count(*) FROM memberships WHERE user_id=$1 AND role='owner'`, currentUser(r).ID).Scan(&n)
 		if err != nil {
 			writeError(w, 500, err.Error())
 			return
@@ -560,7 +560,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "user not found")
 		return
 	}
-	if _, err := s.store.DB.Exec(r.Context(), `DELETE FROM users WHERE id=$1`, id); err != nil {
+	if _, err := s.store.Q(r.Context()).Exec(r.Context(), `DELETE FROM users WHERE id=$1`, id); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
