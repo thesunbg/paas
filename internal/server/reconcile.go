@@ -115,42 +115,55 @@ func (s *Server) reconcileLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		if ids, err := s.store.MarkStaleNodesOffline(ctx, 20*time.Second); err == nil && len(ids) > 0 {
-			for _, id := range ids {
-				slog.Warn("node offline", "id", id)
-				if n, err := s.store.NodeByID(ctx, id); err == nil {
-					s.notifyAdmins(ctx, "node.offline", fmt.Sprintf("Node %s (%s) stopped responding; rescheduling its stateless workloads", n.Name, n.Address), nil)
-				}
-				_, _ = s.store.DB.Exec(ctx, `UPDATE instances SET status='lost' WHERE node_id=$1 AND status IN ('running','starting')`, id)
-			}
-			s.publishAll(ctx)
-		}
-		services, err := s.store.AllServices(ctx)
-		if err != nil {
-			continue
-		}
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, 4)
-		for _, svc := range services {
-			if svc.Status != model.StatusRunning || svc.CurrentDeploymentID == nil {
-				continue
-			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(id string) {
-				defer func() { <-sem; wg.Done() }()
-				s.reconcileService(ctx, id)
-			}(svc.ID)
-		}
-		wg.Wait()
-		s.sleepIdle(ctx, services)
+		s.reconcileOnce(ctx)
 	}
 }
 
+func (s *Server) reconcileOnce(ctx context.Context) {
+	if ids, err := s.store.MarkStaleNodesOffline(ctx, 20*time.Second); err == nil && len(ids) > 0 {
+		for _, id := range ids {
+			slog.Warn("node offline", "id", id)
+			if n, err := s.store.NodeByID(ctx, id); err == nil {
+				s.notifyAdmins(ctx, "node.offline", fmt.Sprintf("Node %s (%s) stopped responding; rescheduling its stateless workloads", n.Name, n.Address), nil)
+			}
+			_, _ = s.store.DB.Exec(ctx, `UPDATE instances SET status='lost' WHERE node_id=$1 AND status IN ('running','starting')`, id)
+		}
+		s.publishAll(ctx)
+	}
+	services, err := s.store.AllServices(ctx)
+	if err != nil {
+		return
+	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for _, svc := range services {
+		if svc.Status != model.StatusRunning || svc.CurrentDeploymentID == nil {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id string) {
+			defer func() { <-sem; wg.Done() }()
+			s.reconcileService(ctx, id)
+		}(svc.ID)
+	}
+	wg.Wait()
+	s.sleepIdle(ctx, services)
+}
+
 // reconcileService converges a running service to its desired replica count.
+// Busy services are skipped; the next reconcile tick converges them.
 func (s *Server) reconcileService(ctx context.Context, serviceID string) {
-	unlock := s.lock(serviceID)
+	unlock, ok := s.tryLock(serviceID)
+	if !ok {
+		return
+	}
 	defer unlock()
+	s.reconcileLocked(ctx, serviceID)
+}
+
+// reconcileLocked is the body of reconcileService; the caller holds the service lock.
+func (s *Server) reconcileLocked(ctx context.Context, serviceID string) {
 	svc, err := s.store.ServiceByID(ctx, serviceID)
 	if err != nil || svc.Status != model.StatusRunning || svc.CurrentDeploymentID == nil {
 		return
@@ -248,12 +261,16 @@ func (s *Server) sleepIdle(ctx context.Context, services []store.Service) {
 		if time.Since(last) < time.Duration(svc.Spec.Sleep.IdleMinutes)*time.Minute {
 			continue
 		}
-		go s.putToSleep(context.Background(), svc.ID)
+		unlock, ok := s.tryLock(svc.ID)
+		if !ok {
+			continue
+		}
+		go s.putToSleep(context.Background(), svc.ID, unlock)
 	}
 }
 
-func (s *Server) putToSleep(ctx context.Context, serviceID string) {
-	unlock := s.lock(serviceID)
+// putToSleep runs with the service lock already held and releases it when done.
+func (s *Server) putToSleep(ctx context.Context, serviceID string, unlock func()) {
 	defer unlock()
 	svc, err := s.store.ServiceByID(ctx, serviceID)
 	if err != nil || svc.Status != model.StatusRunning {
@@ -312,7 +329,11 @@ func (s *Server) wakeService(ctx context.Context, serviceID string) proto.WakeRe
 			return proto.WakeReply{Error: err.Error()}
 		}
 	}
-	s.reconcileService(ctx, svc.ID)
+	// Wake is a request being waited on, so wait for the lock rather than skip;
+	// builds do not hold it, so the wait is short.
+	unlock := s.lock(svc.ID)
+	s.reconcileLocked(ctx, svc.ID)
+	unlock()
 	var ups []string
 	for _, in := range s.instancesOf(ctx, svc.ID) {
 		if in.Status == model.InstRunning && in.IP != "" && in.Port > 0 {

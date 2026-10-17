@@ -106,8 +106,6 @@ func truncate(s string, n int) string {
 }
 
 func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
-	unlock := s.lock(d.ServiceID)
-	defer unlock()
 	svc, err := s.store.ServiceByID(ctx, d.ServiceID)
 	if err != nil {
 		_ = s.store.SetDeploymentStatus(ctx, d.ID, model.DeployFailed, "service not found")
@@ -143,7 +141,20 @@ func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
 		s.hub.Log(d.ID, "==> using image "+d.Image)
 		_ = s.store.UpdateDeploymentBuilt(ctx, d)
 	}
-	svc, _ = s.store.ServiceByID(ctx, d.ServiceID)
+	// Build ran unlocked; the service may have been stopped or deleted meanwhile.
+	unlock := s.lock(d.ServiceID)
+	defer unlock()
+	svc, err = s.store.ServiceByID(ctx, d.ServiceID)
+	if err != nil {
+		_ = s.store.SetDeploymentStatus(ctx, d.ID, model.DeployCancelled, "service deleted during build")
+		return
+	}
+	if svc.Status == model.StatusStopped {
+		s.hub.Log(d.ID, "==> service was stopped during build; not rolling out")
+		_ = s.store.SetDeploymentStatus(ctx, d.ID, model.DeployCancelled, "service stopped during build")
+		s.reportCommitStatus(ctx, svc, d, "error")
+		return
+	}
 
 	if svc.Type == model.TypeCron {
 		// Jobs run on schedule; deploying only switches the image they use.

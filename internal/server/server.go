@@ -212,19 +212,41 @@ func (s *Server) Run(ctx context.Context) error {
 // lock serializes operations (deploy, scale, sleep, wake) on one service, across
 // every control plane: an in-process mutex plus a PostgreSQL advisory lock.
 func (s *Server) lock(serviceID string) func() {
-	s.locksMu.Lock()
-	m, ok := s.locks[serviceID]
-	if !ok {
-		m = &sync.Mutex{}
-		s.locks[serviceID] = m
-	}
-	s.locksMu.Unlock()
+	m := s.serviceMutex(serviceID)
 	m.Lock()
 	release := s.store.AdvisoryLock(context.Background(), "service:"+serviceID)
 	return func() {
 		release()
 		m.Unlock()
 	}
+}
+
+// tryLock is lock without waiting: false when the service is busy.
+func (s *Server) tryLock(serviceID string) (func(), bool) {
+	m := s.serviceMutex(serviceID)
+	if !m.TryLock() {
+		return nil, false
+	}
+	release, ok := s.store.TryAdvisoryLock(context.Background(), "service:"+serviceID)
+	if !ok {
+		m.Unlock()
+		return nil, false
+	}
+	return func() {
+		release()
+		m.Unlock()
+	}, true
+}
+
+func (s *Server) serviceMutex(serviceID string) *sync.Mutex {
+	s.locksMu.Lock()
+	defer s.locksMu.Unlock()
+	m, ok := s.locks[serviceID]
+	if !ok {
+		m = &sync.Mutex{}
+		s.locks[serviceID] = m
+	}
+	return m
 }
 
 func (s *Server) validToken(tok string) bool {

@@ -10,15 +10,19 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/thesunbg/paas/internal/bus"
 	"github.com/thesunbg/paas/internal/config"
+	"github.com/thesunbg/paas/internal/proto"
 	"github.com/thesunbg/paas/internal/secrets"
 	"github.com/thesunbg/paas/internal/store"
+	"github.com/thesunbg/paas/internal/util"
 )
 
 // newTestServer gives each test its own migrated database (cheap enough: one
@@ -72,6 +76,55 @@ func newTestServer(t *testing.T) (*Server, http.Handler) {
 	signupGuard.hits = map[string][]time.Time{}
 	signupGuard.mu.Unlock()
 	return s, s.routes()
+}
+
+// newTestServerBus is newTestServer plus what deploy and reconcile need: lock and
+// scheduling state, a cluster token, an embedded NATS server and the log hub.
+func newTestServerBus(t *testing.T) *Server {
+	t.Helper()
+	s, _ := newTestServer(t)
+	s.locks = map[string]*sync.Mutex{}
+	s.evictedOn = map[string]time.Time{}
+	s.wake = newWakeGroup()
+	s.traffic = newTraffic()
+	s.scale = map[string]*scaleState{}
+	s.ClusterToken = util.RandomToken(24)
+	var err error
+	if s.ns, err = bus.StartServer("127.0.0.1:-1", s.ClusterToken, t.TempDir()); err != nil {
+		t.Fatalf("start nats: %v", err)
+	}
+	if s.nc, err = bus.ConnectInProcess(s.ns, s.ClusterToken, "test"); err != nil {
+		t.Fatalf("connect nats: %v", err)
+	}
+	s.hub = NewLogHub(s.store, s.nc)
+	t.Cleanup(func() {
+		s.nc.Close()
+		s.ns.Shutdown()
+	})
+	return s
+}
+
+// fakeBuildAgent answers build requests for nodeID: each request reports its
+// deployment id on started, then blocks until release is called.
+func fakeBuildAgent(t *testing.T, s *Server, nodeID string) (started <-chan string, release func()) {
+	t.Helper()
+	ch := make(chan string, 16)
+	gate := make(chan struct{})
+	var once sync.Once
+	_, err := bus.Handle(s.nc, proto.AgentSubject(nodeID, proto.CmdBuild), func(_ context.Context, r *proto.BuildRequest) *proto.BuildReply {
+		ch <- r.DeploymentID
+		<-gate
+		return &proto.BuildReply{Image: "img:test", Detected: "go"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	rel := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(rel)
+	return ch, rel
 }
 
 func testDatabaseURL(t *testing.T) string {

@@ -137,3 +137,21 @@ func (s *Store) AdvisoryLock(ctx context.Context, key string) func() {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// TryAdvisoryLock makes a single attempt at the lock. For background loops, which
+// must skip a busy key instead of queueing behind it.
+func (s *Store) TryAdvisoryLock(ctx context.Context, key string) (func(), bool) {
+	conn, err := s.DB.Acquire(ctx)
+	if err != nil {
+		return nil, false
+	}
+	var ok bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtext($1))`, key).Scan(&ok); err != nil || !ok {
+		conn.Release()
+		return nil, false
+	}
+	return func() {
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext($1))`, key)
+		conn.Release()
+	}, true
+}
