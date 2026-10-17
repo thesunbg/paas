@@ -52,7 +52,7 @@ type env struct {
 	nodes map[string]string // nkey -> nodeID
 }
 
-func newEnv(t *testing.T, enroll map[testNode]string) *env {
+func newEnv(t *testing.T, enroll map[testNode]string, legacy ...string) *env {
 	t.Helper()
 	tlsCfg, pool := testPKI(t)
 	e := &env{ca: pool, nodes: map[string]string{}}
@@ -63,6 +63,9 @@ func newEnv(t *testing.T, enroll map[testNode]string) *env {
 		id, ok := e.nodes[nkey]
 		return id, nil, ok
 	}}
+	if len(legacy) > 0 {
+		e.auth.Legacy = legacy[0]
+	}
 	ns, err := StartServer("127.0.0.1:-1", e.auth, tlsCfg, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -214,14 +217,21 @@ func TestKick(t *testing.T) {
 }
 
 func TestLegacyToken(t *testing.T) {
-	e := newEnv(t, nil)
-	e.auth.Legacy = "legacy"
-	// Legacy is read per connection; TLS is on so dial with Secure.
-	nc, err := nats.Connect(e.url, nats.Token("legacy"), nats.Secure(&tls.Config{RootCAs: e.ca, ServerName: pki.ServerName}), nats.MaxReconnects(0))
+	e := newEnv(t, nil, "legacy")
+	// Legacy agents predate the cluster CA and dial plain.
+	nc, err := nats.Connect(strings.Replace(e.url, "tls://", "nats://", 1), nats.Token("legacy"), nats.MaxReconnects(0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	nc.Close()
+}
+
+func TestPlaintextRefusedWithoutLegacy(t *testing.T) {
+	e := newEnv(t, nil)
+	if nc, err := nats.Connect(strings.Replace(e.url, "tls://", "nats://", 1), nats.Token("internal-secret"), nats.MaxReconnects(0)); err == nil {
+		nc.Close()
+		t.Fatal("plain connect accepted with legacy off")
+	}
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }

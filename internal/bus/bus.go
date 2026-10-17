@@ -57,6 +57,10 @@ func StartServer(addr string, auth *Auth, tlsCfg *tls.Config, storeDir string, c
 	if tlsCfg != nil {
 		opts.TLSConfig = tlsCfg
 		opts.TLSTimeout = 2
+		// Legacy: agents from before the cluster CA dial plain nats://; accept them while the
+		// shared token is honoured. Remove with Auth.Legacy when no node has nkey IS NULL
+		// (plan 261017-cluster-trust).
+		opts.AllowNonTLS = auth != nil && auth.Legacy != ""
 	}
 	if len(cluster) > 0 && cluster[0].Listen != "" {
 		c := cluster[0]

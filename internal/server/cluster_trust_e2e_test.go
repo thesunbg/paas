@@ -176,9 +176,9 @@ func TestClusterTrustEndToEnd(t *testing.T) {
 
 // The legacy flag decides whether the shared cluster token is a NATS credential.
 func TestClusterTrustLegacyFlag(t *testing.T) {
+	// Plain nats:// like an agent from before the cluster CA.
 	tokenConnect := func(s *Server) error {
-		nc, err := nats.Connect(s.ns.ClientURL(), nats.Token(s.ClusterToken),
-			nats.Secure(&tls.Config{RootCAs: s.ca.Pool(), ServerName: pki.ServerName}), nats.MaxReconnects(0))
+		nc, err := nats.Connect(strings.Replace(s.ns.ClientURL(), "tls://", "nats://", 1), nats.Token(s.ClusterToken), nats.MaxReconnects(0))
 		if err == nil {
 			nc.Close()
 		}
