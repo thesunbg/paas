@@ -191,6 +191,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.net.EnsureDNS()
 			a.heartbeat(ctx)
 			a.checkMemoryPressure(ctx)
+			a.rt.CapLogs()
 		}
 	}
 }

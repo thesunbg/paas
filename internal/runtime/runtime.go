@@ -233,29 +233,29 @@ func (r *Runtime) Run(ctx context.Context, req proto.RunRequest) (string, error)
 		return "", err
 	}
 	m := &managed{Req: req}
-	nsh, err := netns.NewNetNS(filepath.Join(r.dataDir, "netns"))
+	nsh, ip, err := r.attachNet(ctx, id, m)
 	if err != nil {
-		return "", fmt.Errorf("create netns: %w", err)
-	}
-	m.NetNS = nsh.GetPath()
-	// Release any address left behind by an earlier attempt with the same container id.
-	_ = r.net.Detach(ctx, req.NetIndex, id, m.NetNS)
-	ip, err := r.net.Attach(ctx, req.NetIndex, id, m.NetNS)
-	if err != nil {
-		_ = nsh.Remove()
 		return "", err
 	}
-	m.IP = ip
+	m.NetNS, m.IP = nsh.GetPath(), ip
+	ok := false
+	defer func() {
+		if !ok {
+			// Not ctx: a cancelled request must still release the address.
+			_ = r.net.Detach(context.WithoutCancel(ctx), req.NetIndex, id, m.NetNS)
+			_ = nsh.Remove()
+			_ = os.RemoveAll(r.containerDir(id))
+		}
+	}()
 	if err := r.writeNetFiles(id, req); err != nil {
 		return "", err
 	}
 
 	cctx := r.ctx(ctx)
 	if err := r.createContainer(cctx, img, m); err != nil {
-		_ = r.net.Detach(ctx, req.NetIndex, id, m.NetNS)
-		_ = nsh.Remove()
 		return "", err
 	}
+	ok = true
 	r.saveState(id, m)
 	r.mu.Lock()
 	r.containers[id] = m
@@ -277,6 +277,70 @@ func (r *Runtime) Run(ctx context.Context, req proto.RunRequest) (string, error)
 		return "", fmt.Errorf("%w\n--- last log lines ---\n%s", err, strings.Join(tail, "\n"))
 	}
 	return ip, nil
+}
+
+// attachNet creates a fresh netns for the container and attaches it to its project network.
+func (r *Runtime) attachNet(ctx context.Context, id string, m *managed) (*netns.NetNS, string, error) {
+	nsh, err := netns.NewNetNS(filepath.Join(r.dataDir, "netns"))
+	if err != nil {
+		return nil, "", fmt.Errorf("create netns: %w", err)
+	}
+	// Release any address left behind by an earlier attempt with the same container id.
+	_ = r.net.Detach(ctx, m.Req.NetIndex, id, nsh.GetPath())
+	ip, err := r.net.Attach(ctx, m.Req.NetIndex, id, nsh.GetPath())
+	if err != nil {
+		_ = nsh.Remove()
+		return nil, "", err
+	}
+	return nsh, ip, nil
+}
+
+// ensureNetNS re-attaches the container when its netns is gone. A reboot
+// unmounts every netns; the path baked into the spec must follow the new one.
+func (r *Runtime) ensureNetNS(ctx context.Context, ctr client.Container, id string) error {
+	r.mu.Lock()
+	m := r.containers[id]
+	r.mu.Unlock()
+	if m == nil {
+		return nil
+	}
+	closed, err := netns.LoadNetNS(m.NetNS).Closed()
+	if err != nil {
+		return err
+	}
+	if !closed {
+		return nil
+	}
+	slog.Info("netns gone, re-attaching", "id", id)
+	nsh, ip, err := r.attachNet(ctx, id, m)
+	if err != nil {
+		return err
+	}
+	undo := func() {
+		_ = r.net.Detach(context.WithoutCancel(ctx), m.Req.NetIndex, id, nsh.GetPath())
+		_ = nsh.Remove()
+	}
+	spec, err := ctr.Spec(ctx)
+	if err != nil {
+		undo()
+		return err
+	}
+	if spec.Linux != nil {
+		for i := range spec.Linux.Namespaces {
+			if spec.Linux.Namespaces[i].Type == specs.NetworkNamespace {
+				spec.Linux.Namespaces[i].Path = nsh.GetPath()
+			}
+		}
+	}
+	if err := ctr.Update(ctx, client.UpdateContainerOpts(client.WithSpec(spec))); err != nil {
+		undo()
+		return fmt.Errorf("update spec: %w", err)
+	}
+	r.mu.Lock()
+	m.NetNS, m.IP = nsh.GetPath(), ip
+	r.saveState(id, m)
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *Runtime) writeNetFiles(id string, req proto.RunRequest) error {
@@ -466,11 +530,14 @@ func (r *Runtime) startTask(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if err := r.ensureNetNS(ctx, ctr, id); err != nil {
+		return fmt.Errorf("netns: %w", err)
+	}
 	if t, err := ctr.Task(ctx, nil); err == nil {
 		_, _ = t.Delete(ctx, client.WithProcessKill)
 	}
 	logPath := r.LogPath(id)
-	rotateLog(logPath)
+	capLog(logPath)
 	task, err := ctr.NewTask(ctx, cio.LogFile(logPath))
 	if err != nil {
 		return fmt.Errorf("create task: %w", err)
@@ -725,7 +792,20 @@ func (r *Runtime) Recover(ctx context.Context) {
 		data, err := os.ReadFile(filepath.Join(r.containerDir(id), "state.json"))
 		if err != nil {
 			slog.Warn("orphan container without state, removing", "id", id)
-			_ = ctr.Delete(cctx, client.WithSnapshotCleanup)
+			// Remove releases the address before the state dir goes, so an orphan holds no IP.
+			if t, err := ctr.Task(cctx, nil); err == nil {
+				_, _ = t.Delete(cctx, client.WithProcessKill)
+			}
+			if spec, err := ctr.Spec(cctx); err == nil && spec.Linux != nil {
+				for _, n := range spec.Linux.Namespaces {
+					if n.Type == specs.NetworkNamespace && n.Path != "" {
+						_ = netns.LoadNetNS(n.Path).Remove()
+					}
+				}
+			}
+			if err := ctr.Delete(cctx, client.WithSnapshotCleanup); err != nil {
+				slog.Warn("delete orphan container", "id", id, "err", err)
+			}
 			continue
 		}
 		m := &managed{}
@@ -735,6 +815,11 @@ func (r *Runtime) Recover(ctx context.Context) {
 		r.mu.Lock()
 		r.containers[id] = m
 		r.mu.Unlock()
+		if m.Req.Once {
+			slog.Info("dropping job left from before restart", "id", id)
+			_ = r.Remove(ctx, id, time.Second)
+			continue
+		}
 		r.net.Restore(m.Req.NetIndex)
 		running := false
 		if task, err := ctr.Task(cctx, nil); err == nil {
@@ -902,14 +987,6 @@ func (r *Runtime) GCImages(ctx context.Context, prefix string, keep []string) (i
 		}
 	}
 	return removed, nil
-}
-
-func rotateLog(path string) {
-	st, err := os.Stat(path)
-	if err != nil || st.Size() < 10<<20 {
-		return
-	}
-	_ = os.Rename(path, path+".1")
 }
 
 // RunJob runs a container to completion and returns its exit code and output tail.

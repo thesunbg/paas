@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -21,6 +22,67 @@ import (
 
 	"github.com/thesunbg/paas/internal/proto"
 )
+
+const (
+	maxLogBytes   = 10 << 20
+	maxLineBytes  = 64 << 10
+	truncatedMark = "…[truncated]"
+)
+
+// CapLogs keeps every container log at most ~maxLogBytes (plus one .1 backup).
+func (r *Runtime) CapLogs() {
+	r.mu.Lock()
+	ids := make([]string, 0, len(r.containers))
+	for id := range r.containers {
+		ids = append(ids, id)
+	}
+	r.mu.Unlock()
+	for _, id := range ids {
+		capLog(r.LogPath(id))
+	}
+}
+
+// capLog saves the last maxLogBytes of path as path+".1" and truncates path.
+// The shim opens the log with O_APPEND (containerd v2.4.1 shim process/io.go),
+// so truncating while it writes is safe; bytes written between the copy and
+// the truncate are lost. Never truncates unless the copy completed.
+func capLog(path string) {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() < maxLogBytes {
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		slog.Warn("cap log: open", "path", path, "err", err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.Seek(st.Size()-maxLogBytes, io.SeekStart); err != nil {
+		slog.Warn("cap log: seek", "path", path, "err", err)
+		return
+	}
+	tmp := path + ".1.tmp"
+	out, err := os.Create(tmp)
+	if err != nil {
+		slog.Warn("cap log: create", "path", tmp, "err", err)
+		return
+	}
+	_, err = io.Copy(out, f)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path+".1")
+	}
+	if err != nil {
+		slog.Warn("cap log: backup", "path", path, "err", err)
+		_ = os.Remove(tmp)
+		return
+	}
+	if err := os.Truncate(path, 0); err != nil {
+		slog.Warn("cap log: truncate", "path", path, "err", err)
+	}
+}
 
 func (r *Runtime) collectMetrics(ctx context.Context, id string) {
 	ctr, err := r.client.LoadContainer(ctx, id)
@@ -130,16 +192,38 @@ func (r *Runtime) Follow(ctx context.Context, id string, fn func(line string)) e
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		return err
 	}
-	reader := bufio.NewReader(f)
-	var partial string
+	reader := bufio.NewReaderSize(f, maxLineBytes)
+	// partial holds the unfinished tail of a line (bounded by maxLineBytes);
+	// skip drops the rest of an over-long line after its head was emitted.
+	var partial []byte
+	skip := false
 	for {
-		line, err := reader.ReadString('\n')
-		if err == nil {
-			fn(strings.TrimRight(partial+line, "\n"))
-			partial = ""
+		chunk, err := reader.ReadSlice('\n')
+		switch {
+		case err == nil:
+			if !skip {
+				line := strings.TrimSuffix(string(partial)+string(chunk), "\n")
+				if len(line) > maxLineBytes {
+					line = line[:maxLineBytes] + truncatedMark
+				}
+				fn(line)
+			}
+			skip = false
+			partial = partial[:0]
+			continue
+		case err == bufio.ErrBufferFull || len(partial)+len(chunk) > maxLineBytes:
+			if !skip {
+				line := string(partial) + string(chunk)
+				fn(line[:min(len(line), maxLineBytes)] + truncatedMark)
+				skip = true
+			}
+			partial = partial[:0]
 			continue
 		}
-		partial += line
+		// EOF: keep the partial line (copy: chunk aliases the reader buffer).
+		if !skip {
+			partial = append(partial, chunk...)
+		}
 		select {
 		case <-ctx.Done():
 			return nil
@@ -150,6 +234,8 @@ func (r *Runtime) Follow(ctx context.Context, id string, fn func(line string)) e
 			if pos, _ := f.Seek(0, io.SeekCurrent); st.Size() < pos {
 				_, _ = f.Seek(0, io.SeekStart)
 				reader.Reset(f)
+				partial = partial[:0]
+				skip = false
 			}
 		}
 	}
