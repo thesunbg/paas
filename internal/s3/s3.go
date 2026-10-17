@@ -4,10 +4,13 @@
 package s3
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -53,6 +56,11 @@ func uriEncode(s string, encodeSlash bool) string {
 
 // Presign returns a URL that allows method (GET, PUT, DELETE) on key until expiry.
 func (c *Config) Presign(method, key string, expires time.Duration, now time.Time) (string, error) {
+	return c.presign(method, key, nil, expires, now)
+}
+
+// presign signs extra query parameters (uploadId, partNumber, list-type…) too.
+func (c *Config) presign(method, key string, extra map[string]string, expires time.Duration, now time.Time) (string, error) {
 	u, err := url.Parse(strings.TrimRight(c.Endpoint, "/"))
 	if err != nil {
 		return "", err
@@ -76,6 +84,9 @@ func (c *Config) Presign(method, key string, expires time.Duration, now time.Tim
 		"X-Amz-Date":          amzDate,
 		"X-Amz-Expires":       fmt.Sprint(int(expires.Seconds())),
 		"X-Amz-SignedHeaders": "host",
+	}
+	for k, v := range extra {
+		q[k] = v
 	}
 	keys := make([]string, 0, len(q))
 	for k := range q {
@@ -119,4 +130,129 @@ func (c *Config) Delete(key string) error {
 // Key builds an object key under the configured prefix.
 func (c *Config) Key(parts ...string) string {
 	return strings.TrimLeft(strings.TrimRight(c.Prefix, "/")+"/"+strings.Join(parts, "/"), "/")
+}
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// call runs a signed request against the storage and returns the body of a 2xx reply.
+func (c *Config) call(method, key string, q map[string]string, body []byte) ([]byte, error) {
+	u, err := c.presign(method, key, q, 5*time.Minute, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(method, u, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s %s: HTTP %d %s", method, key, resp.StatusCode, bytes.TrimSpace(out[:min(len(out), 256)]))
+	}
+	return out, nil
+}
+
+type Object struct {
+	Key          string
+	Size         int64
+	LastModified time.Time
+}
+
+// List returns every object whose key starts with prefix (a full key, see Key).
+func (c *Config) List(prefix string) ([]Object, error) {
+	var objs []Object
+	token := ""
+	for {
+		q := map[string]string{"list-type": "2", "prefix": prefix}
+		if token != "" {
+			q["continuation-token"] = token
+		}
+		body, err := c.call(http.MethodGet, "", q, nil)
+		if err != nil {
+			return nil, err
+		}
+		var res struct {
+			Truncated bool   `xml:"IsTruncated"`
+			Next      string `xml:"NextContinuationToken"`
+			Contents  []struct {
+				Key          string    `xml:"Key"`
+				Size         int64     `xml:"Size"`
+				LastModified time.Time `xml:"LastModified"`
+			} `xml:"Contents"`
+		}
+		if err := xml.Unmarshal(body, &res); err != nil {
+			return nil, fmt.Errorf("list %s: %w", prefix, err)
+		}
+		for _, o := range res.Contents {
+			objs = append(objs, Object{Key: o.Key, Size: o.Size, LastModified: o.LastModified})
+		}
+		if !res.Truncated || res.Next == "" {
+			return objs, nil
+		}
+		token = res.Next
+	}
+}
+
+// CreateMultipart starts a multipart upload and returns its upload ID.
+func (c *Config) CreateMultipart(key string) (string, error) {
+	body, err := c.call(http.MethodPost, key, map[string]string{"uploads": ""}, nil)
+	if err != nil {
+		return "", err
+	}
+	var res struct {
+		UploadID string `xml:"UploadId"`
+	}
+	if err := xml.Unmarshal(body, &res); err != nil || res.UploadID == "" {
+		return "", fmt.Errorf("create multipart %s: unexpected reply", key)
+	}
+	return res.UploadID, nil
+}
+
+// PresignPart returns a URL an agent PUTs part n (1-based) to.
+func (c *Config) PresignPart(key, uploadID string, n int, expires time.Duration) (string, error) {
+	return c.presign(http.MethodPut, key, map[string]string{"partNumber": fmt.Sprint(n), "uploadId": uploadID}, expires, time.Now())
+}
+
+type Part struct {
+	N    int
+	ETag string
+}
+
+// CompleteMultipart assembles the parts, listed in part order.
+func (c *Config) CompleteMultipart(key, uploadID string, parts []Part) error {
+	type part struct {
+		N    int    `xml:"PartNumber"`
+		ETag string `xml:"ETag"`
+	}
+	req := struct {
+		XMLName xml.Name `xml:"CompleteMultipartUpload"`
+		Parts   []part   `xml:"Part"`
+	}{}
+	for _, p := range parts {
+		req.Parts = append(req.Parts, part{p.N, p.ETag})
+	}
+	sort.Slice(req.Parts, func(i, j int) bool { return req.Parts[i].N < req.Parts[j].N })
+	body, err := xml.Marshal(req)
+	if err != nil {
+		return err
+	}
+	out, err := c.call(http.MethodPost, key, map[string]string{"uploadId": uploadID}, body)
+	if err != nil {
+		return err
+	}
+	// S3 may answer 200 with an error document when assembling fails.
+	if bytes.Contains(out, []byte("<Error>")) {
+		return fmt.Errorf("complete multipart %s: %s", key, bytes.TrimSpace(out[:min(len(out), 256)]))
+	}
+	return nil
+}
+
+// AbortMultipart discards the uploaded parts.
+func (c *Config) AbortMultipart(key, uploadID string) error {
+	_, err := c.call(http.MethodDelete, key, map[string]string{"uploadId": uploadID}, nil)
+	return err
 }

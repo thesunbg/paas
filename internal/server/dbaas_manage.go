@@ -25,6 +25,8 @@ if [ -s "$PGDATA/PG_VERSION" ]; then grep -q "^host replication" "$PGDATA/pg_hba
 if [ -d /wal ]; then mkdir -p /wal/archive && chown -R postgres:postgres /wal; fi
 exec "$@"`
 
+const archiveCommand = "test ! -f /wal/archive/%f && cp %p /wal/archive/.%f.tmp && mv /wal/archive/.%f.tmp /wal/archive/%f"
+
 // dedicatedSpec is the server spec of a dedicated database, including the
 // DBaaS options (WAL archiving for point-in-time recovery, standby support).
 func (s *Server) dedicatedSpec(db *store.Database, c databases.Credentials) (model.ServiceSpec, error) {
@@ -41,8 +43,9 @@ func (s *Server) dedicatedSpec(db *store.Database, c databases.Credentials) (mod
 		args = append(args, "-c", "wal_level=replica", "-c", "wal_keep_size=1024", "-c", "max_wal_senders=5", "-c", "hot_standby=on")
 		if db.Options.PITR {
 			spec.Volumes = append(spec.Volumes, model.Volume{Name: "wal", Path: "/wal"})
+			// The spool is drained to S3 (walShipTick); the dot-prefixed temp file keeps it from shipping a partial segment.
 			args = append(args, "-c", "archive_mode=on",
-				"-c", "archive_command=test ! -f /wal/archive/%f && cp %p /wal/archive/%f",
+				"-c", "archive_command="+archiveCommand,
 				"-c", "archive_timeout=300")
 		}
 		if db.Options.HA {

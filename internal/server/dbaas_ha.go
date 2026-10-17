@@ -113,6 +113,11 @@ func (s *Server) createReplica(ctx context.Context, db *store.Database, primary 
 		return nil, errors.New("unexpected server command")
 	}
 	spec.Command = append([]string{"sh", "-c", replicaPrelude, "sh"}, spec.Command[4:]...)
+	for i, a := range spec.Command { // a PITR standby archives too, so WAL survives the primary's node
+		if a == "archive_mode=on" {
+			spec.Command[i] = "archive_mode=always"
+		}
+	}
 	proj, err := s.store.ProjectByID(ctx, primary.ProjectID)
 	if err != nil {
 		return nil, err
