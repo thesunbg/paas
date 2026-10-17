@@ -12,7 +12,7 @@ func TestFailStuckDeployments(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	proj := seedProject(t, st)
-	node, err := st.UpsertNode(ctx, &proto.RegisterRequest{Name: "n", Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
+	node, err := st.UpsertNodeLegacy(ctx, &proto.RegisterRequest{Name: "n", Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -90,10 +90,13 @@ func newTestServerBus(t *testing.T) *Server {
 	s.scale = map[string]*scaleState{}
 	s.ClusterToken = util.RandomToken(24)
 	var err error
-	if s.ns, err = bus.StartServer("127.0.0.1:-1", s.ClusterToken, t.TempDir()); err != nil {
+	if err = s.initTrust(context.Background()); err != nil {
+		t.Fatalf("init trust: %v", err)
+	}
+	if s.ns, err = bus.StartServer("127.0.0.1:-1", s.auth, s.ca.ServerTLS(), t.TempDir()); err != nil {
 		t.Fatalf("start nats: %v", err)
 	}
-	if s.nc, err = bus.ConnectInProcess(s.ns, s.ClusterToken, "test"); err != nil {
+	if s.nc, err = bus.ConnectInProcess(s.ns, s.internalSecret, "test"); err != nil {
 		t.Fatalf("connect nats: %v", err)
 	}
 	s.hub = NewLogHub(s.store, s.nc)

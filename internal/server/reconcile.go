@@ -17,14 +17,31 @@ import (
 	"github.com/thesunbg/paas/internal/store"
 )
 
-// onHeartbeat records a node's heartbeat and answers it (HeartbeatAck) once it is committed:
-// the ack renews the agent's lease on its HA postgres, so it must never be sent for a
-// heartbeat that was not recorded (last_seen_at is what the failover decision looks at).
 func (s *Server) onHeartbeat(m *nats.Msg) {
+	// Legacy subject: sender named and authenticated by payload.
+	// Legacy: remove when no node has nkey IS NULL (plan 261017-cluster-trust).
 	var hb proto.Heartbeat
 	if err := json.Unmarshal(m.Data, &hb); err != nil || !s.validToken(hb.Token) || hb.NodeID == "" {
 		return
 	}
+	s.handleHeartbeat(m, &hb)
+}
+
+// onNodeHeartbeat serves paas.node.<id>.heartbeat: the id comes from the subject, never the payload.
+func (s *Server) onNodeHeartbeat(m *nats.Msg) {
+	var hb proto.Heartbeat
+	id := proto.NodeIDFromSubject(m.Subject)
+	if id == "" || json.Unmarshal(m.Data, &hb) != nil {
+		return
+	}
+	hb.NodeID = id
+	s.handleHeartbeat(m, &hb)
+}
+
+// handleHeartbeat records a node's heartbeat and answers it (HeartbeatAck) once it is committed:
+// the ack renews the agent's lease on its HA postgres, so it must never be sent for a
+// heartbeat that was not recorded (last_seen_at is what the failover decision looks at).
+func (s *Server) handleHeartbeat(m *nats.Msg, hb *proto.Heartbeat) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := s.store.NodeHeartbeat(ctx, hb.NodeID, hb.Usage); err != nil {

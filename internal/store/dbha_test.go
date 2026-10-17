@@ -23,7 +23,7 @@ func newHAFixture(t *testing.T) *haFixture {
 	ctx := context.Background()
 	proj := seedProject(t, st)
 	node := func(name string) *Node {
-		n, err := st.UpsertNode(ctx, &proto.RegisterRequest{Name: name, Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
+		n, err := st.UpsertNodeLegacy(ctx, &proto.RegisterRequest{Name: name, Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
 		if err != nil {
 			t.Fatal(err)
 		}

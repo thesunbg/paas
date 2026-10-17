@@ -110,7 +110,7 @@ func TestShipSpool(t *testing.T) {
 	ctx := context.Background()
 	s.s3 = &s3.Config{Endpoint: "http://s3.invalid", Bucket: "b", AccessKey: "k", SecretKey: "s"}
 	svc := seedDeployService(t, s)
-	n, err := s.store.UpsertNode(ctx, &proto.RegisterRequest{Name: "n", Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
+	n, err := s.store.UpsertNodeLegacy(ctx, &proto.RegisterRequest{Name: "n", Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
 	if err != nil {
 		t.Fatal(err)
 	}

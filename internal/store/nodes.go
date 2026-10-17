@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,6 +30,7 @@ type Node struct {
 	NetIndex         *int              `json:"net_index"`
 	WGPublicKey      string            `json:"wg_public_key"`
 	WGPort           int               `json:"wg_port"`
+	Legacy           bool              `json:"legacy"` // nkey IS NULL: still on the shared cluster token, must join again
 	LastSeenAt       time.Time         `json:"last_seen_at"`
 	CreatedAt        time.Time         `json:"created_at"`
 }
@@ -41,21 +44,37 @@ func (n *Node) HasRole(role string) bool {
 	return false
 }
 
-const nodeCols = `id, name, address, roles, labels, status, cpu_cores, memory_mb, reserved_mb, overcommit_memory, overcommit_cpu, capabilities, usage, version, net_index, wg_public_key, wg_port, last_seen_at, created_at`
+const nodeCols = `id, name, address, roles, labels, status, cpu_cores, memory_mb, reserved_mb, overcommit_memory, overcommit_cpu, capabilities, usage, version, net_index, wg_public_key, wg_port, nkey IS NULL, last_seen_at, created_at`
 
 func scanNode(row pgx.Row) (*Node, error) {
 	var n Node
 	err := row.Scan(&n.ID, &n.Name, &n.Address, &n.Roles, &n.Labels, &n.Status, &n.CPUCores, &n.MemoryMB, &n.ReservedMB,
-		&n.OvercommitMemory, &n.OvercommitCPU, &n.Capabilities, &n.Usage, &n.Version, &n.NetIndex, &n.WGPublicKey, &n.WGPort, &n.LastSeenAt, &n.CreatedAt)
+		&n.OvercommitMemory, &n.OvercommitCPU, &n.Capabilities, &n.Usage, &n.Version, &n.NetIndex, &n.WGPublicKey, &n.WGPort, &n.Legacy, &n.LastSeenAt, &n.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
 	return &n, nil
 }
 
-// UpsertNode registers a node by name, keeping operator-set fields (status, overcommit) on re-registration.
-// It also allocates the node's network index (its slice of the cluster address space).
-func (s *Store) UpsertNode(ctx context.Context, r *proto.RegisterRequest, maxNodes int) (*Node, error) {
+// allocNetIndex gives n its network index (its slice of the cluster address space) if it has none.
+// The caller holds the nodes table lock.
+func allocNetIndex(ctx context.Context, tx pgx.Tx, n *Node, maxNodes int) (*Node, error) {
+	if n.NetIndex != nil {
+		return n, nil
+	}
+	n, err := scanNode(tx.QueryRow(ctx, `UPDATE nodes SET net_index = (
+		SELECT min(i) FROM generate_series(1, $2::int) i WHERE i NOT IN (SELECT net_index FROM nodes WHERE net_index IS NOT NULL))
+		WHERE id=$1 RETURNING `+nodeCols, n.ID, maxNodes))
+	if err == nil && n.NetIndex == nil {
+		return nil, fmt.Errorf("cluster is full: no free node network index")
+	}
+	return n, err
+}
+
+// UpsertNodeLegacy registers a node by name, keeping operator-set fields (status, overcommit) on re-registration.
+// Legacy: remove when no node has nkey IS NULL (plan 261017-cluster-trust). Enrolled nodes are created by
+// EnrollNode and updated by UpdateNodeRegistration only.
+func (s *Store) UpsertNodeLegacy(ctx context.Context, r *proto.RegisterRequest, maxNodes int) (*Node, error) {
 	var n *Node
 	err := pgx.BeginFunc(ctx, s.q(ctx), func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
@@ -69,18 +88,134 @@ func (s *Store) UpsertNode(ctx context.Context, r *proto.RegisterRequest, maxNod
 			wg_public_key=EXCLUDED.wg_public_key, wg_port=EXCLUDED.wg_port, last_seen_at=now(),
 			status = CASE WHEN nodes.status='cordoned' THEN 'cordoned' ELSE 'online' END
 		RETURNING `+nodeCols, r.Name, r.Address, r.Roles, r.CPUCores, r.MemoryMB, r.Capabilities, r.Version, r.WGPublicKey, r.WGPort))
-		if err != nil || n.NetIndex != nil {
+		if err != nil {
 			return err
 		}
-		n, err = scanNode(tx.QueryRow(ctx, `UPDATE nodes SET net_index = (
-			SELECT min(i) FROM generate_series(1, $2::int) i WHERE i NOT IN (SELECT net_index FROM nodes WHERE net_index IS NOT NULL))
-			WHERE id=$1 RETURNING `+nodeCols, n.ID, maxNodes))
-		if err == nil && n.NetIndex == nil {
-			return fmt.Errorf("cluster is full: no free node network index")
-		}
+		n, err = allocNetIndex(ctx, tx, n, maxNodes)
 		return err
 	})
 	return n, err
+}
+
+// internalNkeyPrefix marks the nkey column of control plane nodes; enroll refuses those names.
+const internalNkeyPrefix = "internal:"
+
+// EnsureLocalNode creates (or finds) the row of the control plane's own embedded agent by name, with no
+// join token: that agent connects with the in-process secret, not an nkey. The nkey column holds the
+// sentinel "internal:<name>" (never a valid public key, so NodeByNkey cannot match a real connection);
+// it keeps the node out of the "nkey IS NULL" legacy count. Roles of an existing row are refreshed.
+func (s *Store) EnsureLocalNode(ctx context.Context, name string, roles []string, maxNodes int) (*Node, error) {
+	var n *Node
+	err := pgx.BeginFunc(ctx, s.q(ctx), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+		var err error
+		n, err = scanNode(tx.QueryRow(ctx, `INSERT INTO nodes (name, roles, nkey, status, last_seen_at) VALUES ($1,$2,$3||$1,'online',now())
+			ON CONFLICT (name) DO UPDATE SET roles=EXCLUDED.roles, nkey=COALESCE(nodes.nkey, EXCLUDED.nkey)
+			RETURNING `+nodeCols, name, roles, internalNkeyPrefix))
+		if err != nil {
+			return err
+		}
+		n, err = allocNetIndex(ctx, tx, n, maxNodes)
+		return err
+	})
+	return n, err
+}
+
+// UpdateNodeRegistration refreshes the self-reported facts of an existing node and never inserts.
+// Roles are deliberately not updated: they come from the join token and drive NATS permissions.
+func (s *Store) UpdateNodeRegistration(ctx context.Context, id string, r *proto.RegisterRequest, maxNodes int) (*Node, error) {
+	var n *Node
+	err := pgx.BeginFunc(ctx, s.q(ctx), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+		var err error
+		n, err = scanNode(tx.QueryRow(ctx, `UPDATE nodes SET address=$2, cpu_cores=$3, memory_mb=$4, capabilities=$5, version=$6,
+			wg_public_key=$7, wg_port=$8, last_seen_at=now(),
+			status = CASE WHEN status='cordoned' THEN 'cordoned' ELSE 'online' END
+			WHERE id=$1 RETURNING `+nodeCols, id, r.Address, r.CPUCores, r.MemoryMB, r.Capabilities, r.Version, r.WGPublicKey, r.WGPort))
+		if err != nil {
+			return err
+		}
+		n, err = allocNetIndex(ctx, tx, n, maxNodes)
+		return err
+	})
+	return n, err
+}
+
+// ErrInvalidJoinToken: the token is unknown, expired or already used.
+var ErrInvalidJoinToken = errors.New("invalid or expired join token")
+
+// ErrNodeNameReserved: the name belongs to a control plane node (sentinel nkey "internal:<name>").
+var ErrNodeNameReserved = errors.New("node name is reserved by a control plane node")
+
+func (s *Store) CreateJoinToken(ctx context.Context, hash []byte, roles []string, ttl time.Duration, by string) (time.Time, error) {
+	var exp time.Time
+	var creator *string
+	if by != "" {
+		creator = &by
+	}
+	err := s.q(ctx).QueryRow(ctx, `INSERT INTO join_tokens (hash, roles, expires_at, created_by) VALUES ($1,$2,now()+$3::interval,$4) RETURNING expires_at`,
+		hash, roles, ttl.String(), creator).Scan(&exp)
+	return exp, err
+}
+
+// EnrollNode consumes the join token and creates (or re-keys) the node by name in ONE transaction,
+// so a failed enroll (including a reserved name) does not burn the token. Re-enrolling an existing name keeps its id and net_index
+// and returns the previous nkey ("" if it had none) so the caller can kick its connections.
+func (s *Store) EnrollNode(ctx context.Context, hash []byte, name, nkey string, maxNodes int) (n *Node, oldNkey string, err error) {
+	err = pgx.BeginFunc(ctx, s.q(ctx), func(tx pgx.Tx) error {
+		var roles []string
+		if _, err := tx.Exec(ctx, `LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+		var old *string
+		if err := tx.QueryRow(ctx, `SELECT nkey FROM nodes WHERE name=$1`, name).Scan(&old); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if old != nil {
+			if strings.HasPrefix(*old, internalNkeyPrefix) {
+				return ErrNodeNameReserved // returned before the token is consumed; the tx rolls back anyway
+			}
+			oldNkey = *old
+		}
+		if err := tx.QueryRow(ctx, `UPDATE join_tokens SET used_at=now() WHERE hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING roles`,
+			hash).Scan(&roles); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrInvalidJoinToken
+			}
+			return err
+		}
+		var err error
+		n, err = scanNode(tx.QueryRow(ctx, `INSERT INTO nodes (name, roles, nkey, status, last_seen_at) VALUES ($1,$2,$3,'online',now())
+			ON CONFLICT (name) DO UPDATE SET roles=EXCLUDED.roles, nkey=EXCLUDED.nkey, last_seen_at=now()
+			RETURNING `+nodeCols, name, roles, nkey))
+		if err != nil {
+			return err
+		}
+		n, err = allocNetIndex(ctx, tx, n, maxNodes)
+		return err
+	})
+	return n, oldNkey, err
+}
+
+// NodeByNkey resolves a node public key; called on every NATS connect, deliberately uncached.
+func (s *Store) NodeByNkey(ctx context.Context, nkey string) (*Node, error) {
+	return scanNode(s.q(ctx).QueryRow(ctx, `SELECT `+nodeCols+` FROM nodes WHERE nkey=$1`, nkey))
+}
+
+// NodeNkey returns a node's public key, "" when it has none (legacy).
+func (s *Store) NodeNkey(ctx context.Context, id string) (string, error) {
+	var k *string
+	if err := s.q(ctx).QueryRow(ctx, `SELECT nkey FROM nodes WHERE id=$1`, id).Scan(&k); err != nil {
+		return "", notFound(err)
+	}
+	if k == nil {
+		return "", nil
+	}
+	return *k, nil
 }
 
 func (s *Store) NodeByID(ctx context.Context, id string) (*Node, error) {

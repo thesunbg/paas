@@ -4,6 +4,7 @@ package proto
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/thesunbg/paas/internal/model"
@@ -11,17 +12,22 @@ import (
 
 // Subjects.
 const (
-	SubjRegister   = "paas.agent.register"
-	SubjHeartbeat  = "paas.agent.heartbeat"
-	SubjRoutes     = "paas.proxy.routes"     // server -> proxies (full table)
-	SubjRoutesGet  = "paas.proxy.routes.get" // proxy -> server (request current table)
-	SubjProxyStats = "paas.proxy.stats"      // proxy -> server
-	SubjWake       = "paas.proxy.wake"       // proxy -> server (request/reply)
-	SubjDNS        = "paas.dns"              // server -> agents (full table)
-	SubjDNSGet     = "paas.dns.get"
-	SubjMesh       = "paas.mesh" // server -> agents (WireGuard peers)
-	SubjMeshGet    = "paas.mesh.get"
-	SubjBinary     = "paas.agent.binary" // agent -> server: which paasd binary nodes should run
+	// SubjRegister and SubjHeartbeat are the legacy subjects: the sender is named in the payload.
+	// Legacy: remove when no node has nkey IS NULL (plan 261017-cluster-trust).
+	SubjRegister         = "paas.agent.register"
+	SubjHeartbeat        = "paas.agent.heartbeat"
+	SubjNodeRegisterAll  = "paas.node.*.register"
+	SubjNodeHeartbeatAll = "paas.node.*.heartbeat"
+	SubjCPKick           = "paas.cp.kick"          // control plane -> control planes: {nkey} to disconnect
+	SubjRoutes           = "paas.proxy.routes"     // server -> proxies (full table)
+	SubjRoutesGet        = "paas.proxy.routes.get" // proxy -> server (request current table)
+	SubjProxyStats       = "paas.proxy.stats"      // proxy -> server
+	SubjWake             = "paas.proxy.wake"       // proxy -> server (request/reply)
+	SubjDNS              = "paas.dns"              // server -> agents (full table)
+	SubjDNSGet           = "paas.dns.get"
+	SubjMesh             = "paas.mesh" // server -> agents (WireGuard peers)
+	SubjMeshGet          = "paas.mesh.get"
+	SubjBinary           = "paas.agent.binary" // agent -> server: which paasd binary nodes should run
 )
 
 // DB HA timing, shared by the agent (self-fence) and the control plane (failover decision).
@@ -37,6 +43,20 @@ const (
 	// walsender notices a standby that stopped answering after this long.
 	WalSenderTimeout = 10 * time.Second
 )
+
+// SubjNodeRegister and SubjNodeHeartbeat carry the node id in the subject: NATS permissions
+// stop a node publishing under another id, so the server trusts the subject, not the payload.
+func SubjNodeRegister(id string) string  { return "paas.node." + id + ".register" }
+func SubjNodeHeartbeat(id string) string { return "paas.node." + id + ".heartbeat" }
+
+// NodeIDFromSubject extracts <id> from paas.node.<id>.<verb>.
+func NodeIDFromSubject(subject string) string {
+	parts := strings.Split(subject, ".")
+	if len(parts) != 4 || parts[0] != "paas" || parts[1] != "node" {
+		return ""
+	}
+	return parts[2]
+}
 
 // AgentSubject returns the subject an agent listens on for a command.
 func AgentSubject(nodeID, cmd string) string {

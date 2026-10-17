@@ -33,11 +33,11 @@ func newLockFixture(t *testing.T) *lockFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bn, err := s.store.UpsertNode(ctx, &proto.RegisterRequest{Name: "build", Address: "10.0.0.1", Roles: []string{"build"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
+	bn, err := s.store.UpsertNodeLegacy(ctx, &proto.RegisterRequest{Name: "build", Address: "10.0.0.1", Roles: []string{"build"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
 	if err != nil {
 		t.Fatal(err)
 	}
-	nb, err := s.store.UpsertNode(ctx, &proto.RegisterRequest{Name: "b", Address: "10.0.0.2", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
+	nb, err := s.store.UpsertNodeLegacy(ctx, &proto.RegisterRequest{Name: "b", Address: "10.0.0.2", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
 	if err != nil {
 		t.Fatal(err)
 	}

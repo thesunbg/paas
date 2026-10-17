@@ -54,10 +54,14 @@ Use `--https` instead of `--email` for automatic HTTPS without an email. Point D
 
 ```bash
 curl -fsSL https://paas.apps.example.com/install.sh | sudo sh -s -- join \
-  --server nats://<control-plane>:4222 --token <cluster-token> --roles worker
+  --url https://paas.apps.example.com --token <join-token> --roles worker
 ```
 
+The token is single-use and short-lived, and it is only issued when `PAAS_PUBLIC_URL` is `https://`. The node trades it for its own identity (`POST /api/v1/cluster/enroll`) and receives the bus address and CA from the control plane.
+
 Roles: `worker` (runs apps), `build` (runs BuildKit) and `edge` (runs the HTTPS proxy). Nodes need to reach each other on UDP 51820 (WireGuard) and the control plane on TCP 4222.
+
+**Migrating an existing cluster** (nodes that still use the shared cluster token): set `PAAS_NATS_LEGACY_TOKEN=1` on the control plane, upgrade it, then run a fresh join command on each node. When no node shows `legacy` in the nodes API (`GET /nodes`), unset the flag.
 
 **3. Deploy:**
 
@@ -97,12 +101,12 @@ Run several control planes against the same (highly available) PostgreSQL:
 PAAS_SERVER_NAME=cp1
 PAAS_DATABASE_URL=postgres://paas:…@db.internal:5432/paas
 PAAS_MASTER_KEY=<same hex key on every control plane>
-PAAS_CLUSTER_TOKEN=<same token on every control plane>
+PAAS_CLUSTER_TOKEN=<same token on every control plane; authenticates routes between control planes only>
 PAAS_NATS_CLUSTER_ADDR=0.0.0.0:6222
 PAAS_NATS_ROUTES=nats://cp2:6222,nats://cp3:6222
 ```
 
-Agents and proxies list every control plane: `PAAS_NATS_URL=nats://cp1:4222,nats://cp2:4222,nats://cp3:4222`. Every control plane serves the API and the bus. One elected leader (a PostgreSQL advisory lock) runs the deploy queue, reconciler, cron, autoscaler and maintenance. When the leader dies, another one takes over within seconds, and running apps are never affected.
+Nodes get the bus URL and the cluster CA when they enroll; point the dashboard hostname at every control plane, and the NATS client learns the other servers from the cluster. Bus and routes use TLS from a CA the control planes create and share through the database. Every control plane serves the API and the bus. One elected leader (a PostgreSQL advisory lock) runs the deploy queue, reconciler, cron, autoscaler and maintenance. When the leader dies, another one takes over within seconds, and running apps are never affected.
 
 ## Configuration
 

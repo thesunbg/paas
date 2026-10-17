@@ -2,14 +2,13 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/thesunbg/paas/internal/bus"
 	"github.com/thesunbg/paas/internal/model"
+	"github.com/thesunbg/paas/internal/proto"
 	"github.com/thesunbg/paas/internal/scheduler"
 	"github.com/thesunbg/paas/internal/store"
 )
@@ -127,25 +126,16 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "cordon the node and stop its agent before removing it")
 		return
 	}
+	nkey, _ := s.store.NodeNkey(r.Context(), n.ID)
 	if err := s.store.DeleteNode(r.Context(), n.ID); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]string{"status": "deleted"})
-}
-
-// handleJoinInfo returns the command to add a node to the cluster.
-func (s *Server) handleJoinInfo(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
+	if nkey != "" {
+		// Row is gone, so reconnects fail the lookup; the kick cuts the live connections on every control plane.
+		_ = bus.Publish(s.nc, proto.SubjCPKick, kickMsg{Nkey: nkey})
 	}
-	_, port, _ := net.SplitHostPort(s.cfg.NATSAddr)
-	host := strings.TrimPrefix(strings.TrimPrefix(s.cfg.PublicURL, "https://"), "http://")
-	host = strings.SplitN(host, "/", 2)[0]
-	host = strings.SplitN(host, ":", 2)[0]
-	natsURL := fmt.Sprintf("nats://%s:%s", host, port)
-	cmd := fmt.Sprintf("curl -fsSL %s/install.sh | sudo sh -s -- join --server %s --token %s --binary %s/download/paasd --roles worker", s.cfg.PublicURL, natsURL, s.ClusterToken, s.cfg.PublicURL)
-	writeJSON(w, 200, map[string]string{"nats_url": natsURL, "token": s.ClusterToken, "command": cmd})
+	writeJSON(w, 200, map[string]string{"status": "deleted"})
 }
 
 // handleDrainNode cordons a node and moves its stateless instances elsewhere without downtime.

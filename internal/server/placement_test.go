@@ -80,7 +80,7 @@ func TestPlaceInstanceSerializesCapacity(t *testing.T) {
 	s := newTestServerBus(t)
 	ctx := context.Background()
 	svc := seedDeployService(t, s)
-	n, err := s.store.UpsertNode(ctx, &proto.RegisterRequest{Name: "n", Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 4, MemoryMB: 1000, Capabilities: map[string]string{}}, 16)
+	n, err := s.store.UpsertNodeLegacy(ctx, &proto.RegisterRequest{Name: "n", Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 4, MemoryMB: 1000, Capabilities: map[string]string{}}, 16)
 	if err != nil {
 		t.Fatal(err)
 	}

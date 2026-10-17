@@ -519,9 +519,9 @@ export interface NodeUpdate {
   labels?: Record<string, string>;
 }
 
-export interface JoinInfo {
-  nats_url: string;
+export interface JoinToken {
   token: string;
+  expires_at: string;
   command: string;
 }
 
@@ -960,7 +960,7 @@ export const api = {
   updateNode: (id: string, input: NodeUpdate) => patch<ClusterNode>(`/nodes/${e(id)}`, input),
   deleteNode: (id: string) => del(`/nodes/${e(id)}`),
   nodeMetrics: (id: string) => get<NodeMetricPoint[] | null>(`/nodes/${e(id)}/metrics`),
-  joinInfo: () => get<JoinInfo>('/cluster/join'),
+  createJoinToken: (roles: string[]) => post<JoinToken>('/cluster/join-tokens', { roles }),
   sizes: () => get<SizesResponse>('/sizes'),
 };
 

@@ -5,7 +5,7 @@
 #     curl -fsSL https://raw.githubusercontent.com/thesunbg/paas/main/internal/installer/install.sh | sudo sh -s -- server --domain apps.example.com --email you@example.com
 #
 #   Join another node to an existing cluster:
-#     curl -fsSL https://<control-plane>/install.sh | sudo sh -s -- join --server nats://<control-plane>:4222 --token <cluster-token> --roles worker
+#     curl -fsSL https://<control-plane>/install.sh | sudo sh -s -- join --url https://<control-plane> --token <join-token> --roles worker
 #
 # Options:
 #   --domain DOMAIN      base domain for generated app URLs (wildcard DNS *.DOMAIN -> edge nodes)
@@ -13,15 +13,15 @@
 #   --https              enables automatic HTTPS without an email
 #   --dashboard-domain D dashboard hostname (default paas.DOMAIN; may equal DOMAIN)
 #   --roles ROLES        comma separated: worker,build,edge (join; default worker)
-#   --server URL         NATS URL of the control plane (join)
-#   --token TOKEN        cluster token (join)
-#   --binary URL|PATH    paasd binary to install (default: latest GitHub release)
+#   --url URL            dashboard URL of the control plane, https only (join)
+#   --token TOKEN        single-use join token from the dashboard (join)
+#   --binary URL|PATH    paasd binary to install (default: $URL/download/paasd in join, else latest GitHub release)
 #   --mirror HOST        Docker Hub pull-through mirror (e.g. mirror.gcr.io)
 #   --no-zram            do not configure compressed swap in RAM
 set -eu
 
 MODE="${1:-server}"; [ $# -gt 0 ] && shift
-DOMAIN=""; DASH=""; EMAIL=""; HTTPS=0; ROLES=""; SERVER=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
+DOMAIN=""; DASH=""; EMAIL=""; HTTPS=0; ROLES=""; URL=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN="$2"; shift 2;;
@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
     --https) HTTPS=1; shift;;
     --dashboard-domain) DASH="$2"; shift 2;;
     --roles) ROLES="$2"; shift 2;;
-    --server) SERVER="$2"; shift 2;;
+    --url) URL="${2%/}"; shift 2;;
     --token) TOKEN="$2"; shift 2;;
     --binary) BINARY="$2"; shift 2;;
     --mirror) MIRROR="$2"; shift 2;;
@@ -58,7 +58,11 @@ case "$(uname -m)" in
 esac
 case "$MODE" in server|join) ;; *) die "mode must be 'server' or 'join'";; esac
 if [ "$MODE" = join ]; then
-  [ -n "$SERVER" ] && [ -n "$TOKEN" ] || die "join needs --server and --token"
+  [ -n "$URL" ] && [ -n "$TOKEN" ] || die "join needs --url and --token"
+  # Only a guard against misconfiguration; the real enforcement is on the server.
+  case "$URL" in https://*) ;; *) die "join needs an https:// --url";; esac
+  case "$BINARY" in http://*) die "--binary must not be plain http://";; esac
+  [ -n "$BINARY" ] || BINARY="$URL/download/paasd"
   [ -n "$ROLES" ] || ROLES=worker
 else
   [ -n "$ROLES" ] || ROLES=worker,build
@@ -257,10 +261,11 @@ PAAS_PROXY_HTTPS_ADDR=:443
 EOF
     ARGS=all
   else
+    rm -rf /var/lib/paas/identity # stale identity of a deleted node: enroll fresh
     cat > /etc/paas/paasd.env <<EOF
 PAAS_DATA_DIR=/var/lib/paas
-PAAS_NATS_URL=${SERVER}
-PAAS_CLUSTER_TOKEN=${TOKEN}
+PAAS_JOIN_URL=${URL}
+PAAS_JOIN_TOKEN=${TOKEN}
 PAAS_ROLES=${ROLES}
 PAAS_ACME_EMAIL=${EMAIL}
 EOF

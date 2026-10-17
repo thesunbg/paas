@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/thesunbg/paas/internal/github"
@@ -25,6 +26,7 @@ import (
 	"github.com/thesunbg/paas/internal/config"
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/network"
+	"github.com/thesunbg/paas/internal/pki"
 	"github.com/thesunbg/paas/internal/proto"
 	"github.com/thesunbg/paas/internal/s3"
 	"github.com/thesunbg/paas/internal/secrets"
@@ -47,6 +49,11 @@ type Server struct {
 	hub   *LogHub
 
 	ClusterToken string
+
+	auth           *bus.Auth // NATS client authenticator; Internal secret lives only in this process
+	internalSecret string
+	ca             *pki.CA
+	caPEM          string // public cert, handed to nodes at enroll
 
 	systemTeamID    string
 	systemProjectID string
@@ -112,12 +119,15 @@ func New(ctx context.Context, cfg config.Server) (*Server, error) {
 	if err := s.bootstrap(ctx); err != nil {
 		return nil, err
 	}
-	s.ns, err = bus.StartServer(cfg.NATSAddr, s.ClusterToken, filepath.Join(cfg.DataDir, "nats"),
-		bus.ClusterOptions{Name: cfg.ServerName, Listen: cfg.ClusterAddr, Routes: cfg.ClusterRoutes})
+	if err := s.initTrust(ctx); err != nil {
+		return nil, err
+	}
+	s.ns, err = bus.StartServer(cfg.NATSAddr, s.auth, s.ca.ServerTLS(), filepath.Join(cfg.DataDir, "nats"),
+		bus.ClusterOptions{Name: cfg.ServerName, Listen: cfg.ClusterAddr, Routes: cfg.ClusterRoutes, Secret: s.ClusterToken, TLS: s.ca.RouteTLS()})
 	if err != nil {
 		return nil, fmt.Errorf("start nats: %w", err)
 	}
-	s.nc, err = bus.ConnectInProcess(s.ns, s.ClusterToken, "control-plane")
+	s.nc, err = bus.ConnectInProcess(s.ns, s.internalSecret, "control-plane")
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +137,19 @@ func New(ctx context.Context, cfg config.Server) (*Server, error) {
 
 // NATS exposes the embedded server for in-process agents and proxies.
 func (s *Server) NATS() *natsserver.Server { return s.ns }
+
+// EnsureLocalNode returns the id of this control plane's own node row (created on first use), so the
+// embedded agent can use paas.node.<id>.* from its first message.
+func (s *Server) EnsureLocalNode(ctx context.Context, name string, roles []string) (string, error) {
+	n, err := s.store.EnsureLocalNode(ctx, name, roles, network.MaxNodes(s.clusterBase))
+	if err != nil {
+		return "", err
+	}
+	return n.ID, nil
+}
+
+// InternalSecret authenticates in-process NATS connections (bus.ConnectInProcess).
+func (s *Server) InternalSecret() string { return s.internalSecret }
 
 func (s *Server) Store() *store.Store { return s.store }
 
@@ -256,13 +279,28 @@ func (s *Server) validToken(tok string) bool {
 
 func (s *Server) registerBusHandlers() error {
 	const q = "control"
-	if _, err := bus.HandleQueue(s.nc, proto.SubjRegister, q, s.onRegister); err != nil {
+	// Legacy subjects: the sender is named in the payload and trusted by the shared cluster token.
+	// Remove when no node has nkey IS NULL (plan 261017-cluster-trust). Enrolled nodes and the
+	// embedded agent use paas.node.<id>.* below.
+	if s.cfg.NATSLegacy {
+		if _, err := bus.HandleQueue(s.nc, proto.SubjRegister, q, s.onRegister); err != nil {
+			return err
+		}
+		if _, err := s.nc.QueueSubscribe(proto.SubjHeartbeat, q, s.onHeartbeat); err != nil {
+			return err
+		}
+	}
+	if _, err := s.nc.QueueSubscribe(proto.SubjNodeRegisterAll, q, s.onNodeRegister); err != nil {
+		return err
+	}
+	if _, err := s.nc.QueueSubscribe(proto.SubjNodeHeartbeatAll, q, s.onNodeHeartbeat); err != nil {
+		return err
+	}
+	// Every control plane must see a kick (no queue group): the node's connection may be on any of them.
+	if _, err := s.nc.Subscribe(proto.SubjCPKick, s.onKick); err != nil {
 		return err
 	}
 	if _, err := bus.HandleQueue(s.nc, proto.SubjBinary, q, s.onBinary); err != nil {
-		return err
-	}
-	if _, err := s.nc.QueueSubscribe(proto.SubjHeartbeat, q, s.onHeartbeat); err != nil {
 		return err
 	}
 	if _, err := s.nc.QueueSubscribe(proto.SubjRoutesGet, q, func(m *nats.Msg) {
@@ -298,6 +336,8 @@ func (s *Server) registerBusHandlers() error {
 	return nil
 }
 
+// onRegister serves the legacy subject: the node is named by the payload and found or created by name.
+// Legacy: remove when no node has nkey IS NULL (plan 261017-cluster-trust).
 func (s *Server) onRegister(ctx context.Context, req *proto.RegisterRequest) *proto.RegisterReply {
 	if !s.validToken(req.Token) {
 		return &proto.RegisterReply{Error: "invalid cluster token"}
@@ -305,11 +345,39 @@ func (s *Server) onRegister(ctx context.Context, req *proto.RegisterRequest) *pr
 	if req.Name == "" {
 		return &proto.RegisterReply{Error: "node name required"}
 	}
-	n, err := s.store.UpsertNode(ctx, req, network.MaxNodes(s.clusterBase))
+	n, err := s.store.UpsertNodeLegacy(ctx, req, network.MaxNodes(s.clusterBase))
 	if err != nil {
 		return &proto.RegisterReply{Error: err.Error()}
 	}
-	slog.Info("node registered", "name", n.Name, "id", n.ID, "index", *n.NetIndex, "roles", n.Roles, "memory_mb", n.MemoryMB, "cpus", n.CPUCores)
+	return s.registered(n)
+}
+
+// onNodeRegister serves paas.node.<id>.register: id comes from the subject, which NATS
+// permissions bind to the sender. It only updates a node that enroll created.
+func (s *Server) onNodeRegister(m *nats.Msg) {
+	id := proto.NodeIDFromSubject(m.Subject)
+	go func() {
+		var req proto.RegisterRequest
+		if id == "" || json.Unmarshal(m.Data, &req) != nil || m.Reply == "" {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		rep := &proto.RegisterReply{}
+		n, err := s.store.UpdateNodeRegistration(ctx, id, &req, network.MaxNodes(s.clusterBase))
+		if errors.Is(err, store.ErrNotFound) {
+			rep.Error = "node is not enrolled"
+		} else if err != nil {
+			rep.Error = err.Error()
+		} else {
+			rep = s.registered(n)
+		}
+		_ = respondJSON(m, rep)
+	}()
+}
+
+func (s *Server) registered(n *store.Node) *proto.RegisterReply {
+	slog.Info("node registered", "name", n.Name, "id", n.ID, "index", *n.NetIndex, "roles", n.Roles, "memory_mb", n.MemoryMB, "cpus", n.CPUCores, "legacy", n.Legacy)
 	go func() {
 		s.publishMesh(context.Background())
 		s.publishDNS(context.Background())

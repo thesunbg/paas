@@ -61,7 +61,7 @@ func newHAFixture(t *testing.T) *haFixture {
 		t.Fatal(err)
 	}
 	node := func(name string) *store.Node {
-		n, err := s.store.UpsertNode(bg, &proto.RegisterRequest{Name: name, Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
+		n, err := s.store.UpsertNodeLegacy(bg, &proto.RegisterRequest{Name: name, Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -389,7 +389,7 @@ func TestHeartbeatAck(t *testing.T) {
 		ctx, cancel := context.WithTimeout(bg, timeout)
 		defer cancel()
 		var ack proto.HeartbeatAck
-		err := bus.Request(ctx, s.nc, proto.SubjHeartbeat, proto.Heartbeat{NodeID: f.nodeB.ID, Token: s.ClusterToken, Containers: cs}, &ack)
+		err := bus.Request(ctx, s.nc, proto.SubjNodeHeartbeat(f.nodeB.ID), proto.Heartbeat{Containers: cs}, &ack)
 		return ack, err
 	}
 	fenced := []proto.ContainerStatus{{ContainerID: "rep-1", Running: true, Fenced: true}, {ContainerID: "ghost", Running: true, Fenced: true}}

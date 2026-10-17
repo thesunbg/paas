@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, errorMessage, type ClusterNode, type JoinInfo, type NodesResponse } from '../lib/api';
+  import { api, errorMessage, type ClusterNode, type JoinToken, type NodesResponse } from '../lib/api';
   import { session } from '../lib/session.svelte';
   import { mb, cpu, gb, relTime, absTime, pct } from '../lib/format';
   import { poll } from '../lib/poll';
@@ -12,14 +12,13 @@
   import Status from '../components/Status.svelte';
   import CopyButton from '../components/CopyButton.svelte';
   import Modal from '../components/Modal.svelte';
-  import Secret from '../components/Secret.svelte';
-  import Sparkline from '../components/Sparkline.svelte';
+    import Sparkline from '../components/Sparkline.svelte';
   import type { NodeMetricPoint } from '../lib/api';
 
   let data = $state<NodesResponse | null>(null);
   let error = $state('');
   let busy = $state('');
-  let join = $state<JoinInfo | null>(null);
+  let join = $state<JoinToken | null>(null);
   let joinOpen = $state(false);
   let joinError = $state('');
 
@@ -54,9 +53,11 @@
 
   async function openJoin() {
     joinOpen = !joinOpen;
-    if (joinOpen && !join) {
+    if (joinOpen) {
+      join = null;
+      joinError = '';
       try {
-        join = await api.joinInfo();
+        join = await api.createJoinToken(['worker']);
       } catch (e) {
         joinError = errorMessage(e);
       }
@@ -163,11 +164,7 @@
               <pre class="log">{join.command}</pre>
               <div class="copy"><CopyButton text={join.command} label="Copy command" small /></div>
             </div>
-            <dl class="kv small">
-              <dt>NATS URL</dt><dd class="mono">{join.nats_url}</dd>
-              <dt>Cluster token</dt><dd><Secret value={join.token} /></dd>
-            </dl>
-            <p class="hint">The node must reach the control plane's NATS port. It appears below within a few seconds of starting.</p>
+            <p class="hint">The token is single-use and expires at {new Date(join.expires_at).toLocaleString()}. The node appears below within a few seconds of starting.</p>
           {:else if !joinError}
             <Loading />
           {/if}

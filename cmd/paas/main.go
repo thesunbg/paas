@@ -184,7 +184,7 @@ Usage:
   paas compose <docker-compose.yml>    Import a compose file into the project
   paas nodes                           Cluster nodes and density (admin)
   paas drain <node>                    Move workloads off a node (admin)
-  paas join-command                    Print the command to add a node (admin)
+  paas join-command [--roles r1,r2]    Print a single-use command to add a node (admin; roles default to worker)
 
 Global flags via env: PAAS_SERVER, PAAS_TOKEN, PAAS_PROJECT.
 `)
@@ -251,12 +251,7 @@ func main() {
 	case "drain":
 		err = cmdDrain(rest)
 	case "join-command":
-		var out struct {
-			Command string `json:"command"`
-		}
-		if err = call(http.MethodGet, "/cluster/join", nil, &out); err == nil {
-			fmt.Println(out.Command)
-		}
+		err = cmdJoinCommand(rest)
 	default:
 		usage()
 		os.Exit(2)
@@ -264,6 +259,27 @@ func main() {
 	if err != nil {
 		die(err)
 	}
+}
+
+func cmdJoinCommand(args []string) error {
+	roles := []string{"worker"}
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--roles" || i+1 >= len(args) {
+			return fmt.Errorf("usage: paas join-command [--roles r1,r2]")
+		}
+		i++
+		roles = strings.Split(args[i], ",")
+	}
+	var out struct {
+		Command   string `json:"command"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := call(http.MethodPost, "/cluster/join-tokens", map[string]any{"roles": roles}, &out); err != nil {
+		return err
+	}
+	fmt.Println(out.Command)
+	fmt.Fprintln(os.Stderr, "single-use; expires", out.ExpiresAt)
+	return nil
 }
 
 func prompt(label string, secret bool) string {

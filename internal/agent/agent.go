@@ -42,6 +42,7 @@ type Agent struct {
 	// buildBlocked explains why this node refuses builds (empty when it accepts them).
 	buildBlocked string
 	nodeID       string
+	legacy       bool // registers on paas.agent.* with the cluster token instead of paas.node.<id>.*
 	mesh         *network.Mesh
 	base         [2]int
 	index        int
@@ -75,12 +76,14 @@ func New(ctx context.Context, cfg config.Agent, nc *nats.Conn) (*Agent, error) {
 	}
 	standalone := nc == nil
 	if nc == nil {
-		nc, err = bus.Connect(cfg.NATSURL, cfg.ClusterToken, "agent-"+cfg.NodeName)
+		nc, err = connectStandalone(ctx, &cfg)
 		if err != nil {
 			return nil, err
 		}
 	}
-	a := &Agent{cfg: cfg, nc: nc, rt: r, net: nm, standalone: standalone, fz: newFencer(r)}
+	// No node id means the legacy cluster-token path: old subjects, token in the payload.
+	// Legacy: remove when no node has nkey IS NULL (plan 261017-cluster-trust).
+	a := &Agent{cfg: cfg, nc: nc, rt: r, net: nm, standalone: standalone, fz: newFencer(r), nodeID: cfg.NodeID, legacy: cfg.NodeID == ""}
 	if cfg.Mesh {
 		m, err := network.NewMesh(cfg.DataDir, cfg.WGPort)
 		if err != nil {
@@ -201,16 +204,21 @@ func (a *Agent) Run(ctx context.Context) error {
 
 func (a *Agent) register(ctx context.Context) error {
 	req := proto.RegisterRequest{
-		Token: a.cfg.ClusterToken, Name: a.cfg.NodeName, Address: a.cfg.NodeAddress, Roles: a.cfg.Roles,
+		Name: a.cfg.NodeName, Address: a.cfg.NodeAddress, Roles: a.cfg.Roles,
 		CPUCores: runtime.NumCPU(), MemoryMB: memTotalMB(), Capabilities: a.rt.Capabilities(), Version: Version,
 	}
 	if a.mesh != nil {
 		req.WGPublicKey, req.WGPort = a.mesh.PublicKey(), a.mesh.Port()
 	}
+	subj := proto.SubjNodeRegister(a.nodeID)
+	if a.legacy {
+		req.Token = a.cfg.ClusterToken // Legacy: remove when no node has nkey IS NULL (plan 261017-cluster-trust).
+		subj = proto.SubjRegister
+	}
 	for attempt := 0; ; attempt++ {
 		var rep proto.RegisterReply
 		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := bus.Request(rctx, a.nc, proto.SubjRegister, req, &rep)
+		err := bus.Request(rctx, a.nc, subj, req, &rep)
 		cancel()
 		if err == nil && rep.Error == "" {
 			a.nodeID = rep.NodeID
@@ -247,7 +255,11 @@ func (a *Agent) applyDNS(data []byte) {
 }
 
 func (a *Agent) heartbeat(ctx context.Context) {
-	hb := proto.Heartbeat{NodeID: a.nodeID, Token: a.cfg.ClusterToken, Usage: a.usage(), Containers: a.rt.Statuses(ctx), Jobs: make([]string, 0)}
+	hb := proto.Heartbeat{Usage: a.usage(), Containers: a.rt.Statuses(ctx), Jobs: make([]string, 0)}
+	subj := proto.SubjNodeHeartbeat(a.nodeID)
+	if a.legacy {
+		hb.NodeID, hb.Token, subj = a.nodeID, a.cfg.ClusterToken, proto.SubjHeartbeat // Legacy: remove when no node has nkey IS NULL (plan 261017-cluster-trust).
+	}
 	a.jobsMu.Lock()
 	for id := range a.jobs {
 		hb.Jobs = append(hb.Jobs, id)
@@ -257,7 +269,7 @@ func (a *Agent) heartbeat(ctx context.Context) {
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var ack proto.HeartbeatAck
-	if err := bus.Request(rctx, a.nc, proto.SubjHeartbeat, hb, &ack); err != nil {
+	if err := bus.Request(rctx, a.nc, subj, hb, &ack); err != nil {
 		slog.Warn("heartbeat", "err", err)
 		return
 	}

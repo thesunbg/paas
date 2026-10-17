@@ -124,10 +124,11 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/nodes` | `{nodes: [node + committed_memory_mb, capacity_memory_mb, instances, used_by_apps_mb, overcommit_ratio], sleeping_services}` |
+| GET | `/nodes` | `{nodes: [node + legacy (still on the shared cluster token), committed_memory_mb, capacity_memory_mb, instances, used_by_apps_mb, overcommit_ratio], sleeping_services}` |
 | PATCH | `/nodes/{id}` | `{status: online|cordoned, overcommit_memory, overcommit_cpu, reserved_mb, labels}` |
 | DELETE | `/nodes/{id}` | offline/cordoned nodes only |
-| GET | `/cluster/join` | `{nats_url, token, command}` |
+| POST | `/cluster/join-tokens` | `{roles: [worker,build,edge]}` (default `worker`) -> `{token, expires_at, command}`. Single-use token. 409 when `PAAS_PUBLIC_URL` is not https |
+| POST | `/cluster/enroll` | no login, the join token is the credential. `{token, name, nkey}` -> node identity, bus URL and CA. Called by the agent |
 | GET | `/sizes` | instance size presets |
 
 ## Webhooks

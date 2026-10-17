@@ -13,6 +13,7 @@ type Server struct {
 	DatabaseURL     string // PAAS_DATABASE_URL
 	HTTPAddr        string // PAAS_HTTP_ADDR, API + dashboard
 	NATSAddr        string // PAAS_NATS_ADDR, listener for agents and proxies
+	NATSLegacy      bool   // PAAS_NATS_LEGACY_TOKEN=1: accept the shared cluster token as a full-permission NATS credential (cutover only)
 	DataDir         string // PAAS_DATA_DIR
 	MasterKey       string // PAAS_MASTER_KEY (hex, optional; otherwise <data>/master.key)
 	BaseDomain      string // PAAS_BASE_DOMAIN, generated app domains are <svc>-<project>.<base>
@@ -46,7 +47,11 @@ type S3 struct {
 
 type Agent struct {
 	NATSURL        string   // PAAS_NATS_URL
-	ClusterToken   string   // PAAS_CLUSTER_TOKEN
+	ClusterToken   string   // PAAS_CLUSTER_TOKEN, legacy nodes only (remove when no node has nkey IS NULL)
+	JoinURL        string   // PAAS_JOIN_URL, https control plane URL used to enroll on first start
+	JoinToken      string   // PAAS_JOIN_TOKEN, one-time token for the enroll (removed from the env file afterwards)
+	IdentityDir    string   // PAAS_IDENTITY_DIR, holds node.json, seed.nk and ca.pem
+	NodeID         string   // set in-process only (embedded agent): the node row id, skips enroll
 	NodeName       string   // PAAS_NODE_NAME
 	NodeAddress    string   // PAAS_NODE_ADDRESS
 	Roles          []string // PAAS_ROLES (comma separated)
@@ -65,7 +70,8 @@ type Agent struct {
 
 type Proxy struct {
 	NATSURL           string // PAAS_NATS_URL
-	ClusterToken      string // PAAS_CLUSTER_TOKEN
+	ClusterToken      string // PAAS_CLUSTER_TOKEN, legacy nodes only (remove when no node has nkey IS NULL)
+	IdentityDir       string // PAAS_IDENTITY_DIR, written by the agent on the same host
 	HTTPAddr          string // PAAS_PROXY_HTTP_ADDR
 	HTTPSAddr         string // PAAS_PROXY_HTTPS_ADDR
 	ACMEEmail         string // PAAS_ACME_EMAIL, enables automatic HTTPS when set
@@ -116,6 +122,7 @@ func LoadServer() Server {
 		DatabaseURL:     env("PAAS_DATABASE_URL", "postgres://paas:paas@127.0.0.1:5432/paas?sslmode=disable"),
 		HTTPAddr:        env("PAAS_HTTP_ADDR", ":8080"),
 		NATSAddr:        env("PAAS_NATS_ADDR", "0.0.0.0:4222"),
+		NATSLegacy:      envBool("PAAS_NATS_LEGACY_TOKEN", false),
 		DataDir:         data,
 		MasterKey:       env("PAAS_MASTER_KEY", ""),
 		BaseDomain:      base,
@@ -150,6 +157,9 @@ func LoadAgent() Agent {
 	return Agent{
 		NATSURL:        env("PAAS_NATS_URL", "nats://127.0.0.1:4222"),
 		ClusterToken:   env("PAAS_CLUSTER_TOKEN", ""),
+		JoinURL:        env("PAAS_JOIN_URL", ""),
+		JoinToken:      env("PAAS_JOIN_TOKEN", ""),
+		IdentityDir:    env("PAAS_IDENTITY_DIR", filepath.Join(data, "identity")),
 		NodeName:       env("PAAS_NODE_NAME", host),
 		NodeAddress:    env("PAAS_NODE_ADDRESS", ""),
 		Roles:          roles,
@@ -172,6 +182,7 @@ func LoadProxy() Proxy {
 	return Proxy{
 		NATSURL:           env("PAAS_NATS_URL", "nats://127.0.0.1:4222"),
 		ClusterToken:      env("PAAS_CLUSTER_TOKEN", ""),
+		IdentityDir:       env("PAAS_IDENTITY_DIR", filepath.Join(data, "identity")),
 		HTTPAddr:          env("PAAS_PROXY_HTTP_ADDR", ":80"),
 		HTTPSAddr:         env("PAAS_PROXY_HTTPS_ADDR", ":443"),
 		ACMEEmail:         env("PAAS_ACME_EMAIL", ""),

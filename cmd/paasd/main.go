@@ -8,12 +8,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
@@ -82,13 +84,20 @@ func runAll(ctx context.Context) error {
 	errc := make(chan error, 3)
 	go func() { errc <- s.Run(ctx) }()
 
-	agentConn, err := bus.ConnectInProcess(s.NATS(), s.ClusterToken, "agent")
+	// The embedded agent has a node row like any other, made here without a join token: it
+	// connects with the internal secret and speaks on paas.node.<id>.* from its first message.
+	acfg := config.LoadAgent()
+	acfg.NodeID, err = s.EnsureLocalNode(ctx, acfg.NodeName, acfg.Roles)
 	if err != nil {
 		return err
 	}
-	go func() { errc <- runAgent(ctx, agentConn, s.ClusterToken) }()
+	agentConn, err := bus.ConnectInProcess(s.NATS(), s.InternalSecret(), "agent")
+	if err != nil {
+		return err
+	}
+	go func() { errc <- runAgentWith(ctx, agentConn, acfg) }()
 
-	proxyConn, err := bus.ConnectInProcess(s.NATS(), s.ClusterToken, "proxy")
+	proxyConn, err := bus.ConnectInProcess(s.NATS(), s.InternalSecret(), "proxy")
 	if err != nil {
 		return err
 	}
@@ -111,14 +120,11 @@ func runAll(ctx context.Context) error {
 	}
 }
 
-func runAgent(ctx context.Context, nc *nats.Conn, token ...string) error {
-	cfg := config.LoadAgent()
-	if len(token) > 0 {
-		cfg.ClusterToken = token[0]
-	}
-	if cfg.ClusterToken == "" {
-		return fmt.Errorf("PAAS_CLUSTER_TOKEN is required")
-	}
+func runAgent(ctx context.Context, nc *nats.Conn) error {
+	return runAgentWith(ctx, nc, config.LoadAgent())
+}
+
+func runAgentWith(ctx context.Context, nc *nats.Conn, cfg config.Agent) error {
 	a, err := agent.New(ctx, cfg, nc)
 	if err != nil {
 		return err
@@ -133,13 +139,36 @@ func runProxy(ctx context.Context, nc *nats.Conn) error {
 func runProxyWith(ctx context.Context, nc *nats.Conn, cfg config.Proxy) error {
 	if nc == nil {
 		var err error
-		if cfg.ClusterToken == "" {
-			return fmt.Errorf("PAAS_CLUSTER_TOKEN is required")
-		}
-		nc, err = bus.Connect(cfg.NATSURL, cfg.ClusterToken, "proxy")
-		if err != nil {
+		if nc, err = connectProxy(ctx, cfg); err != nil {
 			return err
 		}
 	}
 	return proxy.New(cfg, nc).Run(ctx)
+}
+
+// connectProxy connects a standalone proxy with the identity the agent on this host enrolled with. The
+// agent may not have enrolled yet, so wait for it instead of failing into a restart loop.
+func connectProxy(ctx context.Context, cfg config.Proxy) (*nats.Conn, error) {
+	for warned := false; ; warned = true {
+		id, err := agent.LoadIdentity(cfg.IdentityDir)
+		if err == nil {
+			return id.Connect("proxy")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		if cfg.ClusterToken != "" {
+			// Legacy: remove when no node has nkey IS NULL (plan 261017-cluster-trust).
+			slog.Warn("proxy uses the legacy cluster token, re-join this node")
+			return bus.Connect(cfg.NATSURL, cfg.ClusterToken, "proxy")
+		}
+		if !warned {
+			slog.Info("waiting for the node identity (the agent enrolls first)", "dir", cfg.IdentityDir)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
