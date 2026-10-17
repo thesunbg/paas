@@ -17,6 +17,9 @@ import (
 	"github.com/thesunbg/paas/internal/store"
 )
 
+// onHeartbeat records a node's heartbeat and answers it (HeartbeatAck) once it is committed:
+// the ack renews the agent's lease on its HA postgres, so it must never be sent for a
+// heartbeat that was not recorded (last_seen_at is what the failover decision looks at).
 func (s *Server) onHeartbeat(m *nats.Msg) {
 	var hb proto.Heartbeat
 	if err := json.Unmarshal(m.Data, &hb); err != nil || !s.validToken(hb.Token) || hb.NodeID == "" {
@@ -27,6 +30,15 @@ func (s *Server) onHeartbeat(m *nats.Msg) {
 	if err := s.store.NodeHeartbeat(ctx, hb.NodeID, hb.Usage); err != nil {
 		return
 	}
+	ack := proto.HeartbeatAck{}
+	acked := false
+	reply := func() {
+		if !acked && m.Reply != "" { // agents before the lease did not wait for an answer
+			_ = respondJSON(m, ack)
+		}
+		acked = true
+	}
+	defer reply()
 	known, err := s.store.InstancesForNode(ctx, hb.NodeID)
 	if err != nil {
 		return
@@ -35,6 +47,14 @@ func (s *Server) onHeartbeat(m *nats.Msg) {
 	for i := range known {
 		byContainer[known[i].ContainerID] = &known[i]
 	}
+	for _, c := range hb.Containers {
+		if in := byContainer[c.ContainerID]; c.Fenced && in != nil {
+			if pending, err := s.store.FailoverPending(ctx, in.ServiceID); err == nil && !pending {
+				ack.Unfence = append(ack.Unfence, c.ContainerID)
+			}
+		}
+	}
+	reply()
 	reported := map[string]bool{}
 	changed := false
 	for _, c := range hb.Containers {
@@ -53,7 +73,7 @@ func (s *Server) onHeartbeat(m *nats.Msg) {
 		}
 		wasRunning := in.Status == model.InstRunning
 		_ = s.store.ApplyContainerStatus(ctx, hb.NodeID, c)
-		if (in.Status == model.InstRunning || in.Status == model.InstFailed) && wasRunning != c.Running {
+		if (in.Status == model.InstRunning || in.Status == model.InstFailed || in.Status == model.InstLost) && wasRunning != c.Running {
 			changed = true
 		}
 	}
@@ -190,6 +210,13 @@ func (s *Server) reconcileLocked(ctx context.Context, serviceID string) {
 		switch {
 		case in.Status == model.InstLost:
 			if node, err := s.store.NodeByID(ctx, in.NodeID); err != nil || node.Status != "online" {
+				if current && node != nil && (len(svc.Spec.Volumes) > 0 || svc.NodeID != nil) {
+					// Its data lives on that node: keep the row. When the node reports the container
+					// again it is running again (ApplyContainerStatus); replacing it would start an
+					// empty server elsewhere, and the scheduler can only place a pinned service on that node.
+					healthy = append(healthy, in)
+					continue
+				}
 				_ = s.store.DeleteInstance(ctx, in.ID)
 			} else {
 				s.stopInstance(ctx, &in, 2)
@@ -360,6 +387,7 @@ func (s *Server) maintenanceLoop(ctx context.Context) {
 		}
 		tick++
 		s.runScheduledBackups(ctx)
+		s.volumeGCTick(ctx)
 		go s.pitrTick(ctx)
 		if tick%30 == 1 {
 			s.store.PurgeExpiredSessions(ctx)

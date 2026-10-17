@@ -10,6 +10,7 @@ import (
 
 	"github.com/thesunbg/paas/internal/databases"
 	"github.com/thesunbg/paas/internal/model"
+	"github.com/thesunbg/paas/internal/proto"
 	"github.com/thesunbg/paas/internal/store"
 	"github.com/thesunbg/paas/internal/util"
 )
@@ -43,6 +44,13 @@ func (s *Server) dedicatedSpec(db *store.Database, c databases.Credentials) (mod
 			args = append(args, "-c", "archive_mode=on",
 				"-c", "archive_command=test ! -f /wal/archive/%f && cp %p /wal/archive/%f",
 				"-c", "archive_timeout=300")
+		}
+		if db.Options.HA {
+			// The agent fences this container when it loses the control plane. wal_sender_timeout is the
+			// "walsender notices a lost standby" step of the failover timing proof (dbaas_failover.go).
+			spec.HAPostgres = true
+			args = append(args, "-c", fmt.Sprintf("wal_sender_timeout=%ds", int(proto.WalSenderTimeout.Seconds())),
+				"-c", fmt.Sprintf("wal_receiver_timeout=%ds", int(proto.WalSenderTimeout.Seconds())))
 		}
 		spec.Command = append([]string{"sh", "-c", pgPrelude, "sh"}, args...)
 	}

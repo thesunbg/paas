@@ -125,4 +125,3 @@ func TestCheckFence(t *testing.T) {
 		t.Fatalf("stale epoch: %v, want ErrFenced", err)
 	}
 }
-

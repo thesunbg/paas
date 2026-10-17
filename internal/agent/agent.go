@@ -50,6 +50,8 @@ type Agent struct {
 	busy       atomic.Int32 // builds, jobs and transfers in progress (see work)
 	postponed  int          // self-update checks skipped because of busy
 
+	fz *fencer // lease + self-fence of HA postgres
+
 	cpuMu       sync.Mutex
 	lastCPU     [2]uint64
 	lastEvictAt time.Time
@@ -75,7 +77,7 @@ func New(ctx context.Context, cfg config.Agent, nc *nats.Conn) (*Agent, error) {
 			return nil, err
 		}
 	}
-	a := &Agent{cfg: cfg, nc: nc, rt: r, net: nm, standalone: standalone}
+	a := &Agent{cfg: cfg, nc: nc, rt: r, net: nm, standalone: standalone, fz: newFencer(r)}
 	if cfg.Mesh {
 		m, err := network.NewMesh(cfg.DataDir, cfg.WGPort)
 		if err != nil {
@@ -171,6 +173,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.standalone {
 		go a.selfUpdateLoop(ctx)
 	}
+	go a.fenceLoop(ctx)
 	slog.Info("agent ready", "node", a.cfg.NodeName, "id", a.nodeID, "roles", a.cfg.Roles, "address", a.cfg.NodeAddress)
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
@@ -241,9 +244,16 @@ func (a *Agent) applyDNS(data []byte) {
 
 func (a *Agent) heartbeat(ctx context.Context) {
 	hb := proto.Heartbeat{NodeID: a.nodeID, Token: a.cfg.ClusterToken, Usage: a.usage(), Containers: a.rt.Statuses(ctx)}
-	if err := bus.Publish(a.nc, proto.SubjHeartbeat, hb); err != nil {
+	sentAt := time.Now() // the lease starts here, not when the ack arrives
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var ack proto.HeartbeatAck
+	if err := bus.Request(rctx, a.nc, proto.SubjHeartbeat, hb, &ack); err != nil {
 		slog.Warn("heartbeat", "err", err)
+		return
 	}
+	a.fz.grant(sentAt)
+	a.fz.applyUnfence(ctx, ack.Unfence)
 }
 
 func (a *Agent) handleRun(ctx context.Context, req *proto.RunRequest) *proto.RunReply {

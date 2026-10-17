@@ -21,11 +21,10 @@ import (
 // High availability for dedicated PostgreSQL: a hot standby streams from the
 // primary on another node. Clients use a stable alias (<server>-rw.<project>.internal)
 // that the internal DNS resolves to whichever server is primary. When the
-// primary's node stops responding the standby is promoted, the alias moves to
-// it, the old primary is deleted (its container is stopped if the node comes
-// back) and a new standby is created as soon as another node is available.
-
-const haFailoverAfter = 30 * time.Second
+// primary's node stops responding (and the standby confirms the primary is gone,
+// see dbaas_failover.go) the standby is promoted, the alias moves to it, the old
+// primary is deleted (its container is stopped if the node comes back, its volume
+// kept for a week) and a new standby is created as soon as another node is available.
 
 // replicaPrelude clones the primary on first start, then runs PostgreSQL as a standby.
 const replicaPrelude = `set -e
@@ -208,14 +207,32 @@ func (s *Server) handleSetHA(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if in.Enabled {
+			// The primary needs the HA label and WAL timeouts of dedicatedSpec: restart it with them.
+			if err := s.syncHASpec(ctx, db); err != nil {
+				_ = s.store.SetDatabaseStatus(ctx, db.ID, "ready", "high availability spec: "+err.Error())
+				return
+			}
 			if err := s.ensureStandby(ctx, db); err != nil {
 				_ = s.store.SetDatabaseStatus(ctx, db.ID, "ready", "standby: "+err.Error())
 			}
 			return
 		}
 		s.removeStandby(ctx, db)
+		// Without a standby the lease fence would only take the database down when the control plane is away.
+		if err := s.syncHASpec(ctx, db); err != nil {
+			_ = s.store.SetDatabaseStatus(ctx, db.ID, "ready", "high availability spec: "+err.Error())
+		}
 	}()
 	writeJSON(w, 202, map[string]any{"ha": in.Enabled})
+}
+
+// syncHASpec redeploys the primary when its spec's HA flag differs from the database's HA option.
+func (s *Server) syncHASpec(ctx context.Context, db *store.Database) error {
+	srv, err := s.store.ServiceByID(ctx, *db.ServerServiceID)
+	if err != nil || srv.Spec.HAPostgres == db.Options.HA {
+		return err
+	}
+	return s.applyServerSpec(ctx, db)
 }
 
 // ensureStandby gives an HA database its alias and a running standby.
@@ -268,54 +285,6 @@ func (s *Server) removeStandby(ctx context.Context, db *store.Database) {
 	})
 }
 
-// haTick checks every HA database: fails over when the primary's node is gone
-// and recreates a missing standby (called every 10 s by the leader).
-func (s *Server) haTick(ctx context.Context) {
-	dbs, err := s.store.AllDatabases(ctx)
-	if err != nil {
-		return
-	}
-	nodes, _ := s.store.Nodes(ctx)
-	nodeByID := map[string]store.Node{}
-	for _, n := range nodes {
-		nodeByID[n.ID] = n
-	}
-	for i := range dbs {
-		db := &dbs[i]
-		if !db.Options.HA || db.ServerServiceID == nil || (db.Status != "ready" && db.Status != "upgrading") {
-			continue
-		}
-		srv, err := s.store.ServiceByID(ctx, *db.ServerServiceID)
-		if err != nil {
-			continue
-		}
-		pn, ok := nodeByID[s.primaryNode(ctx, srv)]
-		primaryDown := ok && pn.Status == "offline" && time.Since(pn.LastSeenAt) > haFailoverAfter
-		if primaryDown && db.Options.ReplicaServiceID != "" {
-			if err := s.failover(ctx, db, srv); err != nil {
-				slog.Error("database failover", "db", db.Name, "err", err)
-			}
-			continue
-		}
-		if !primaryDown && db.Options.ReplicaServiceID == "" && db.Status == "ready" {
-			if !s.haBusy(db.ID) {
-				go func(id string) {
-					defer s.haDone(id)
-					unlock := s.lock("db-" + id)
-					defer unlock()
-					fresh, err := s.store.DatabaseByID(ctx, id)
-					if err != nil || !fresh.Options.HA || fresh.Options.ReplicaServiceID != "" {
-						return
-					}
-					if err := s.ensureStandby(ctx, fresh); err != nil {
-						slog.Debug("recreate standby", "db", fresh.Name, "err", err)
-					}
-				}(db.ID)
-			}
-		}
-	}
-}
-
 func (s *Server) haBusy(id string) bool {
 	s.haMu.Lock()
 	defer s.haMu.Unlock()
@@ -333,76 +302,6 @@ func (s *Server) haDone(id string) {
 	s.haMu.Lock()
 	delete(s.haRunning, id)
 	s.haMu.Unlock()
-}
-
-// failover promotes the standby and makes it the database's server. For a
-// planned switchover the old primary is stopped first, so the standby has
-// every committed transaction and there is never more than one writer.
-func (s *Server) failover(ctx context.Context, db *store.Database, oldPrimary *store.Service) error {
-	unlock := s.lock("db-" + db.ID)
-	defer unlock()
-	return s.promoteStandby(ctx, db, oldPrimary, false)
-}
-
-func (s *Server) promoteStandby(ctx context.Context, db *store.Database, oldPrimary *store.Service, planned bool) error {
-	rep, err := s.store.ServiceByID(ctx, db.Options.ReplicaServiceID)
-	if err != nil {
-		return err
-	}
-	in, err := s.firstInstance(ctx, rep.ID)
-	if err != nil {
-		return fmt.Errorf("standby is not running: %w", err)
-	}
-	c, _, _ := s.dbCreds(ctx, db)
-	if planned {
-		s.stopService(ctx, oldPrimary)
-		time.Sleep(3 * time.Second) // let the standby replay the shutdown checkpoint
-	}
-	slog.Warn("failing over database", "db", db.Name, "to", rep.Slug, "node", in.NodeID, "planned", planned)
-	out, err := s.execOutput(ctx, rep.ID, databases.Command{Cmd: []string{"psql", "-U", c.Username, "-d", "postgres", "-Atc", "SELECT pg_promote(true, 60)"}}, 90*time.Second)
-	if err != nil || strings.TrimSpace(out) != "t" {
-		return fmt.Errorf("promote: %v %s", err, strings.TrimSpace(out))
-	}
-	// The promoted server takes over the alias and the database.
-	if _, err := s.store.UpdateService(ctx, rep.ID, func(f *store.Service) error {
-		f.Spec.DNSAliases = oldPrimary.Spec.DNSAliases
-		f.Spec.HealthCheck.TimeoutSec = 180
-		return nil
-	}); err != nil {
-		return err
-	}
-	if err := s.store.SetDatabaseServer(ctx, db.ID, rep.ID); err != nil {
-		return err
-	}
-	_, _ = s.store.UpdateDatabaseOptions(ctx, db.ID, func(o *store.DBOptions) error {
-		o.ReplicaServiceID = ""
-		return nil
-	})
-	// Fence the old primary: deleting it means its container is stopped as soon as its node reports in.
-	oldNode := s.primaryNode(ctx, oldPrimary)
-	if err := s.deleteService(ctx, oldPrimary); err != nil {
-		slog.Warn("delete old primary", "err", err)
-	}
-	if oldNode != "" {
-		go s.removeVolumesWhenOnline(ctx, oldNode, oldPrimary.ID)
-	}
-	s.publishAll(ctx)
-	if db.Options.PITR {
-		// The WAL archive continues on the new primary's node: start a fresh base backup there.
-		go func() {
-			if fresh, err := s.store.DatabaseByID(ctx, db.ID); err == nil {
-				unlock := s.lock("pitr-" + db.ID)
-				defer unlock()
-				_, _ = s.takeBaseBackup(ctx, fresh)
-			}
-		}()
-	}
-	msg := fmt.Sprintf("Database %s failed over to its standby (the primary's node stopped responding). A new standby is created when another node is available.", db.Name)
-	if planned {
-		msg = fmt.Sprintf("Database %s switched over to its standby; a new standby is being created.", db.Name)
-	}
-	s.notify(ctx, s.teamOfDatabase(ctx, db), "database.failover", msg, map[string]any{"database": db.ID})
-	return nil
 }
 
 // POST /api/v1/databases/{id}/ha/switchover promotes the standby on purpose (node maintenance).
@@ -477,8 +376,15 @@ func (s *Server) handleGetHA(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-func (s *Server) removeVolumes(ctx context.Context, nodeID, serviceID string) {
-	_ = s.requestAgent(ctx, nodeID, proto.CmdRemoveFiles, proto.RemoveFilesRequest{Paths: []string{filepath.Join("volumes", serviceID)}}, &proto.GenericReply{}, time.Minute)
+func (s *Server) removeVolumes(ctx context.Context, nodeID, serviceID string) error {
+	var rep proto.GenericReply
+	if err := s.requestAgent(ctx, nodeID, proto.CmdRemoveFiles, proto.RemoveFilesRequest{Paths: []string{filepath.Join("volumes", serviceID)}}, &rep, time.Minute); err != nil {
+		return err
+	}
+	if rep.Error != "" {
+		return errors.New(rep.Error)
+	}
+	return nil
 }
 
 func (s *Server) haLoop(ctx context.Context) {
@@ -491,19 +397,5 @@ func (s *Server) haLoop(ctx context.Context) {
 		case <-t.C:
 		}
 		s.haTick(ctx)
-	}
-}
-
-// removeVolumesWhenOnline frees the disk of a deleted server once its node is back (up to a day).
-func (s *Server) removeVolumesWhenOnline(ctx context.Context, nodeID, serviceID string) {
-	for i := 0; i < 24*60; i++ {
-		if n, err := s.store.NodeByID(ctx, nodeID); err != nil {
-			return
-		} else if n.Status == "online" {
-			time.Sleep(30 * time.Second) // let the container be stopped first
-			s.removeVolumes(ctx, nodeID, serviceID)
-			return
-		}
-		time.Sleep(time.Minute)
 	}
 }

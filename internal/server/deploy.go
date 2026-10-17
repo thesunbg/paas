@@ -417,6 +417,7 @@ func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *st
 		Hostname: svc.Slug, Image: image, PullImage: !strings.HasPrefix(image, "paas.local/"), PlainHTTPRegistry: plainRegistry,
 		Env: env, Command: svc.Spec.Command, Port: svc.Spec.Port, Resources: svc.Spec.Resources,
 		QoS: svc.Spec.QoS, RuntimeClass: svc.Spec.RuntimeClass, Volumes: svc.Spec.Volumes, HealthCheck: svc.Spec.HealthCheck,
+		HAPostgres: svc.Spec.HAPostgres,
 	}
 	if svc.Type == model.TypeWorker {
 		req.Port = 0

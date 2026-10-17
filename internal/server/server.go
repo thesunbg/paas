@@ -78,6 +78,7 @@ type Server struct {
 	pitrRunning atomic.Bool
 	haMu        sync.Mutex
 	haRunning   map[string]time.Time
+	ha          haMemory // leader-only HA observations, guarded by haMu
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.
@@ -374,8 +375,19 @@ func (s *Server) leaderLoop(ctx context.Context) {
 			}
 			continue
 		}
-		slog.Info("this control plane is now the leader", "server", s.cfg.ServerName)
+		// Bump the epoch (waits for the previous leader's in-flight writes): from here on every
+		// store call on lctx fails with ErrFenced once a newer leader exists.
+		epoch, err := s.store.TakeLeadership(ctx, conn)
+		if err != nil {
+			slog.Warn("take leadership", "err", err)
+			_ = conn.Close(context.Background())
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		slog.Info("this control plane is now the leader", "server", s.cfg.ServerName, "epoch", epoch)
+		s.haBecameLeader()
 		lctx, cancel := context.WithCancel(ctx)
+		lctx = store.WithEpoch(lctx, epoch)
 		_ = s.store.FailInterruptedJobs(lctx)
 		_ = s.store.FailStuckDeployments(lctx)
 		go s.deployWorker(lctx)

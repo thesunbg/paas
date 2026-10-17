@@ -139,6 +139,7 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/databases/{id}/ha", s.handleGetHA)
 	h("POST /api/v1/databases/{id}/ha", s.handleSetHA)
 	h("POST /api/v1/databases/{id}/ha/switchover", s.handleSwitchover)
+	h("POST /api/v1/databases/{id}/ha/failover", s.handleForceFailover)
 	h("POST /api/v1/databases/{id}/pitr", s.handleSetPITR)
 	h("POST /api/v1/databases/{id}/pitr/restore", s.handlePITRRestore)
 	h("GET /api/v1/databases/{id}/users", s.handleListDBUsers)

@@ -44,6 +44,7 @@ const (
 	labelInstance = "paas.instance"
 	labelService  = "paas.service"
 	labelManaged  = "paas.managed"
+	labelHAPG     = "paas.ha-postgres"
 )
 
 // Runtime manages containers on this node.
@@ -76,6 +77,7 @@ type managed struct {
 	Restarts  int              `json:"restarts"`
 	Stopped   bool             `json:"stopped"`
 	Evicted   bool             `json:"evicted"`
+	Fenced    bool             `json:"fenced,omitempty"` // stopped by the agent's lease fence; only an unfence ack starts it again
 	ExitCode  int              `json:"exit_code"`
 	lastCPU   uint64
 	lastCPUAt time.Time
@@ -346,15 +348,15 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 		specOpts = append(specOpts, withCommand(img, req.Command))
 	}
 	rtName, rtOpts := r.runtimeFor(req.RuntimeClass)
+	labels := map[string]string{labelManaged: "true", labelInstance: req.InstanceID, labelService: req.ServiceID}
+	if req.HAPostgres {
+		labels[labelHAPG] = "true"
+	}
 	_, err := r.client.NewContainer(ctx, req.ContainerID,
 		client.WithImage(img),
 		client.WithNewSnapshot(req.ContainerID+"-snap", img),
 		client.WithRuntime(rtName, rtOpts),
-		client.WithContainerLabels(map[string]string{
-			labelManaged:  "true",
-			labelInstance: req.InstanceID,
-			labelService:  req.ServiceID,
-		}),
+		client.WithContainerLabels(labels),
 		client.WithNewSpec(specOpts...),
 	)
 	if err != nil {
@@ -785,6 +787,60 @@ func (r *Runtime) Statuses(ctx context.Context) []proto.ContainerStatus {
 		r.mu.Unlock()
 	}
 	return out
+}
+
+// HAPostgresRunning lists the HA postgres containers that are running and not fenced.
+func (r *Runtime) HAPostgresRunning() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []string
+	for id, m := range r.containers {
+		if m.Req.HAPostgres && m.running && !m.Fenced {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// Fence stops a container and remembers it (persisted: a restarted agent must not start it).
+func (r *Runtime) Fence(ctx context.Context, id string, grace time.Duration) error {
+	r.mu.Lock()
+	m := r.containers[id]
+	if m == nil {
+		r.mu.Unlock()
+		return nil
+	}
+	m.Fenced = true
+	r.saveState(id, m)
+	r.mu.Unlock()
+	err := r.Stop(ctx, id, grace)
+	r.mu.Lock()
+	r.saveState(id, m) // now with Stopped=true
+	r.mu.Unlock()
+	r.changed()
+	return err
+}
+
+// Unfence starts a fenced container again (no-op when it is not fenced).
+func (r *Runtime) Unfence(ctx context.Context, id string) error {
+	r.mu.Lock()
+	m := r.containers[id]
+	if m == nil || !m.Fenced {
+		r.mu.Unlock()
+		return nil
+	}
+	m.Fenced = false
+	r.saveState(id, m)
+	r.mu.Unlock()
+	if err := r.startTask(r.ctx(ctx), id); err != nil {
+		r.mu.Lock()
+		m.Fenced = true // retried by the next ack
+		r.saveState(id, m)
+		r.mu.Unlock()
+		return err
+	}
+	r.changed()
+	return nil
 }
 
 // Evict stops a container to relieve memory pressure; the control plane is told via heartbeat.

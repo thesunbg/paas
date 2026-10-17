@@ -4,6 +4,7 @@ package proto
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/thesunbg/paas/internal/model"
 )
@@ -21,6 +22,20 @@ const (
 	SubjMesh       = "paas.mesh" // server -> agents (WireGuard peers)
 	SubjMeshGet    = "paas.mesh.get"
 	SubjBinary     = "paas.agent.binary" // agent -> server: which paasd binary nodes should run
+)
+
+// DB HA timing, shared by the agent (self-fence) and the control plane (failover decision).
+// The proof that the old primary is fenced before the standby is promoted lives next to the
+// control plane's haPrimaryGone / haWitnessDown in internal/server/dbaas_failover.go.
+const (
+	// LeaseTTL: the agent treats its lease as expired this long after it SENT the last
+	// heartbeat that was acked (not after the ack arrived).
+	LeaseTTL = 20 * time.Second
+	// FenceCheckEvery is the period of the agent's fence loop.
+	FenceCheckEvery = 5 * time.Second
+	// WalSenderTimeout is wal_sender_timeout and wal_receiver_timeout of HA servers: a
+	// walsender notices a standby that stopped answering after this long.
+	WalSenderTimeout = 10 * time.Second
 )
 
 // AgentSubject returns the subject an agent listens on for a command.
@@ -101,6 +116,7 @@ type ContainerStatus struct {
 	MemoryMB    int    `json:"memory_mb"`
 	CPUMillis   int    `json:"cpu_millis"`
 	Evicted     bool   `json:"evicted,omitempty"`
+	Fenced      bool   `json:"fenced,omitempty"` // an HA postgres the agent stopped because its lease expired
 }
 
 type Heartbeat struct {
@@ -108,6 +124,14 @@ type Heartbeat struct {
 	Token      string            `json:"token"`
 	Usage      NodeUsage         `json:"usage"`
 	Containers []ContainerStatus `json:"containers"`
+}
+
+// HeartbeatAck answers a heartbeat once the control plane has recorded it. The agent's
+// lease on its HA postgres containers is renewed by it.
+type HeartbeatAck struct {
+	// Unfence lists fenced containers that may start again: their instance still exists
+	// and no failover is pending.
+	Unfence []string `json:"unfence,omitempty"`
 }
 
 type RunRequest struct {
@@ -131,6 +155,7 @@ type RunRequest struct {
 	Once              bool              `json:"once,omitempty"`                // run to completion, never restart (jobs)
 	DNSSearch         string            `json:"dns_search,omitempty"`          // e.g. shop.internal: compose-style short names resolve
 	TimeoutSec        int               `json:"timeout_sec,omitempty"`
+	HAPostgres        bool              `json:"ha_postgres,omitempty"` // postgres of an HA database: the agent self-fences it without a lease
 }
 
 // JobReply is returned when a one-off container finishes.

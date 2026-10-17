@@ -222,7 +222,8 @@ func (s *Store) AllInstances(ctx context.Context) ([]Instance, error) {
 	return collectInstances(rows, err)
 }
 
-// ApplyContainerStatus records live stats reported by an agent heartbeat.
+// ApplyContainerStatus records live stats reported by an agent heartbeat. A 'lost' instance
+// (its node went offline) comes back as running|failed when the node reports its container again.
 func (s *Store) ApplyContainerStatus(ctx context.Context, nodeID string, c proto.ContainerStatus) error {
 	status := "running"
 	if !c.Running {
@@ -230,7 +231,7 @@ func (s *Store) ApplyContainerStatus(ctx context.Context, nodeID string, c proto
 	}
 	_, err := s.q(ctx).Exec(ctx, `UPDATE instances SET memory_usage_mb=$3, memory_peak_mb=GREATEST(memory_peak_mb, $3), cpu_usage_millis=$4,
 		restarts=$5, ip=CASE WHEN $6<>'' THEN $6 ELSE ip END,
-		status = CASE WHEN status IN ('running','failed') THEN $7 ELSE status END, updated_at=now()
+		status = CASE WHEN status IN ('running','failed','lost') THEN $7 ELSE status END, updated_at=now()
 		WHERE node_id=$1 AND container_id=$2`, nodeID, c.ContainerID, c.MemoryMB, c.CPUMillis, c.Restarts, c.IP, status)
 	return err
 }

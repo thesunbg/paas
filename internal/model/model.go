@@ -114,6 +114,7 @@ type ServiceSpec struct {
 	Env          map[string]string `json:"env,omitempty"`      // non-secret env baked by the system (databases)
 	Language     string            `json:"language,omitempty"` // detected language, used for runtime tuning
 	DNSAliases   []string          `json:"dns_aliases,omitempty"`
+	HAPostgres   bool              `json:"ha_postgres,omitempty"` // server of an HA database: the agent fences it when it loses the control plane
 	// DependsOn names services of the project (by slug) this one talks to. They
 	// start first, and it restarts after they are redeployed: programs such as
 	// nginx resolve their upstreams once at startup and would keep a stale IP.
