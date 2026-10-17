@@ -1,6 +1,6 @@
 ---
 title: DB HA không split-brain (lease + self-fence + nhân chứng), promote idempotent, nhận lại instance stateful, PITR ra S3
-status: pending
+status: implemented
 created: 2026-10-17
 depends_on: 261017-leader-fencing
 ---
@@ -205,3 +205,13 @@ Cuối cùng: `go build ./... && go vet ./... && go test ./...`.
 ## Thứ tự và phụ thuộc
 
 Phase 1 → 2 → 3 phải đi theo thứ tự. Riêng 2 và 3 có chung migration. Phase 4 và 5 độc lập, chạy song song được với 1–3. Tiêu chí split-brain chỉ được đánh giá sau khi xong 1+2+3 (E2E bước 1–4).
+
+## Kết quả triển khai
+
+- Phase 1–5 xong. `go test ./...` xanh với Postgres thật (không skip).
+- Lệch so với plan:
+  - `leaderLoop` trước đây chưa hề gọi `TakeLeadership`/`WithEpoch` (D3 chưa được nối). Đã nối vào.
+  - `db_ha_state.force_until`: force nằm trong DB (10 phút) để control plane nào nhận API cũng được.
+  - Bật/tắt HA sẽ redeploy primary (`syncHASpec`) để gắn label `HAPostgres` và timeout WAL.
+- DB HA tạo trước bản này chưa được fence cho tới khi server của nó được redeploy (resize hoặc bật/tắt HA).
+- E2E 2 máy (Phase 6, bước 1–6) **chưa chạy**: cần cluster thật.
