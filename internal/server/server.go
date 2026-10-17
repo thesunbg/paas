@@ -387,6 +387,7 @@ func (s *Server) leaderLoop(ctx context.Context) {
 		go s.maintenanceLoop(lctx)
 		go s.dbMetricsLoop(lctx)
 		go s.haLoop(lctx)
+		go s.walShipLoop(lctx)
 		for lctx.Err() == nil {
 			time.Sleep(5 * time.Second)
 			pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)

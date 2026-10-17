@@ -524,64 +524,101 @@ func (a *Agent) handleJob(ctx context.Context, req *proto.RunRequest) *proto.Job
 }
 
 // handleTransfer moves a file between the node and object storage.
-func (a *Agent) handleTransfer(ctx context.Context, req *proto.TransferRequest) *proto.GenericReply {
+func (a *Agent) handleTransfer(ctx context.Context, req *proto.TransferRequest) *proto.TransferReply {
 	defer a.work()()
 	path, err := a.dataPath(req.Path)
 	if err != nil || path == "" {
-		return &proto.GenericReply{Error: "invalid path"}
+		return &proto.TransferReply{Error: "invalid path"}
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Hour)
-	defer cancel()
 	switch req.Method {
 	case http.MethodPut:
-		f, err := os.Open(path)
+		etags, err := uploadFile(ctx, path, req)
 		if err != nil {
-			return &proto.GenericReply{Error: err.Error()}
+			return &proto.TransferReply{Error: err.Error()}
 		}
-		defer f.Close()
-		st, _ := f.Stat()
-		hreq, err := http.NewRequestWithContext(ctx, http.MethodPut, req.URL, f)
+		return &proto.TransferReply{ETags: etags}
+	case http.MethodGet:
+		ctx, cancel := context.WithTimeout(ctx, time.Hour)
+		defer cancel()
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, req.URL, nil)
 		if err != nil {
-			return &proto.GenericReply{Error: err.Error()}
+			return &proto.TransferReply{Error: err.Error()}
 		}
-		hreq.ContentLength = st.Size()
 		resp, err := http.DefaultClient.Do(hreq)
 		if err != nil {
-			return &proto.GenericReply{Error: err.Error()}
+			return &proto.TransferReply{Error: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return &proto.TransferReply{Error: fmt.Sprintf("download failed: HTTP %d", resp.StatusCode)}
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return &proto.TransferReply{Error: err.Error()}
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return &proto.TransferReply{Error: err.Error()}
+		}
+		defer f.Close()
+		if _, err := io.Copy(f, resp.Body); err != nil {
+			return &proto.TransferReply{Error: err.Error()}
+		}
+	default:
+		return &proto.TransferReply{Error: "method must be GET or PUT"}
+	}
+	return &proto.TransferReply{}
+}
+
+// uploadFile PUTs the file to req.URL, or part by part to req.PartURLs (one
+// hour per request) and returns the ETag of every part.
+func uploadFile(ctx context.Context, path string, req *proto.TransferRequest) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	put := func(url string, off, n int64) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, time.Hour)
+		defer cancel()
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPut, url, io.NewSectionReader(f, off, n))
+		if err != nil {
+			return "", err
+		}
+		hreq.ContentLength = n
+		resp, err := http.DefaultClient.Do(hreq)
+		if err != nil {
+			return "", err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode >= 300 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			return &proto.GenericReply{Error: fmt.Sprintf("upload failed: HTTP %d %s", resp.StatusCode, body)}
+			return "", fmt.Errorf("upload failed: HTTP %d %s", resp.StatusCode, body)
 		}
-	case http.MethodGet:
-		hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, req.URL, nil)
-		if err != nil {
-			return &proto.GenericReply{Error: err.Error()}
-		}
-		resp, err := http.DefaultClient.Do(hreq)
-		if err != nil {
-			return &proto.GenericReply{Error: err.Error()}
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			return &proto.GenericReply{Error: fmt.Sprintf("download failed: HTTP %d", resp.StatusCode)}
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return &proto.GenericReply{Error: err.Error()}
-		}
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-		if err != nil {
-			return &proto.GenericReply{Error: err.Error()}
-		}
-		defer f.Close()
-		if _, err := io.Copy(f, resp.Body); err != nil {
-			return &proto.GenericReply{Error: err.Error()}
-		}
-	default:
-		return &proto.GenericReply{Error: "method must be GET or PUT"}
+		return resp.Header.Get("ETag"), nil
 	}
-	return &proto.GenericReply{}
+	if len(req.PartURLs) == 0 {
+		_, err := put(req.URL, 0, st.Size())
+		return nil, err
+	}
+	if req.PartSize <= 0 || int64(len(req.PartURLs))*req.PartSize < st.Size() {
+		return nil, fmt.Errorf("%d parts of %d bytes do not cover %d bytes", len(req.PartURLs), req.PartSize, st.Size())
+	}
+	etags := make([]string, len(req.PartURLs))
+	for i, u := range req.PartURLs {
+		off := int64(i) * req.PartSize
+		n := min(req.PartSize, max(st.Size()-off, 0))
+		if etags[i], err = put(u, off, n); err != nil {
+			return nil, fmt.Errorf("part %d: %w", i+1, err)
+		}
+		if etags[i] == "" {
+			return nil, fmt.Errorf("part %d: storage returned no ETag", i+1)
+		}
+	}
+	return etags, nil
 }
 
 func (a *Agent) handleDetect(ctx context.Context, req *proto.DetectRequest) *proto.DetectReply {

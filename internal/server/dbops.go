@@ -14,6 +14,7 @@ import (
 	"github.com/thesunbg/paas/internal/databases"
 	"github.com/thesunbg/paas/internal/model"
 	"github.com/thesunbg/paas/internal/proto"
+	"github.com/thesunbg/paas/internal/s3"
 	"github.com/thesunbg/paas/internal/store"
 	"github.com/thesunbg/paas/internal/util"
 )
@@ -575,14 +576,62 @@ func (s *Server) transfer(ctx context.Context, nodeID, method, key, path string)
 	if err != nil {
 		return err
 	}
-	var rep proto.GenericReply
-	if err := s.requestAgent(ctx, nodeID, proto.CmdTransfer, proto.TransferRequest{Method: method, URL: u, Path: path}, &rep, 2*time.Hour); err != nil {
-		return err
+	_, err = s.requestTransfer(ctx, nodeID, proto.TransferRequest{Method: method, URL: u, Path: path}, 2*time.Hour)
+	return err
+}
+
+func (s *Server) requestTransfer(ctx context.Context, nodeID string, req proto.TransferRequest, timeout time.Duration) ([]string, error) {
+	var rep proto.TransferReply
+	if err := s.requestAgent(ctx, nodeID, proto.CmdTransfer, req, &rep, timeout); err != nil {
+		return nil, err
 	}
 	if rep.Error != "" {
-		return errors.New(rep.Error)
+		return nil, errors.New(rep.Error)
 	}
-	return nil
+	return rep.ETags, nil
+}
+
+const (
+	multipartMin  = 64 << 20 // files above this are uploaded in parts
+	multipartPart = 64 << 20
+)
+
+// uploadLarge uploads a file of size bytes: one PUT up to multipartMin, else a
+// multipart upload whose parts the agent PUTs one by one; the ETags it returns
+// are handed to CompleteMultipart in part order.
+func (s *Server) uploadLarge(ctx context.Context, nodeID, key, path string, size int64) error {
+	if size <= multipartMin {
+		return s.transfer(ctx, nodeID, http.MethodPut, key, path)
+	}
+	id, err := s.s3.CreateMultipart(key)
+	if err != nil {
+		return err
+	}
+	n := int((size + multipartPart - 1) / multipartPart)
+	// The agent uploads the parts one at a time: sign for as long as the request may run.
+	const timeout = 6 * time.Hour
+	urls := make([]string, n)
+	for i := range urls {
+		if urls[i], err = s.s3.PresignPart(key, id, i+1, timeout); err != nil {
+			_ = s.s3.AbortMultipart(key, id)
+			return err
+		}
+	}
+	etags, err := s.requestTransfer(ctx, nodeID, proto.TransferRequest{Method: http.MethodPut, Path: path, PartURLs: urls, PartSize: multipartPart}, timeout)
+	if err == nil && len(etags) != n {
+		err = fmt.Errorf("the agent returned %d ETags for %d parts (agent too old?)", len(etags), n)
+	}
+	if err == nil {
+		parts := make([]s3.Part, n)
+		for i, e := range etags {
+			parts[i] = s3.Part{N: i + 1, ETag: e}
+		}
+		err = s.s3.CompleteMultipart(key, id, parts)
+	}
+	if err != nil {
+		_ = s.s3.AbortMultipart(key, id)
+	}
+	return err
 }
 
 func contains(list []string, v string) bool {

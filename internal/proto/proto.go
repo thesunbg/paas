@@ -268,6 +268,15 @@ type TransferRequest struct {
 	Method string `json:"method"`
 	URL    string `json:"url"`
 	Path   string `json:"path"`
+	// PartURLs (PUT only) upload the file as a multipart upload, PartSize bytes per
+	// part (the last one is shorter); the reply carries each part's ETag.
+	PartURLs []string `json:"part_urls,omitempty"`
+	PartSize int64    `json:"part_size,omitempty"`
+}
+
+type TransferReply struct {
+	Error string   `json:"error,omitempty"`
+	ETags []string `json:"etags,omitempty"`
 }
 
 // DetectRequest asks a build node to inspect a repository without building it.
