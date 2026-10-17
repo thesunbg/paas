@@ -95,3 +95,11 @@ func (c *tcpConn) kill()                  // dead=true; đóng client; đóng se
 - Cap toàn cục; cap theo IP nguồn; cap lấy từ `max_connections` của DB (sẽ phải đổi `model.TCPRoute`).
 - `ReadTimeout` / `WriteTimeout` cho HTTP; sửa `agent.go:505`.
 - Config option cho bất kỳ giá trị nào ở trên.
+
+## Ghi chú sau khi implement (2026-10-17)
+
+- Cap 512 tính cả kết nối đang handshake. Nếu allowlist là `0.0.0.0/0`, một IP có thể chiếm hết slot rồi cứ 30s lại mở lại. Không làm tình hình xấu hơn trước, vì trước đây kẻ tấn công vẫn làm cạn được `max_connections` của Postgres. Cap đạt đúng mục tiêu: chặn cạn fd và RAM ở edge. Cap theo IP để khi nào cần thật.
+- **Đã chốt: DB public bắt buộc TLS.** Chuyển sang nhóm I, chưa implement. Các lỗ hiện có:
+  1. Mode `postgres` chuyển tiếp startup message dạng plaintext nếu client không gửi SSLRequest.
+  2. Edge không bật TLS (`tlsCfg == nil`): postgres trả `N`, mode `tls` cho plaintext đi qua, `externalURL` sinh ra `sslmode=disable`. Bắt buộc TLS đồng nghĩa với việc edge không có TLS thì không mở được port public.
+  3. Mode `plain` (MySQL) đàm phán TLS bên trong giao thức, sau server greeting. Thiết kế hiện tại không cho edge terminate được.
