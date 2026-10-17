@@ -26,7 +26,7 @@ Phase 1 và 2 cùng sửa `runtime.go`, nhưng ở các hàm khác nhau: phase 2
 ## Trạng thái
 
 Đã implement cả 3 phase. Unit test, `go vet` (kể cả `-tags integration`) và `go test ./...` xanh.
-**Integration test chưa từng chạy**: máy dev không có containerd, CNI và sudo. Lần chạy đầu trên node thật phải xác nhận `TestRecoverAfterReboot`, `TestUnfenceAfterReboot`, `TestRecoverDropsJob`, `TestRunLeakOnNetFiles`.
+Integration test chạy trên node 202.92.6.129 (2026-10-17, binary build chéo, sau đó đã xoá `pn7` và ns `paas-test`): `TestRunHTTPContainer`, `TestRecoverAfterReboot`, `TestUnfenceAfterReboot`, `TestRecoverDropsJob`, `TestRunLeakOnNetFiles` đều PASS. Reboot host thật chưa được thử.
 
 ## Tiêu chí xong (toàn plan)
 
