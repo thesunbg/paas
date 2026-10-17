@@ -3,6 +3,7 @@ package proxy
 import (
 	"compress/gzip"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -98,5 +99,29 @@ func TestUnknownHostAndUnavailable(t *testing.T) {
 	}
 	if r := get(t, p, "down.test", "/"); r.StatusCode != 503 {
 		t.Fatalf("unavailable: %d", r.StatusCode)
+	}
+}
+
+func TestEdgeServerHeaderLimit(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := edgeServer("", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	go srv.Serve(ln)
+	defer srv.Close()
+	for _, c := range []struct {
+		size, want int
+	}{{100 << 10, http.StatusRequestHeaderFieldsTooLarge}, {10 << 10, http.StatusOK}} {
+		req, _ := http.NewRequest("GET", "http://"+ln.Addr().String(), nil)
+		req.Header.Set("X-Big", strings.Repeat("a", c.size))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != c.want {
+			t.Errorf("header %d bytes: got %d, want %d", c.size, resp.StatusCode, c.want)
+		}
 	}
 }

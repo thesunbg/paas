@@ -147,8 +147,9 @@ func (p *Proxy) Run(ctx context.Context) error {
 		p.setDBTLS(magic.TLSConfig())
 		tlsCfg.NextProtos = append([]string{"h2", "http/1.1"}, tlsCfg.NextProtos...)
 		tlsCfg.MinVersion = tls.VersionTLS12
-		httpsSrv := &http.Server{Addr: p.cfg.HTTPSAddr, Handler: handler, TLSConfig: tlsCfg, ReadHeaderTimeout: 15 * time.Second}
-		httpSrv := &http.Server{Addr: p.cfg.HTTPAddr, Handler: issuer.HTTPChallengeHandler(http.HandlerFunc(redirectHTTPS)), ReadHeaderTimeout: 15 * time.Second}
+		httpsSrv := edgeServer(p.cfg.HTTPSAddr, handler)
+		httpsSrv.TLSConfig = tlsCfg
+		httpSrv := edgeServer(p.cfg.HTTPAddr, issuer.HTTPChallengeHandler(http.HandlerFunc(redirectHTTPS)))
 		servers = append(servers, httpsSrv, httpSrv)
 		go func() {
 			ln, err := tls.Listen("tcp", p.cfg.HTTPSAddr, tlsCfg)
@@ -161,7 +162,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 		go func() { errc <- httpSrv.ListenAndServe() }()
 		slog.Info("edge proxy listening with automatic HTTPS", "http", p.cfg.HTTPAddr, "https", p.cfg.HTTPSAddr)
 	} else {
-		srv := &http.Server{Addr: p.cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 15 * time.Second}
+		srv := edgeServer(p.cfg.HTTPAddr, handler)
 		servers = append(servers, srv)
 		go func() { errc <- srv.ListenAndServe() }()
 		slog.Info("edge proxy listening (HTTP only; set PAAS_TLS=true for automatic HTTPS)", "http", p.cfg.HTTPAddr)
@@ -487,4 +488,11 @@ func (p *Proxy) dbTLSConfig(mode string) *tls.Config {
 	c := cfg.Clone()
 	c.NextProtos = nil
 	return c
+}
+
+// edgeServer builds a public-facing server. No Read/WriteTimeout: they would cut
+// SSE, websockets and long uploads/downloads; ReadHeaderTimeout covers slowloris.
+func edgeServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
 }

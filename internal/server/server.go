@@ -192,7 +192,7 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}()
 
-	s.http = &http.Server{Addr: s.cfg.HTTPAddr, Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
+	s.http = &http.Server{Addr: s.cfg.HTTPAddr, Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
 	errc := make(chan error, 1)
 	go func() { errc <- s.http.ListenAndServe() }()
 	slog.Info("control plane listening", "http", s.cfg.HTTPAddr, "nats", s.cfg.NATSAddr, "base_domain", s.cfg.BaseDomain)

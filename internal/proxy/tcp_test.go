@@ -122,3 +122,87 @@ func TestTCPPostgresTLSAndAllowlist(t *testing.T) {
 		t.Fatal("port still open after route removal")
 	}
 }
+
+// tcpFixture starts a plain-mode route on a free port and returns the proxy and address.
+func tcpFixture(t *testing.T, r model.TCPRoute) (*Proxy, model.TCPRoute, string) {
+	p := New(config.Proxy{}, nil)
+	r.Port, r.Mode = freePort(t), "plain"
+	p.SetRoutes(&model.RouteTable{Version: 1, TCP: []model.TCPRoute{r}})
+	t.Cleanup(func() { p.tcp.apply(nil) }) // closes the port; its l.mu also orders handle's reads before later test writes
+	return p, r, "127.0.0.1:" + strconv.Itoa(r.Port)
+}
+
+func dialEcho(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if got := roundTrip(t, c, "ping"); got != "ping" {
+		t.Fatalf("got %q", got)
+	}
+	return c
+}
+
+func wantClosed(t *testing.T, c net.Conn) {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected connection closed")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatal("connection still open")
+	}
+}
+
+func TestTCPReapplyKeepsConn(t *testing.T) {
+	p, r, addr := tcpFixture(t, model.TCPRoute{Upstreams: []string{echo(t)}, Allow: []string{"127.0.0.1/32"}})
+	c := dialEcho(t, addr)
+	p.tcp.apply([]model.TCPRoute{r})
+	if got := roundTrip(t, c, "again"); got != "again" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestTCPAllowRevokeClosesConn(t *testing.T) {
+	p, r, addr := tcpFixture(t, model.TCPRoute{Upstreams: []string{echo(t)}, Allow: []string{"127.0.0.1/32"}})
+	c := dialEcho(t, addr)
+	r.Allow = []string{"10.0.0.0/8"}
+	p.tcp.apply([]model.TCPRoute{r})
+	wantClosed(t, c)
+}
+
+func TestTCPRouteRemovedClosesConn(t *testing.T) {
+	p, _, addr := tcpFixture(t, model.TCPRoute{Upstreams: []string{echo(t)}, Allow: []string{"127.0.0.1/32"}})
+	c := dialEcho(t, addr)
+	p.tcp.apply(nil)
+	wantClosed(t, c)
+}
+
+func TestTCPUpstreamChangeClosesConn(t *testing.T) {
+	a, b := echo(t), echo(t)
+	p, r, addr := tcpFixture(t, model.TCPRoute{Upstreams: []string{a}, Allow: []string{"127.0.0.1/32"}})
+	c := dialEcho(t, addr)
+	r.Upstreams = []string{b}
+	p.tcp.apply([]model.TCPRoute{r})
+	wantClosed(t, c)
+	dialEcho(t, addr)
+}
+
+func TestTCPConnCap(t *testing.T) {
+	old := maxConnsPerRoute
+	maxConnsPerRoute = 2
+	t.Cleanup(func() { maxConnsPerRoute = old })
+	_, _, addr := tcpFixture(t, model.TCPRoute{Upstreams: []string{echo(t)}, Allow: []string{"127.0.0.1/32"}})
+	c1, c2 := dialEcho(t, addr), dialEcho(t, addr)
+	c3, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c3.Close()
+	wantClosed(t, c3)
+	c1.Close()
+	time.Sleep(200 * time.Millisecond)
+	dialEcho(t, addr)
+	_ = c2
+}

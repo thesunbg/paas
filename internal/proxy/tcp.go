@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -27,9 +28,39 @@ type tcpRoute struct {
 	next  atomic.Uint32
 }
 
+// maxConnsPerRoute caps live connections per database port. Must stay above the
+// largest max_connections in databases.Presets (300). var only so tests can lower it.
+var maxConnsPerRoute = 512
+
+type tcpConn struct {
+	ip       netip.Addr
+	client   net.Conn
+	upstream string // "" until dialed
+	server   net.Conn
+	dead     bool
+}
+
+// kill closes both ends. Caller holds l.mu.
+func (c *tcpConn) kill() {
+	c.dead = true
+	_ = c.client.Close()
+	if c.server != nil {
+		_ = c.server.Close()
+	}
+}
+
 type tcpListener struct {
-	ln    net.Listener
-	route atomic.Pointer[tcpRoute]
+	ln     net.Listener
+	route  atomic.Pointer[tcpRoute]
+	mu     sync.Mutex // guards conns, closed and every tcpConn's fields
+	conns  map[*tcpConn]struct{}
+	closed bool
+}
+
+// stale reports whether c may no longer live under route r.
+func stale(r *tcpRoute, c *tcpConn) bool {
+	return r == nil || !allowed(r, c.ip) ||
+		(c.upstream != "" && !slices.Contains(r.route.Upstreams, c.upstream))
 }
 
 type tcpManager struct {
@@ -61,7 +92,17 @@ func (m *tcpManager) apply(routes []model.TCPRoute) {
 			}
 		}
 		if l, ok := m.listeners[r.Port]; ok {
+			// No race with handle: Store happens before Lock here, while admit/attach
+			// Lock before Load, so each conn is either seen by this sweep or loads the
+			// new route itself. The dial-to-attach window is closed by attach's re-check.
 			l.route.Store(tr)
+			l.mu.Lock()
+			for c := range l.conns {
+				if stale(tr, c) {
+					c.kill()
+				}
+			}
+			l.mu.Unlock()
 			continue
 		}
 		ln, err := net.Listen("tcp", ":"+strconv.Itoa(r.Port))
@@ -69,7 +110,7 @@ func (m *tcpManager) apply(routes []model.TCPRoute) {
 			slog.Warn("database port", "port", r.Port, "err", err)
 			continue
 		}
-		l := &tcpListener{ln: ln}
+		l := &tcpListener{ln: ln, conns: map[*tcpConn]struct{}{}}
 		l.route.Store(tr)
 		m.listeners[r.Port] = l
 		go m.serve(l)
@@ -77,6 +118,12 @@ func (m *tcpManager) apply(routes []model.TCPRoute) {
 	}
 	for port, l := range m.listeners {
 		if !want[port] {
+			l.mu.Lock()
+			l.closed = true
+			for c := range l.conns {
+				c.kill()
+			}
+			l.mu.Unlock()
 			_ = l.ln.Close()
 			delete(m.listeners, port)
 			slog.Info("database port closed", "port", port)
@@ -94,16 +141,11 @@ func (m *tcpManager) serve(l *tcpListener) {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		go m.handle(c, l.route.Load())
+		go m.handle(c, l)
 	}
 }
 
-func allowed(r *tcpRoute, addr net.Addr) bool {
-	ap, err := netip.ParseAddrPort(addr.String())
-	if err != nil {
-		return false
-	}
-	ip := ap.Addr().Unmap()
+func allowed(r *tcpRoute, ip netip.Addr) bool {
 	for _, p := range r.allow {
 		if p.Contains(ip) {
 			return true
@@ -117,15 +159,27 @@ const (
 	pgGSSENCRequest = 80877104
 )
 
-func (m *tcpManager) handle(client net.Conn, r *tcpRoute) {
+func (m *tcpManager) handle(client net.Conn, l *tcpListener) {
 	defer client.Close()
-	if r == nil || len(r.route.Upstreams) == 0 {
+	ap, err := netip.ParseAddrPort(client.RemoteAddr().String())
+	if err != nil {
 		return
 	}
-	if !allowed(r, client.RemoteAddr()) {
-		slog.Debug("database connection refused by allowlist", "port", r.route.Port, "from", client.RemoteAddr())
+	c := &tcpConn{ip: ap.Addr().Unmap(), client: client}
+	l.mu.Lock()
+	r := l.route.Load()
+	if l.closed || len(l.conns) >= maxConnsPerRoute || r == nil || len(r.route.Upstreams) == 0 || !allowed(r, c.ip) {
+		l.mu.Unlock()
+		slog.Debug("database connection refused", "from", client.RemoteAddr())
 		return
 	}
+	l.conns[c] = struct{}{}
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		delete(l.conns, c)
+		l.mu.Unlock()
+	}()
 	_ = client.SetDeadline(time.Now().Add(30 * time.Second))
 	tlsCfg := m.p.dbTLSConfig(r.route.Mode)
 	var conn net.Conn = client
@@ -196,9 +250,9 @@ func (m *tcpManager) handle(client net.Conn, r *tcpRoute) {
 
 	n := r.next.Add(1)
 	var server net.Conn
-	var err error
+	var addr string
 	for i := 0; i < len(r.route.Upstreams); i++ {
-		addr := r.route.Upstreams[(int(n)+i)%len(r.route.Upstreams)]
+		addr = r.route.Upstreams[(int(n)+i)%len(r.route.Upstreams)]
 		server, err = net.DialTimeout("tcp", addr, 5*time.Second)
 		if err == nil {
 			break
@@ -209,6 +263,14 @@ func (m *tcpManager) handle(client net.Conn, r *tcpRoute) {
 		return
 	}
 	defer server.Close()
+	l.mu.Lock()
+	c.upstream = addr
+	if c.dead || stale(l.route.Load(), c) {
+		l.mu.Unlock()
+		return
+	}
+	c.server = server
+	l.mu.Unlock()
 	pipe(conn, server)
 }
 
