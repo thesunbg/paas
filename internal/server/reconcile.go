@@ -55,6 +55,11 @@ func (s *Server) onHeartbeat(m *nats.Msg) {
 		}
 	}
 	reply()
+	if hb.Jobs != nil {
+		if _, err := s.store.FailLostJobs(ctx, hb.NodeID, hb.Jobs); err != nil {
+			slog.Warn("fail lost jobs", "node", hb.NodeID, "err", err)
+		}
+	}
 	reported := map[string]bool{}
 	changed := false
 	for _, c := range hb.Containers {
@@ -74,6 +79,9 @@ func (s *Server) onHeartbeat(m *nats.Msg) {
 		wasRunning := in.Status == model.InstRunning
 		_ = s.store.ApplyContainerStatus(ctx, hb.NodeID, c)
 		if (in.Status == model.InstRunning || in.Status == model.InstFailed || in.Status == model.InstLost) && wasRunning != c.Running {
+			changed = true
+		}
+		if c.IP != "" && c.IP != in.IP { // e.g. the host rebooted: same container, new address
 			changed = true
 		}
 	}

@@ -173,9 +173,49 @@ func (m *Manager) confList(idx int) ([]byte, error) {
 	var buf bytes.Buffer
 	err := confTmpl.Execute(&buf, map[string]any{
 		"Index": idx, "Bridge": BridgeName(idx), "Subnet": subnet, "Gateway": gw,
-		"IPAMDir": filepath.Join(m.dataDir, "cni", "ipam"),
+		"IPAMDir": m.ipamDir(),
 	})
 	return buf.Bytes(), err
+}
+
+func (m *Manager) ipamDir() string { return filepath.Join(m.dataDir, "cni", "ipam") }
+
+// ReleaseLeases frees every host-local lease held by container id and returns
+// how many it removed. It is for callers that no longer know the network
+// index: host-local keeps leases as plain files (<ipamDir>/<network>/<ip>,
+// content "<containerID>\r\n<ifname>"), so they can be found by id alone.
+func (m *Manager) ReleaseLeases(id string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	root := m.ipamDir()
+	nets, err := os.ReadDir(root)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, nd := range nets {
+		if !nd.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, nd.Name())
+		files, _ := os.ReadDir(dir)
+		for _, f := range files {
+			name := f.Name()
+			if f.IsDir() || name == "lock" || strings.HasPrefix(name, "last_reserved_ip.") {
+				continue
+			}
+			path := filepath.Join(dir, name)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			first, _, _ := strings.Cut(string(data), "\n")
+			if strings.TrimSuffix(first, "\r") == id && os.Remove(path) == nil {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // BuildConfList is the CNI configuration BuildKit uses for RUN steps: bridge

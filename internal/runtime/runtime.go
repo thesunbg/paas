@@ -792,7 +792,12 @@ func (r *Runtime) Recover(ctx context.Context) {
 		data, err := os.ReadFile(filepath.Join(r.containerDir(id), "state.json"))
 		if err != nil {
 			slog.Warn("orphan container without state, removing", "id", id)
-			// Remove releases the address before the state dir goes, so an orphan holds no IP.
+			// An orphan left by a failed Remove already released its address. One left by an
+			// agent crash inside Run did not, and its NetIndex is unknown (no state.json),
+			// so release by container id.
+			if n := r.net.ReleaseLeases(id); n > 0 {
+				slog.Info("released orphan ip leases", "id", id, "n", n)
+			}
 			if t, err := ctr.Task(cctx, nil); err == nil {
 				_, _ = t.Delete(cctx, client.WithProcessKill)
 			}

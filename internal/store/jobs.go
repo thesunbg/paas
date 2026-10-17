@@ -66,6 +66,15 @@ func (s *Store) FailInterruptedJobs(ctx context.Context) error {
 	return err
 }
 
+// FailLostJobs fails the running jobs of a node that the node no longer reports (alive): the
+// agent restarted and dropped them. The 30s grace covers the time between CreateJobRun and the
+// agent receiving the request. FinishJobRun still overwrites if the real reply ever arrives.
+func (s *Store) FailLostJobs(ctx context.Context, nodeID string, alive []string) (int64, error) {
+	tag, err := s.q(ctx).Exec(ctx, `UPDATE job_runs SET status='failed', exit_code=-1, output=output || E'\n(lost: the node no longer runs this job)', finished_at=now()
+		WHERE node_id=$1 AND status='running' AND started_at < now() - interval '30 seconds' AND NOT (id::text = ANY($2))`, nodeID, alive)
+	return tag.RowsAffected(), err
+}
+
 func (s *Store) PurgeJobRuns(ctx context.Context, keep int) error {
 	_, err := s.q(ctx).Exec(ctx, `DELETE FROM job_runs j WHERE id IN (
 		SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY service_id ORDER BY started_at DESC) rn FROM job_runs) x WHERE rn > $1)`, keep)

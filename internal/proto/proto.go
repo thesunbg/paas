@@ -124,6 +124,9 @@ type Heartbeat struct {
 	Token      string            `json:"token"`
 	Usage      NodeUsage         `json:"usage"`
 	Containers []ContainerStatus `json:"containers"`
+	// Jobs are the job run IDs whose CmdJob request this agent is handling right now. nil means
+	// an agent that predates the field (do nothing); the agent always sends a non-nil slice.
+	Jobs []string `json:"jobs"`
 }
 
 // HeartbeatAck answers a heartbeat once the control plane has recorded it. The agent's

@@ -52,6 +52,9 @@ type Agent struct {
 
 	fz *fencer // lease + self-fence of HA postgres
 
+	jobsMu sync.Mutex
+	jobs   map[string]bool // job run IDs being handled (see handleJob), reported in the heartbeat
+
 	cpuMu       sync.Mutex
 	lastCPU     [2]uint64
 	lastEvictAt time.Time
@@ -244,7 +247,12 @@ func (a *Agent) applyDNS(data []byte) {
 }
 
 func (a *Agent) heartbeat(ctx context.Context) {
-	hb := proto.Heartbeat{NodeID: a.nodeID, Token: a.cfg.ClusterToken, Usage: a.usage(), Containers: a.rt.Statuses(ctx)}
+	hb := proto.Heartbeat{NodeID: a.nodeID, Token: a.cfg.ClusterToken, Usage: a.usage(), Containers: a.rt.Statuses(ctx), Jobs: make([]string, 0)}
+	a.jobsMu.Lock()
+	for id := range a.jobs {
+		hb.Jobs = append(hb.Jobs, id)
+	}
+	a.jobsMu.Unlock()
 	sentAt := time.Now() // the lease starts here, not when the ack arrives
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -527,6 +535,17 @@ func (a *Agent) serveStaticOrigin(ctx context.Context) {
 
 func (a *Agent) handleJob(ctx context.Context, req *proto.RunRequest) *proto.JobReply {
 	defer a.work()()
+	a.jobsMu.Lock()
+	if a.jobs == nil {
+		a.jobs = map[string]bool{}
+	}
+	a.jobs[req.InstanceID] = true
+	a.jobsMu.Unlock()
+	defer func() {
+		a.jobsMu.Lock()
+		delete(a.jobs, req.InstanceID)
+		a.jobsMu.Unlock()
+	}()
 	timeout := time.Duration(req.TimeoutSec)*time.Second + 10*time.Minute
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
