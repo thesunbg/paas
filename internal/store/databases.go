@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,6 +25,7 @@ type Database struct {
 	BackupScheduleHours int        `json:"backup_schedule_hours"`
 	LastBackupAt        *time.Time `json:"last_backup_at"`
 	Options             DBOptions  `json:"options"`
+	OptionsVersion      int64      `json:"options_version"` // bumped by UpdateDatabaseOptions
 	CreatedAt           time.Time  `json:"created_at"`
 }
 
@@ -46,12 +48,12 @@ type DBOptions struct {
 	ReplicaServiceID string `json:"replica_service_id,omitempty"`
 }
 
-const databaseCols = `id, project_id, name, engine, version, mode, server_service_id, db_name, username, password_enc, size_preset, status, error, backup_schedule_hours, last_backup_at, options, created_at`
+const databaseCols = `id, project_id, name, engine, version, mode, server_service_id, db_name, username, password_enc, size_preset, status, error, backup_schedule_hours, last_backup_at, options, options_version, created_at`
 
 func scanDatabase(row pgx.Row) (*Database, error) {
 	var d Database
 	err := row.Scan(&d.ID, &d.ProjectID, &d.Name, &d.Engine, &d.Version, &d.Mode, &d.ServerServiceID, &d.DBName, &d.Username, &d.PasswordEnc,
-		&d.SizePreset, &d.Status, &d.Error, &d.BackupScheduleHours, &d.LastBackupAt, &d.Options, &d.CreatedAt)
+		&d.SizePreset, &d.Status, &d.Error, &d.BackupScheduleHours, &d.LastBackupAt, &d.Options, &d.OptionsVersion, &d.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -238,9 +240,26 @@ func (s *Store) SetBackupS3Key(ctx context.Context, id, key string) error {
 	return err
 }
 
-func (s *Store) UpdateDatabaseOptions(ctx context.Context, id string, o DBOptions) error {
-	_, err := s.DB.Exec(ctx, `UPDATE databases SET options=$2 WHERE id=$1`, id, o)
-	return err
+// UpdateDatabaseOptions is UpdateService for databases.options: fn edits the fresh
+// options, the write is a compare-and-swap on options_version, and fn may run again.
+func (s *Store) UpdateDatabaseOptions(ctx context.Context, id string, fn func(*DBOptions) error) (DBOptions, error) {
+	for range casAttempts {
+		db, err := s.DatabaseByID(ctx, id)
+		if err != nil {
+			return DBOptions{}, err
+		}
+		if err := fn(&db.Options); err != nil {
+			return DBOptions{}, err
+		}
+		var next DBOptions
+		err = s.DB.QueryRow(ctx, `UPDATE databases SET options=$2, options_version=options_version+1 WHERE id=$1 AND options_version=$3 RETURNING options`,
+			id, db.Options, db.OptionsVersion).Scan(&next)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		return next, err
+	}
+	return DBOptions{}, ErrConflict
 }
 
 // UsedPublicPorts lists the external ports already given to databases.

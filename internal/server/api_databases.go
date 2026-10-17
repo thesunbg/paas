@@ -50,6 +50,7 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		return
 	}
+	setETag(w, db.OptionsVersion)
 	out := map[string]any{"database": db, "version": databases.DisplayVersion(db.Engine, db.Version)}
 	if v := s.serverVersion(r.Context(), db); v != "" {
 		out["server_version"] = v

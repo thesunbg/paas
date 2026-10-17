@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { api, catalog, errorMessage, type HealthCheck, type QoS, type Resources, type ServiceDetail, type ServiceInput, type Size, type Volume } from '../../lib/api';
+  import { api, ApiError, catalog, errorMessage, type HealthCheck, type QoS, type Resources, type ServiceDetail, type ServiceInput, type Size, type Volume } from '../../lib/api';
   import { mb, cpu } from '../../lib/format';
   import { navigate } from '../../lib/router.svelte';
   import { toast } from '../../lib/toast.svelte';
@@ -20,6 +20,8 @@
   const isWeb = s0.type === 'web';
   const isCron = s0.type === 'cron';
   const isPreview = !!s0.parent_id;
+  // Version of the service the form was filled from; sent as If-Match so a change made elsewhere is not overwritten.
+  let formVersion = s0.version;
 
   let sizes = $state<Size[]>([]);
 
@@ -203,7 +205,8 @@
     }
     saving = true;
     try {
-      const r = await api.updateService(detail.service.id, patch);
+      const r = await api.updateService(detail.service.id, patch, formVersion);
+      formVersion = r.service.version;
       gitToken = '';
       clearToken = false;
       await reload();
@@ -215,6 +218,7 @@
       }
     } catch (err) {
       error = errorMessage(err);
+      if (err instanceof ApiError && err.status === 412) await reload();
     } finally {
       saving = false;
     }

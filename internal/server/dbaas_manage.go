@@ -66,12 +66,16 @@ func (s *Server) applyServerSpec(ctx context.Context, db *store.Database) error 
 	if err != nil {
 		return err
 	}
-	spec.DNSAliases = srv.Spec.DNSAliases
-	srv.Spec = spec
-	srv.Source.Image = spec.Image
-	if err := s.store.UpdateServiceConfig(ctx, srv); err != nil {
+	fresh, err := s.store.UpdateService(ctx, srv.ID, func(f *store.Service) error {
+		spec.DNSAliases = f.Spec.DNSAliases
+		f.Spec = spec
+		f.Source.Image = spec.Image
+		return nil
+	})
+	if err != nil {
 		return err
 	}
+	srv = fresh
 	if _, err := s.restartService(ctx, srv, nil); err != nil {
 		return err
 	}

@@ -164,14 +164,16 @@ func (s *Server) handleSetPITR(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "retention_days must be between 1 and 35")
 		return
 	}
-	o := db.Options
-	restart := o.PITR != in.Enabled
-	o.PITR = in.Enabled
-	if in.RetentionDays > 0 {
-		o.PITRRetention = in.RetentionDays
-	}
-	if err := s.store.UpdateDatabaseOptions(r.Context(), db.ID, o); err != nil {
-		writeError(w, 500, err.Error())
+	restart := db.Options.PITR != in.Enabled
+	o, err := s.store.UpdateDatabaseOptions(r.Context(), db.ID, func(o *store.DBOptions) error {
+		o.PITR = in.Enabled
+		if in.RetentionDays > 0 {
+			o.PITRRetention = in.RetentionDays
+		}
+		return nil
+	})
+	if err != nil {
+		writeUpdateError(w, err)
 		return
 	}
 	db.Options = o
@@ -275,8 +277,10 @@ func (s *Server) handlePITRRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	db.Options = store.DBOptions{PITR: true, PITRRetention: src.Options.PITRRetention}
-	_ = s.store.UpdateDatabaseOptions(r.Context(), db.ID, db.Options)
+	db.Options, _ = s.store.UpdateDatabaseOptions(r.Context(), db.ID, func(o *store.DBOptions) error {
+		*o = store.DBOptions{PITR: true, PITRRetention: src.Options.PITRRetention}
+		return nil
+	})
 	u := currentUser(r)
 	s.store.Audit(r.Context(), &u.ID, &p.TeamID, "database.pitr.restore", fmt.Sprintf("%s -> %s at %s", src.Name, db.Name, target.UTC().Format(time.RFC3339)))
 	go func() {

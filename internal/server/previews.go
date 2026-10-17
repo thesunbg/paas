@@ -96,10 +96,14 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request, svc *
 func (s *Server) ensurePreview(ctx context.Context, parent *store.Service, ev pullRequestEvent) (*store.Service, bool, error) {
 	repo := parent.Source.Repo
 	if existing, err := s.store.PreviewFor(ctx, parent.ID, ev.Number); err == nil {
-		existing.Source.Repo, existing.Source.Branch = repo, ev.PullRequest.Head.Ref
-		if err := s.store.UpdateServiceConfig(ctx, existing); err != nil {
+		fresh, err := s.store.UpdateService(ctx, existing.ID, func(f *store.Service) error {
+			f.Source.Repo, f.Source.Branch = repo, ev.PullRequest.Head.Ref
+			return nil
+		})
+		if err != nil {
 			return nil, false, err
 		}
+		existing = fresh
 		if existing.Status == model.StatusStopped {
 			_ = s.store.SetServiceStatus(ctx, existing.ID, model.StatusDeploying)
 		}

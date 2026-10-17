@@ -274,19 +274,31 @@ func (s *Server) buildDeployment(ctx context.Context, svc *store.Service, d *sto
 		return err
 	}
 	// Remember the detected language (runtime tuning) and exposed port.
+	// The build ran for minutes: apply only these two fields to the current row, so a
+	// replica or env change made meanwhile is not written back over.
 	lang := strings.SplitN(strings.Fields(rep.Detected + " ")[0], "/", 2)[0]
-	changed := false
-	if lang != "" && lang != "dockerfile" && svc.Spec.Language != lang {
-		svc.Spec.Language = lang
-		changed = true
+	setLang := lang != "" && lang != "dockerfile"
+	setPort := func(sp model.ServiceSpec) bool {
+		return rep.Port > 0 && sp.Port == 8080 && rep.Port != 8080 && lang == "dockerfile"
 	}
-	if rep.Port > 0 && svc.Spec.Port == 8080 && rep.Port != 8080 && lang == "dockerfile" {
-		svc.Spec.Port = rep.Port
-		changed = true
-		s.hub.Log(d.ID, fmt.Sprintf("==> using port %d from Dockerfile EXPOSE", rep.Port))
-	}
-	if changed {
-		_ = s.store.SetServiceSpec(ctx, svc.ID, svc.Spec)
+	// Skip the write (and the version bump an open settings form would trip on) when nothing changes.
+	if (setLang && svc.Spec.Language != lang) || setPort(svc.Spec) {
+		var portSet bool
+		fresh, err := s.store.UpdateService(ctx, svc.ID, func(f *store.Service) error {
+			if setLang {
+				f.Spec.Language = lang
+			}
+			if portSet = setPort(f.Spec); portSet {
+				f.Spec.Port = rep.Port
+			}
+			return nil
+		})
+		if err == nil {
+			*svc = *fresh
+			if portSet {
+				s.hub.Log(d.ID, fmt.Sprintf("==> using port %d from Dockerfile EXPOSE", rep.Port))
+			}
+		}
 	}
 	if rep.Prisma != nil {
 		s.provisionPrisma(ctx, svc, d, rep.Prisma)
@@ -563,13 +575,17 @@ func (s *Server) redeploy(ctx context.Context, svc *store.Service, from *store.D
 
 // scaleService changes the replica count and converges immediately.
 func (s *Server) scaleService(ctx context.Context, svc *store.Service, replicas int) error {
-	if len(svc.Spec.Volumes) > 0 && replicas > 1 {
-		return errors.New("services with volumes cannot run more than one replica")
-	}
-	svc.Spec.Replicas = replicas
-	if err := s.store.SetServiceSpec(ctx, svc.ID, svc.Spec); err != nil {
+	fresh, err := s.store.UpdateService(ctx, svc.ID, func(f *store.Service) error {
+		if len(f.Spec.Volumes) > 0 && replicas > 1 {
+			return errors.New("services with volumes cannot run more than one replica")
+		}
+		f.Spec.Replicas = replicas
+		return nil
+	})
+	if err != nil {
 		return err
 	}
+	*svc = *fresh
 	go s.reconcileService(context.Background(), svc.ID)
 	return nil
 }

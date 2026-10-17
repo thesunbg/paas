@@ -266,6 +266,7 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 	if svc == nil {
 		return
 	}
+	setETag(w, svc.Version)
 	ctx := r.Context()
 	domains, _ := s.store.DomainsForService(ctx, svc.ID)
 	instances := s.instancesOf(ctx, svc.ID)
@@ -387,10 +388,29 @@ func (s *Server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, err.Error())
 		return
 	}
-	if err := s.store.UpdateServiceConfig(r.Context(), svc); err != nil {
-		writeError(w, 500, err.Error())
+	// The checks above ran on the copy loaded for this request; the write re-applies
+	// the input to the fresh row, so a concurrent change (a build recording the
+	// language, a scale) to a field this request does not touch is kept.
+	var inputErr error
+	fresh, err := s.store.UpdateService(r.Context(), svc.ID, func(f *store.Service) error {
+		if err := checkIfMatch(r, f.Version); err != nil {
+			return err
+		}
+		before = f.Spec
+		if inputErr = s.applyInput(f, &in); inputErr != nil {
+			return inputErr
+		}
+		return nil
+	})
+	if inputErr != nil {
+		writeError(w, 400, inputErr.Error())
 		return
 	}
+	if err != nil {
+		writeUpdateError(w, err)
+		return
+	}
+	*svc = *fresh
 	u := currentUser(r)
 	s.store.Audit(r.Context(), &u.ID, &p.TeamID, "service.update", svc.Slug)
 	// Runtime settings take effect with a restart; replica changes converge without one.
@@ -498,6 +518,10 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.scaleService(r.Context(), svc, in.Replicas); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			writeUpdateError(w, err)
+			return
+		}
 		writeError(w, 400, err.Error())
 		return
 	}

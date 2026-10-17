@@ -21,6 +21,16 @@ var migrationsFS embed.FS
 
 var ErrNotFound = errors.New("not found")
 
+var (
+	// ErrConflict: a compare-and-swap update kept losing to concurrent writers.
+	ErrConflict = errors.New("concurrent update, try again")
+	// ErrStale: the caller's If-Match version is not the current one.
+	ErrStale = errors.New("this was changed elsewhere; reload and try again")
+)
+
+// casAttempts bounds the read-modify-write retries of UpdateService / UpdateDatabaseOptions.
+const casAttempts = 5
+
 type Store struct {
 	DB *pgxpool.Pool
 }

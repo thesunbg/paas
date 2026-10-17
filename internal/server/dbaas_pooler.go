@@ -118,8 +118,11 @@ func (s *Server) handleDatabasePooler(w http.ResponseWriter, r *http.Request) {
 	unlock := s.lock("db-" + db.ID)
 	defer unlock()
 	db, _ = s.store.DatabaseByID(ctx, db.ID)
-	o := db.Options
-	if in.Enabled && !o.Pooler {
+	var (
+		setPooler bool
+		poolerID  string
+	)
+	if in.Enabled && !db.Options.Pooler {
 		pool, err := s.createPooler(ctx, db)
 		if err != nil {
 			if pool != nil {
@@ -128,14 +131,23 @@ func (s *Server) handleDatabasePooler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, fmt.Sprintf("start pgbouncer: %v", err))
 			return
 		}
-		o.Pooler, o.PoolerServiceID = true, pool.ID
-	} else if !in.Enabled && o.Pooler {
+		poolerID = pool.ID
+		setPooler = true
+	} else if !in.Enabled && db.Options.Pooler {
 		s.removePooler(ctx, db)
-		o.Pooler, o.PoolerServiceID = false, ""
+		setPooler = true
 	}
-	if err := s.store.UpdateDatabaseOptions(ctx, db.ID, o); err != nil {
-		writeError(w, 500, err.Error())
-		return
+	o := db.Options
+	if setPooler {
+		var err error
+		o, err = s.store.UpdateDatabaseOptions(ctx, db.ID, func(o *store.DBOptions) error {
+			o.Pooler, o.PoolerServiceID = in.Enabled, poolerID
+			return nil
+		})
+		if err != nil {
+			writeUpdateError(w, err)
+			return
+		}
 	}
 	u := currentUser(r)
 	s.store.Audit(ctx, &u.ID, &p.TeamID, "database.pooler", fmt.Sprintf("%s %v", db.Name, in.Enabled))

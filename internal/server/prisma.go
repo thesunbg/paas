@@ -35,11 +35,20 @@ func (s *Server) provisionPrisma(ctx context.Context, svc *store.Service, d *sto
 			}
 		}
 		if !hasData {
-			svc.Spec.Volumes = append(svc.Spec.Volumes, model.Volume{Name: "data", Path: "/data"})
-			if err := s.store.SetServiceSpec(ctx, svc.ID, svc.Spec); err != nil {
+			fresh, err := s.store.UpdateService(ctx, svc.ID, func(f *store.Service) error {
+				for _, v := range f.Spec.Volumes {
+					if v.Path == "/data" {
+						return nil
+					}
+				}
+				f.Spec.Volumes = append(f.Spec.Volumes, model.Volume{Name: "data", Path: "/data"})
+				return nil
+			})
+			if err != nil {
 				s.hub.Log(d.ID, "==> prisma: could not add a volume: "+err.Error())
 				return
 			}
+			*svc = *fresh
 		}
 		url := "file:/data/" + util.Slugify(svc.Slug) + ".db"
 		if err := s.store.SetEnvVar(ctx, svc.ID, envName, s.box.MustEncrypt(url)); err != nil {

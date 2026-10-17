@@ -166,6 +166,7 @@ export interface Service {
   build: BuildConfig;
   spec: ServiceSpec;
   has_git_token: boolean;
+  version: number;
   node_id: string | null;
   current_deployment_id: string | null;
   parent_id?: string | null;
@@ -198,6 +199,7 @@ export interface Database {
   backup_schedule_hours: number;
   last_backup_at: string | null;
   options?: DBOptions;
+  options_version: number;
   created_at: string;
 }
 
@@ -663,8 +665,8 @@ export function setUnauthorizedHandler(fn: () => void) {
 
 const BASE = '/api/v1';
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method, credentials: 'same-origin', headers: {} };
+async function request<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
+  const init: RequestInit = { method, credentials: 'same-origin', headers: { ...headers } };
   if (body !== undefined) {
     (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
@@ -698,9 +700,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 const get = <T>(p: string) => request<T>('GET', p);
-const post = <T>(p: string, b: unknown = {}) => request<T>('POST', p, b);
+const post = <T>(p: string, b: unknown = {}, h?: Record<string, string>) => request<T>('POST', p, b, h);
 const put = <T>(p: string, b: unknown) => request<T>('PUT', p, b);
-const patch = <T>(p: string, b: unknown) => request<T>('PATCH', p, b);
+const patch = <T>(p: string, b: unknown, h?: Record<string, string>) => request<T>('PATCH', p, b, h);
+
+// If-Match header for a row version: the write is refused (412) if the row changed since it was read.
+const ifMatch = (version?: number): Record<string, string> | undefined => (version === undefined ? undefined : { 'If-Match': `"${version}"` });
 const del = <T = { status: string }>(p: string) => request<T>('DELETE', p);
 const e = encodeURIComponent;
 
@@ -891,7 +896,7 @@ export const api = {
 
   // Services
   service: (id: string) => get<ServiceDetail>(`/services/${e(id)}`),
-  updateService: (id: string, input: ServiceInput) => patch<UpdateServiceResponse>(`/services/${e(id)}`, input),
+  updateService: (id: string, input: ServiceInput, version?: number) => patch<UpdateServiceResponse>(`/services/${e(id)}`, input, ifMatch(version)),
   deleteService: (id: string) => del(`/services/${e(id)}`),
   deploy: (id: string, commit_sha?: string) => post<Deployment>(`/services/${e(id)}/deploy`, commit_sha ? { commit_sha } : {}),
   restart: (id: string) => post<Deployment>(`/services/${e(id)}/restart`),
@@ -947,8 +952,8 @@ export const api = {
   switchover: (id: string) => post<{ status: string }>(`/databases/${e(id)}/ha/switchover`),
   importDatabase: (id: string, source_url: string) => post<{ status: string }>(`/databases/${e(id)}/import`, { source_url }),
   databasePooler: (id: string, enabled: boolean) => post<{ pooler: boolean }>(`/databases/${e(id)}/pooler`, { enabled }),
-  databasePublic: (id: string, enabled: boolean, allowed_cidrs: string[] = []) =>
-    post<{ public_port: number; allowed_cidrs: string[] }>(`/databases/${e(id)}/public`, { enabled, allowed_cidrs }),
+  databasePublic: (id: string, enabled: boolean, allowed_cidrs: string[] = [], version?: number) =>
+    post<{ public_port: number; allowed_cidrs: string[] }>(`/databases/${e(id)}/public`, { enabled, allowed_cidrs }, ifMatch(version)),
 
   // Cluster
   nodes: () => get<NodesResponse>('/nodes'),

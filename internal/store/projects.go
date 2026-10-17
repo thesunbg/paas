@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -77,6 +78,7 @@ type Service struct {
 	Build               model.BuildConfig   `json:"build"`
 	Spec                model.ServiceSpec   `json:"spec"`
 	GitTokenEnc         string              `json:"-"`
+	Version             int64               `json:"version"` // bumped by UpdateService
 	HasGitToken         bool                `json:"has_git_token"`
 	WebhookSecret       string              `json:"-"`
 	NodeID              *string             `json:"node_id"`
@@ -89,12 +91,12 @@ type Service struct {
 	UpdatedAt           time.Time           `json:"updated_at"`
 }
 
-const serviceCols = `id, project_id, name, slug, type, source, build, spec, git_token_enc, webhook_secret, node_id, current_deployment_id, parent_id, preview_pr, status, last_request_at, created_at, updated_at`
+const serviceCols = `id, project_id, name, slug, type, source, build, spec, git_token_enc, webhook_secret, node_id, current_deployment_id, parent_id, preview_pr, status, last_request_at, version, created_at, updated_at`
 
 func scanService(row pgx.Row) (*Service, error) {
 	var s Service
 	err := row.Scan(&s.ID, &s.ProjectID, &s.Name, &s.Slug, &s.Type, &s.Source, &s.Build, &s.Spec, &s.GitTokenEnc,
-		&s.WebhookSecret, &s.NodeID, &s.CurrentDeploymentID, &s.ParentID, &s.PreviewPR, &s.Status, &s.LastRequestAt, &s.CreatedAt, &s.UpdatedAt)
+		&s.WebhookSecret, &s.NodeID, &s.CurrentDeploymentID, &s.ParentID, &s.PreviewPR, &s.Status, &s.LastRequestAt, &s.Version, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -121,10 +123,28 @@ func (s *Store) CreateService(ctx context.Context, svc *Service) (*Service, erro
 		svc.ProjectID, svc.Name, svc.Slug, svc.Type, svc.Source, svc.Build, svc.Spec, svc.GitTokenEnc, svc.WebhookSecret, svc.NodeID, svc.ParentID, svc.PreviewPR))
 }
 
-func (s *Store) UpdateServiceConfig(ctx context.Context, svc *Service) error {
-	_, err := s.DB.Exec(ctx, `UPDATE services SET name=$2, source=$3, build=$4, spec=$5, git_token_enc=$6, updated_at=now() WHERE id=$1`,
-		svc.ID, svc.Name, svc.Source, svc.Build, svc.Spec, svc.GitTokenEnc)
-	return err
+// UpdateService applies fn to the current row and writes the result only if nobody
+// changed it meanwhile (compare-and-swap on version); otherwise it re-reads and runs
+// fn again, so fn must only apply its own delta to the value it is given. An error
+// from fn aborts and is returned as is (ErrStale for a failed If-Match check).
+func (s *Store) UpdateService(ctx context.Context, id string, fn func(*Service) error) (*Service, error) {
+	for range casAttempts {
+		svc, err := s.ServiceByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if err := fn(svc); err != nil {
+			return nil, err
+		}
+		next, err := scanService(s.DB.QueryRow(ctx, `UPDATE services SET name=$2, source=$3, build=$4, spec=$5, git_token_enc=$6, version=version+1, updated_at=now()
+			WHERE id=$1 AND version=$7 RETURNING `+serviceCols,
+			id, svc.Name, svc.Source, svc.Build, svc.Spec, svc.GitTokenEnc, svc.Version))
+		if errors.Is(err, ErrNotFound) {
+			continue // lost the race (or the row is gone: the next ServiceByID says so)
+		}
+		return next, err
+	}
+	return nil, ErrConflict
 }
 
 func (s *Store) ServiceByID(ctx context.Context, id string) (*Service, error) {
@@ -153,11 +173,6 @@ func (s *Store) SetServiceCurrentDeployment(ctx context.Context, id, deploymentI
 
 func (s *Store) SetServiceNode(ctx context.Context, id string, nodeID *string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE services SET node_id=$2 WHERE id=$1`, id, nodeID)
-	return err
-}
-
-func (s *Store) SetServiceSpec(ctx context.Context, id string, spec model.ServiceSpec) error {
-	_, err := s.DB.Exec(ctx, `UPDATE services SET spec=$2, updated_at=now() WHERE id=$1`, id, spec)
 	return err
 }
 

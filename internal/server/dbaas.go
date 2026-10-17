@@ -145,10 +145,10 @@ func (s *Server) handleDatabasePublic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "database not found")
 		return
 	}
-	o := db.Options
+	var cidrs []string
 	if in.Enabled {
-		cidrs, err := normalizeCIDRs(in.AllowedCIDRs)
-		if err != nil {
+		var err error
+		if cidrs, err = normalizeCIDRs(in.AllowedCIDRs); err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
@@ -156,20 +156,41 @@ func (s *Server) handleDatabasePublic(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "add at least one allowed IP or CIDR (0.0.0.0/0 allows everyone)")
 			return
 		}
+	}
+	// db-public-port is held, so the port allocated for a fresh PublicPort==0 is unique.
+	// The closure sees options only, so If-Match is checked against the version read
+	// above (after taking the lock); a retry means that version moved on.
+	var portErr error
+	calls := 0
+	o, err := s.store.UpdateDatabaseOptions(ctx, db.ID, func(o *store.DBOptions) error {
+		calls++
+		if _, ok := ifMatch(r); ok && calls > 1 {
+			return store.ErrStale
+		}
+		if err := checkIfMatch(r, db.OptionsVersion); err != nil {
+			return err
+		}
+		if !in.Enabled {
+			o.PublicPort, o.AllowedCIDRs = 0, nil
+			return nil
+		}
 		o.AllowedCIDRs = cidrs
 		if o.PublicPort == 0 {
 			port, err := s.allocatePublicPort(ctx)
 			if err != nil {
-				writeError(w, 503, err.Error())
-				return
+				portErr = err
+				return err
 			}
 			o.PublicPort = port
 		}
-	} else {
-		o.PublicPort, o.AllowedCIDRs = 0, nil
+		return nil
+	})
+	if portErr != nil {
+		writeError(w, 503, portErr.Error())
+		return
 	}
-	if err := s.store.UpdateDatabaseOptions(ctx, db.ID, o); err != nil {
-		writeError(w, 500, err.Error())
+	if err != nil {
+		writeUpdateError(w, err)
 		return
 	}
 	u := currentUser(r)

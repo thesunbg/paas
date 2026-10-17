@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -202,6 +203,45 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeUpdateError maps the store's compare-and-swap errors (412 for a failed
+// If-Match, 409 when concurrent writers kept winning) and falls back to 500.
+func writeUpdateError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrStale):
+		writeError(w, http.StatusPreconditionFailed, err.Error())
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
+// ifMatch reads the If-Match header as a row version. ok is false without the
+// header; an unparseable value yields -1, which never matches.
+func ifMatch(r *http.Request) (version int64, ok bool) {
+	h := strings.TrimSpace(r.Header.Get("If-Match"))
+	if h == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(strings.Trim(strings.TrimPrefix(h, "W/"), `"`), 10, 64)
+	if err != nil {
+		return -1, true
+	}
+	return v, true
+}
+
+// checkIfMatch is store.ErrStale when the request carries an If-Match that is not the current version.
+func checkIfMatch(r *http.Request, current int64) error {
+	if v, ok := ifMatch(r); ok && v != current {
+		return store.ErrStale
+	}
+	return nil
+}
+
+func setETag(w http.ResponseWriter, version int64) {
+	w.Header().Set("ETag", `"`+strconv.FormatInt(version, 10)+`"`)
 }
 
 func decode(r *http.Request, v any) error {

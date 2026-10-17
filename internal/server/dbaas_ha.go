@@ -147,8 +147,15 @@ func (s *Server) ensureAlias(ctx context.Context, srv *store.Service) (string, e
 		return "", err
 	}
 	alias := internalHost(srv.Slug+"-rw", proj.Slug)
-	srv.Spec.DNSAliases = []string{alias}
-	return alias, s.store.UpdateServiceConfig(ctx, srv)
+	fresh, err := s.store.UpdateService(ctx, srv.ID, func(f *store.Service) error {
+		f.Spec.DNSAliases = []string{alias}
+		return nil
+	})
+	if err != nil {
+		return alias, err
+	}
+	*srv = *fresh
+	return alias, nil
 }
 
 // POST /api/v1/databases/{id}/ha {enabled}
@@ -183,10 +190,11 @@ func (s *Server) handleSetHA(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	o := db.Options
-	o.HA = in.Enabled
-	if err := s.store.UpdateDatabaseOptions(r.Context(), db.ID, o); err != nil {
-		writeError(w, 500, err.Error())
+	if _, err := s.store.UpdateDatabaseOptions(r.Context(), db.ID, func(o *store.DBOptions) error {
+		o.HA = in.Enabled
+		return nil
+	}); err != nil {
+		writeUpdateError(w, err)
 		return
 	}
 	u := currentUser(r)
@@ -231,9 +239,10 @@ func (s *Server) ensureStandby(ctx context.Context, db *store.Database) error {
 	}
 	rep, err := s.createReplica(ctx, db, srv)
 	if rep != nil {
-		o := db.Options
-		o.ReplicaServiceID = rep.ID
-		_ = s.store.UpdateDatabaseOptions(ctx, db.ID, o)
+		_, _ = s.store.UpdateDatabaseOptions(ctx, db.ID, func(o *store.DBOptions) error {
+			o.ReplicaServiceID = rep.ID
+			return nil
+		})
 	}
 	if err == nil {
 		slog.Info("standby ready", "db", db.Name, "service", rep.Slug)
@@ -253,9 +262,10 @@ func (s *Server) removeStandby(ctx context.Context, db *store.Database) {
 			s.removeVolumes(ctx, *node, rep.ID)
 		}
 	}
-	o := db.Options
-	o.ReplicaServiceID = ""
-	_ = s.store.UpdateDatabaseOptions(ctx, db.ID, o)
+	_, _ = s.store.UpdateDatabaseOptions(ctx, db.ID, func(o *store.DBOptions) error {
+		o.ReplicaServiceID = ""
+		return nil
+	})
 }
 
 // haTick checks every HA database: fails over when the primary's node is gone
@@ -355,17 +365,20 @@ func (s *Server) promoteStandby(ctx context.Context, db *store.Database, oldPrim
 		return fmt.Errorf("promote: %v %s", err, strings.TrimSpace(out))
 	}
 	// The promoted server takes over the alias and the database.
-	rep.Spec.DNSAliases = oldPrimary.Spec.DNSAliases
-	rep.Spec.HealthCheck.TimeoutSec = 180
-	if err := s.store.UpdateServiceConfig(ctx, rep); err != nil {
+	if _, err := s.store.UpdateService(ctx, rep.ID, func(f *store.Service) error {
+		f.Spec.DNSAliases = oldPrimary.Spec.DNSAliases
+		f.Spec.HealthCheck.TimeoutSec = 180
+		return nil
+	}); err != nil {
 		return err
 	}
 	if err := s.store.SetDatabaseServer(ctx, db.ID, rep.ID); err != nil {
 		return err
 	}
-	o := db.Options
-	o.ReplicaServiceID = ""
-	_ = s.store.UpdateDatabaseOptions(ctx, db.ID, o)
+	_, _ = s.store.UpdateDatabaseOptions(ctx, db.ID, func(o *store.DBOptions) error {
+		o.ReplicaServiceID = ""
+		return nil
+	})
 	// Fence the old primary: deleting it means its container is stopped as soon as its node reports in.
 	oldNode := s.primaryNode(ctx, oldPrimary)
 	if err := s.deleteService(ctx, oldPrimary); err != nil {

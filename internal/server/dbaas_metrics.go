@@ -141,9 +141,10 @@ func (s *Server) enforceQuota(ctx context.Context, db *store.Database, c databas
 		slog.Warn("database quota", "db", db.Name, "err", err)
 		return
 	}
-	o := db.Options
-	o.ReadOnly = over
-	_ = s.store.UpdateDatabaseOptions(ctx, db.ID, o)
+	_, _ = s.store.UpdateDatabaseOptions(ctx, db.ID, func(o *store.DBOptions) error {
+		o.ReadOnly = over
+		return nil
+	})
 	team := s.teamOfDatabase(ctx, db)
 	if over {
 		slog.Warn("database over quota: read-only", "db", db.Name, "size_mb", size>>20, "quota_mb", quotaMB(db))
@@ -203,10 +204,12 @@ func (s *Server) handleDatabaseQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "quota_mb must be 0 or more")
 		return
 	}
-	o := db.Options
-	o.QuotaMB = in.QuotaMB
-	if err := s.store.UpdateDatabaseOptions(r.Context(), db.ID, o); err != nil {
-		writeError(w, 500, err.Error())
+	o, err := s.store.UpdateDatabaseOptions(r.Context(), db.ID, func(o *store.DBOptions) error {
+		o.QuotaMB = in.QuotaMB
+		return nil
+	})
+	if err != nil {
+		writeUpdateError(w, err)
 		return
 	}
 	db.Options = o

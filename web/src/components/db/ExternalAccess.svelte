@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, errorMessage, type DatabaseDetail } from '../../lib/api';
+  import { api, ApiError, errorMessage, type DatabaseDetail } from '../../lib/api';
   import { toast } from '../../lib/toast.svelte';
   import { confirmDialog } from '../../lib/confirm.svelte';
   import ErrorMsg from '../ErrorMsg.svelte';
@@ -14,8 +14,11 @@
   let cidrs = $state('');
   let busy = $state(false);
   let error = $state('');
+  // Version of the options the form was opened on; sent as If-Match.
+  let formVersion = 0;
 
   function startEdit() {
+    formVersion = db.options_version;
     cidrs = (ext?.allowed_cidrs ?? []).join('\n');
     editing = true;
     error = '';
@@ -40,12 +43,13 @@
     busy = true;
     error = '';
     try {
-      await api.databasePublic(db.id, true, list);
+      await api.databasePublic(db.id, true, list, formVersion);
       toast.success('External access updated');
       editing = false;
       await reload();
     } catch (err) {
       error = errorMessage(err);
+      if (err instanceof ApiError && err.status === 412) await reload();
     } finally {
       busy = false;
     }
