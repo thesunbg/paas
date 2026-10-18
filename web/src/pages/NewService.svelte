@@ -220,6 +220,25 @@
   $effect(() => {
     for (const s of composeServices) if (!composeEnv[s.name]) composeEnv[s.name] = {};
   });
+  // Names already used in the project: rename, or reuse an existing database.
+  let renames = $state<Record<string, string>>({});
+  let dbChoice = $state<Record<string, 'new' | 'existing'>>({});
+  let conflictsFor = $state('');
+  $effect(() => {
+    const cp = detected?.compose_plan;
+    if (!cp || conflictsFor === detectKey) return;
+    conflictsFor = detectKey;
+    const r: Record<string, string> = {};
+    const c: Record<string, 'new' | 'existing'> = {};
+    for (const s of cp.services) if (s.taken) r[s.name] = s.suggested ?? '';
+    for (const d of cp.databases) {
+      if (!d.taken) continue;
+      r[d.name] = d.suggested ?? '';
+      c[d.name] = 'new';
+    }
+    renames = r;
+    dbChoice = c;
+  });
   async function importAll() {
     if (!detected?.compose) return;
     importing = true;
@@ -232,6 +251,10 @@
         git_token: !installationId && gitToken.trim() ? gitToken.trim() : undefined,
         compose_path: detected.compose.path,
         env: composeEnv,
+        rename: Object.fromEntries(Object.entries(renames).filter(([k]) => dbChoice[k] !== 'existing')),
+        existing: Object.fromEntries(
+          (detected.compose_plan?.databases ?? []).filter((d) => d.existing && dbChoice[d.name] === 'existing').map((d) => [d.name, d.existing!.id]),
+        ),
       });
       const n = r.services?.length ?? 0;
       const d = r.databases?.length ?? 0;
@@ -477,6 +500,13 @@
                             <b>{ps.name}</b>
                             <span class="faint small mono truncate">{ps.dockerfile ?? ps.image}{ps.port ? ` · :${ps.port}` : ''}{ps.public ? ' · public' : ' · private'}{ps.depends_on?.length ? ` · after ${ps.depends_on.join(', ')}` : ''}</span>
                           </div>
+                          {#if ps.taken}
+                            <div class="conflict small">
+                              <span>A service named <b>{ps.name}</b> already exists in this project. Create this one as</span>
+                              <input class="mono name-in" bind:value={renames[ps.name]} aria-label="New name for {ps.name}" spellcheck="false" disabled={importing} />
+                              {#if ps.reached_by?.length}<span class="faint">{ps.reached_by.join(', ')} call{ps.reached_by.length === 1 ? 's' : ''} it <code>{ps.name}</code> in their config: update that too, or delete the existing service first.</span>{/if}
+                            </div>
+                          {/if}
                           {#if ps.links && Object.keys(ps.links).length}
                             <div class="faint small">{#each Object.entries(ps.links) as [k, db] (k)}<code>{k}</code> ← database <b>{db}</b> {/each}</div>
                           {/if}
@@ -486,7 +516,22 @@
                         </li>
                       {/each}
                       {#each cp.databases as d (d.name)}
-                        <li><div class="row nowrap"><Icon name="database" size={14} /><b>{d.name}</b><span class="faint small">managed {d.engine}{d.version ? ' ' + d.version : ''}</span></div></li>
+                        <li>
+                          <div class="row nowrap"><Icon name="database" size={14} /><b>{d.name}</b><span class="faint small">managed {d.engine}{d.version ? ' ' + d.version : ''}</span></div>
+                          {#if d.taken}
+                            <div class="conflict small">
+                              <span>A database named <b>{d.name}</b> already exists in this project.</span>
+                              {#if d.existing}
+                                <label class="opt"><input type="radio" bind:group={dbChoice[d.name]} value="existing" disabled={importing} />Use the existing <b>{d.existing.name}</b> ({d.existing.engine} {d.existing.version}) — the services share its data</label>
+                              {/if}
+                              <label class="opt">
+                                {#if d.existing}<input type="radio" bind:group={dbChoice[d.name]} value="new" disabled={importing} />{/if}
+                                Create a new one named
+                                <input class="mono name-in" bind:value={renames[d.name]} aria-label="New name for database {d.name}" spellcheck="false" disabled={importing || dbChoice[d.name] === 'existing'} />
+                              </label>
+                            </div>
+                          {/if}
+                        </li>
                       {/each}
                     </ul>
                   {/if}
@@ -888,6 +933,25 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--bg-input);
+  }
+  .conflict {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--yellow, #eab308) 40%, var(--border));
+    background: color-mix(in srgb, var(--yellow, #eab308) 8%, transparent);
+  }
+  .conflict .opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .name-in {
+    width: 200px;
+    height: 30px;
   }
   .compose {
     display: flex;

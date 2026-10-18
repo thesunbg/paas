@@ -802,8 +802,18 @@ export interface ComposePlan {
     depends_on?: string[];
     inputs: EnvInput[];
     env_count: number;
+    taken?: boolean;
+    suggested?: string;
+    reached_by?: string[];
   }[];
-  databases: { name: string; engine: string; version?: string }[];
+  databases: {
+    name: string;
+    engine: string;
+    version?: string;
+    taken?: boolean;
+    suggested?: string;
+    existing?: { id: string; name: string; engine: string; version: string };
+  }[];
   warnings: string[];
 }
 
@@ -815,6 +825,8 @@ export interface ImportRepoInput {
   compose_path?: string;
   domain?: string;
   env?: Record<string, Record<string, string>>;
+  rename?: Record<string, string>;
+  existing?: Record<string, string>;
 }
 
 export interface TeamLimits {

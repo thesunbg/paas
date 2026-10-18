@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -108,6 +109,9 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 		Domain         string `json:"domain"`
 		// Env holds the values the user filled in, by service: {"backend": {"OPENAI_API_KEY": "…"}}.
 		Env map[string]map[string]string `json:"env"`
+		// Rename and Existing resolve names already taken (see templateOpts).
+		Rename   map[string]string `json:"rename"`
+		Existing map[string]string `json:"existing"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeError(w, 400, err.Error())
@@ -168,7 +172,7 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	src := &model.ServiceSource{Kind: "git", Repo: in.Repo, Branch: in.Branch, AutoDeploy: true, InstallationID: in.InstallationID}
-	opts := templateOpts{Domain: in.Domain, Repo: src}
+	opts := templateOpts{Domain: in.Domain, Repo: src, Rename: in.Rename, Existing: in.Existing}
 	if in.GitToken != "" {
 		enc, err := s.box.Encrypt(in.GitToken)
 		if err != nil {
@@ -189,12 +193,25 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 }
 
 type templateOpts struct {
+	// Rename gives a service or database of the plan another name (plan name ->
+	// new name), for names already taken in the project.
+	Rename map[string]string
+	// Existing links a database of the plan to a database of the project
+	// instead of creating it (plan name -> database ID).
+	Existing    map[string]string
 	Domain      string               // custom domain of the first public service
 	Repo        *model.ServiceSource // repository of services with a build section
 	GitTokenEnc string
 }
 
 // installPlan creates databases and then services, rejecting name clashes up front.
+func (o templateOpts) name(plan string) string {
+	if r := strings.TrimSpace(o.Rename[plan]); r != "" {
+		return r
+	}
+	return plan
+}
+
 func (s *Server) installPlan(ctx context.Context, p *store.Project, svcs []templates.Service, tdbs []templates.Database, opts templateOpts) ([]*store.Service, []*store.Database, error) {
 	existing, err := s.store.ServicesForProject(ctx, p.ID)
 	if err != nil {
@@ -210,24 +227,51 @@ func (s *Server) installPlan(ctx context.Context, p *store.Project, svcs []templ
 		}
 	}
 	for _, ts := range svcs {
-		if taken[util.Slugify(ts.Name)] {
-			return nil, nil, fmt.Errorf("a service named %q already exists in this project", util.Slugify(ts.Name))
+		slug := util.Slugify(opts.name(ts.Name))
+		if slug == "" {
+			return nil, nil, fmt.Errorf("service %s: the name must contain letters or digits", ts.Name)
 		}
+		if taken[slug] {
+			return nil, nil, fmt.Errorf("a service named %q already exists in this project; choose another name", slug)
+		}
+		taken[slug] = true
 	}
+	reuse := map[string]*store.Database{}
 	for _, tdb := range tdbs {
-		if taken["db:"+util.Slugify(tdb.Name)] {
-			return nil, nil, fmt.Errorf("a database named %q already exists in this project", util.Slugify(tdb.Name))
+		if id := opts.Existing[tdb.Name]; id != "" {
+			db, err := s.store.DatabaseByID(ctx, id)
+			if err != nil || db.ProjectID != p.ID {
+				return nil, nil, fmt.Errorf("database %s: the database to reuse is not in this project", tdb.Name)
+			}
+			if db.Engine != tdb.Engine {
+				return nil, nil, fmt.Errorf("database %s: %s is %s, not %s", tdb.Name, db.Name, db.Engine, tdb.Engine)
+			}
+			reuse[tdb.Name] = db
+			continue
 		}
+		name := util.Slugify(opts.name(tdb.Name))
+		if name == "" {
+			return nil, nil, fmt.Errorf("database %s: the name must contain letters or digits", tdb.Name)
+		}
+		if taken["db:"+name] {
+			return nil, nil, fmt.Errorf("a database named %q already exists in this project; choose another name or use the existing one", name)
+		}
+		taken["db:"+name] = true
 	}
 	dbValues := map[string]templates.DBValues{}
 	var createdDBs []*store.Database
 	var dbIDs []string
 	for _, tdb := range tdbs {
+		if db := reuse[tdb.Name]; db != nil {
+			dbValues[tdb.Name] = s.templateDBValues(p, db)
+			dbIDs = append(dbIDs, db.ID)
+			continue
+		}
 		version := tdb.Version
 		if _, err := databases.ImageFor(tdb.Engine, version); err != nil {
 			version = "" // not offered: the engine's default
 		}
-		db, err := s.createDatabase(ctx, p, CreateDatabaseInput{Name: tdb.Name, Engine: tdb.Engine, Mode: tdb.Mode, Version: version})
+		db, err := s.createDatabase(ctx, p, CreateDatabaseInput{Name: opts.name(tdb.Name), Engine: tdb.Engine, Mode: tdb.Mode, Version: version})
 		if err != nil {
 			return nil, createdDBs, fmt.Errorf("database %s: %v", tdb.Name, err)
 		}
@@ -259,7 +303,7 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 		if ts.Private || ts.Type == "worker" || ts.Port == 0 {
 			continue
 		}
-		host := s.generatedDomain(util.Slugify(ts.Name), p.Slug)
+		host := s.generatedDomain(util.Slugify(opts.name(ts.Name)), p.Slug)
 		if first && opts.Domain != "" {
 			host = opts.Domain
 		}
@@ -268,7 +312,8 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 	}
 	var out []*store.Service
 	for _, ts := range list {
-		slug := util.Slugify(ts.Name)
+		name := opts.name(ts.Name)
+		slug := util.Slugify(name)
 		host := hosts[ts.Name]
 		typ := model.TypeWeb
 		if ts.Type == "worker" || ts.Port == 0 {
@@ -276,7 +321,7 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 		}
 		spec := model.ServiceSpec{Port: ts.Port, Replicas: 1, Image: ts.Image, Volumes: ts.Volumes, Command: ts.Command}
 		for _, d := range ts.DependsOn {
-			spec.DependsOn = append(spec.DependsOn, util.Slugify(d))
+			spec.DependsOn = append(spec.DependsOn, util.Slugify(opts.name(d)))
 		}
 		if ts.Health != "" {
 			spec.HealthCheck = model.HealthCheck{Type: "http", Path: ts.Health, TimeoutSec: 180}
@@ -292,7 +337,7 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 			return out, fmt.Errorf("%s: %w", ts.Name, err)
 		}
 		svc := &store.Service{
-			ProjectID: p.ID, Name: ts.Name, Slug: slug, Type: typ,
+			ProjectID: p.ID, Name: name, Slug: slug, Type: typ,
 			Source: model.ServiceSource{Kind: "image", Image: ts.Image}, Spec: spec, WebhookSecret: util.RandomToken(20),
 		}
 		if ts.Build != nil {
@@ -415,6 +460,7 @@ func (s *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 	if rep.Compose != nil {
 		if plan, err := templates.ParseCompose([]byte(rep.Compose.Content), templates.ComposeOptions{Dir: path.Dir(rep.Compose.Path), Repo: true, Files: rep.Compose.Files}); err == nil {
 			out.ComposePlan = previewOf(plan)
+			s.markConflicts(r.Context(), p, out.ComposePlan)
 		}
 		// The browser only needs the summary; env files can hold secrets.
 		rep.Compose.Content, rep.Compose.Files = "", nil
@@ -425,9 +471,25 @@ func (s *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 // composePreview is what importing a compose file will create, for the UI to
 // show (and collect missing variables) before anything is created.
 type composePreview struct {
-	Services  []previewService     `json:"services"`
-	Databases []templates.Database `json:"databases"`
-	Warnings  []string             `json:"warnings"`
+	Services  []previewService  `json:"services"`
+	Databases []previewDatabase `json:"databases"`
+	Warnings  []string          `json:"warnings"`
+}
+
+type previewDatabase struct {
+	templates.Database
+	// Taken: the name is used in the project; Suggested is a free one, and
+	// Existing the database of the same engine and name that could be reused.
+	Taken     bool              `json:"taken,omitempty"`
+	Suggested string            `json:"suggested,omitempty"`
+	Existing  *existingDatabase `json:"existing,omitempty"`
+}
+
+type existingDatabase struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Engine  string `json:"engine"`
+	Version string `json:"version"`
 }
 
 type previewService struct {
@@ -440,10 +502,17 @@ type previewService struct {
 	DependsOn  []string             `json:"depends_on,omitempty"`
 	Inputs     []templates.EnvInput `json:"inputs"`
 	EnvCount   int                  `json:"env_count"`
+	Taken      bool                 `json:"taken,omitempty"`
+	Suggested  string               `json:"suggested,omitempty"`
+	// ReachedBy lists the services of the plan that call this one by name.
+	ReachedBy []string `json:"reached_by,omitempty"`
 }
 
 func previewOf(plan *templates.ComposePlan) *composePreview {
-	out := &composePreview{Services: []previewService{}, Databases: plan.Databases, Warnings: plan.Warnings}
+	out := &composePreview{Services: []previewService{}, Databases: []previewDatabase{}, Warnings: plan.Warnings}
+	for _, d := range plan.Databases {
+		out.Databases = append(out.Databases, previewDatabase{Database: d})
+	}
 	for _, s := range plan.Services {
 		ps := previewService{
 			Name: s.Name, Public: !s.Private && s.Port > 0 && s.Type != "worker", Port: s.Port, Image: s.Image,
@@ -455,7 +524,55 @@ func previewOf(plan *templates.ComposePlan) *composePreview {
 		if s.Build != nil {
 			ps.Dockerfile = path.Join(s.Build.RootDir, firstNonEmpty(s.Build.Dockerfile, "Dockerfile"))
 		}
+		for _, o := range plan.Services {
+			if slices.Contains(o.DependsOn, s.Name) {
+				ps.ReachedBy = append(ps.ReachedBy, o.Name)
+			}
+		}
 		out.Services = append(out.Services, ps)
 	}
 	return out
+}
+
+// markConflicts flags the names of a plan already used in the project and
+// suggests free ones.
+func (s *Server) markConflicts(ctx context.Context, p *store.Project, cp *composePreview) {
+	taken := map[string]bool{}
+	if svcs, err := s.store.ServicesForProject(ctx, p.ID); err == nil {
+		for _, e := range svcs {
+			taken[e.Slug] = true
+		}
+	}
+	dbs, _ := s.store.DatabasesForProject(ctx, p.ID)
+	dbTaken := map[string]bool{}
+	for _, d := range dbs {
+		dbTaken[d.Name] = true
+	}
+	free := func(base string, used map[string]bool) string {
+		for i := 2; ; i++ {
+			if n := fmt.Sprintf("%s-%d", base, i); !used[n] {
+				used[n] = true
+				return n
+			}
+		}
+	}
+	for i := range cp.Services {
+		ps := &cp.Services[i]
+		if slug := util.Slugify(ps.Name); taken[slug] {
+			ps.Taken, ps.Suggested = true, free(slug, taken)
+		}
+	}
+	for i := range cp.Databases {
+		pd := &cp.Databases[i]
+		name := util.Slugify(pd.Name)
+		if !dbTaken[name] {
+			continue
+		}
+		pd.Taken, pd.Suggested = true, free(name, dbTaken)
+		for _, d := range dbs {
+			if d.Name == name && d.Engine == pd.Engine {
+				pd.Existing = &existingDatabase{ID: d.ID, Name: d.Name, Engine: d.Engine, Version: d.Version}
+			}
+		}
+	}
 }
