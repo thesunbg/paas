@@ -185,6 +185,9 @@
         <p class="sub">Created {relTime(db.created_at)} · backups {db.backup_schedule_hours ? `every ${db.backup_schedule_hours} h` : 'manual only'}</p>
       </div>
       <div class="row">
+        {#if isDev && db.status === 'ready'}
+          <a class="btn primary" href={href(`/projects/${db.project_id}/studio?db=${db.id}`)} target="_blank" rel="noopener" title="Browse and query this database in dbweb"><Icon name="terminal" size={14} />Open in dbweb</a>
+        {/if}
         {#if isAdmin && db.mode === 'shared' && db.status === 'ready'}
           <button onclick={() => (upgradeOpen = true)} disabled={!!busy}><Icon name="zap" size={14} />Upgrade to dedicated</button>
         {/if}

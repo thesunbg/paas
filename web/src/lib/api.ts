@@ -817,6 +817,13 @@ export interface ComposePlan {
   warnings: string[];
 }
 
+export interface StudioState {
+  service_id: string;
+  status: 'building' | 'starting' | 'ready' | 'failed';
+  url?: string;
+  deployment?: { id: string; status: string; error?: string };
+}
+
 export interface ImportRepoInput {
   repo: string;
   branch: string;
@@ -897,6 +904,7 @@ export const api = {
   // Projects
   project: (id: string) => get<ProjectDetail>(`/projects/${e(id)}`),
   deleteProject: (id: string) => del(`/projects/${e(id)}`),
+  openStudio: (project: string, database_id?: string) => post<StudioState>(`/projects/${e(project)}/studio`, database_id ? { database_id } : {}),
   renameProject: (id: string, name: string) => patch<Project>(`/projects/${e(id)}`, { name }),
   createService: (project: string, input: ServiceInput) => post<CreateServiceResponse>(`/projects/${e(project)}/services`, input),
   createDatabase: (project: string, input: CreateDatabaseInput) => post<Database>(`/projects/${e(project)}/databases`, input),

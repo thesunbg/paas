@@ -231,6 +231,9 @@
               </div>
             {/if}
           </div>
+          {#if data.databases.length}
+            <a class="btn" href={href(`/projects/${p.id}/studio`)} target="_blank" rel="noopener" title="Browse and query this project's databases in dbweb"><Icon name="terminal" />DB studio</a>
+          {/if}
           <button onclick={() => (dbOpen = true)}><Icon name="database" />New database</button>
           <a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />New service</a>
         {/if}

@@ -47,7 +47,7 @@ func (e quotaError) Error() string { return e.msg }
 func (s *Server) countTeam(ctx context.Context, teamID, what string) (int, error) {
 	q := map[string]string{
 		"projects":  `SELECT count(*) FROM projects WHERE team_id=$1`,
-		"services":  `SELECT count(*) FROM services sv JOIN projects p ON p.id=sv.project_id WHERE p.team_id=$1 AND sv.parent_id IS NULL AND sv.type <> 'database'`,
+		"services":  `SELECT count(*) FROM services sv JOIN projects p ON p.id=sv.project_id WHERE p.team_id=$1 AND sv.parent_id IS NULL AND sv.type <> 'database' AND COALESCE(sv.spec->>'role', '') = ''`,
 		"databases": `SELECT count(*) FROM databases d JOIN projects p ON p.id=d.project_id WHERE p.team_id=$1`,
 	}[what]
 	var n int

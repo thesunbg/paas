@@ -76,6 +76,11 @@ func (s *Server) routeTable(ctx context.Context) (*model.RouteTable, error) {
 	if s.cfg.DashboardDomain != "" {
 		t.Routes = append(t.Routes, model.Route{Host: s.cfg.DashboardDomain, Kind: "dashboard"})
 	}
+	studioKey, err := s.studioKey(ctx)
+	if err != nil {
+		slog.Warn("studio key", "err", err)
+		studioKey = ""
+	}
 	for _, d := range domains {
 		svc := byID[d.ServiceID]
 		// The dashboard and database hosts belong to the platform; a service row
@@ -84,6 +89,12 @@ func (s *Server) routeTable(ctx context.Context) (*model.RouteTable, error) {
 			continue
 		}
 		r := model.Route{Host: d.Hostname, ServiceID: svc.ID}
+		if svc.Spec.Role == roleStudio {
+			if studioKey == "" {
+				continue // never serve a studio ungated
+			}
+			r.Gate = studioGate(studioKey, svc.ID)
+		}
 		switch {
 		case staticPaths[svc.ID] != "":
 			r.Kind = "static"

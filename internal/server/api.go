@@ -80,6 +80,7 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/projects/{id}", s.handleGetProject)
 	h("DELETE /api/v1/projects/{id}", s.handleDeleteProject)
 	h("PATCH /api/v1/projects/{id}", s.handleUpdateProject)
+	h("POST /api/v1/projects/{id}/studio", s.handleStudio)
 	h("POST /api/v1/projects/{id}/services", s.handleCreateService)
 	h("POST /api/v1/projects/{id}/databases", s.handleCreateDatabase)
 	h("POST /api/v1/projects/{id}/templates/{template}", s.handleInstallTemplate)

@@ -118,7 +118,10 @@ type ServiceSpec struct {
 	// DependsOn names services of the project (by slug) this one talks to. They
 	// start first, and it restarts after they are redeployed: programs such as
 	// nginx resolve their upstreams once at startup and would keep a stale IP.
-	DependsOn     []string  `json:"depends_on,omitempty"`
+	DependsOn []string `json:"depends_on,omitempty"`
+	// Role marks services the platform runs for a project ("studio": the DB
+	// studio). They are hidden from service lists and limits.
+	Role          string    `json:"role,omitempty"`
 	Previews      bool      `json:"previews,omitempty"` // deploy a preview for every pull request
 	Autoscale     Autoscale `json:"autoscale"`
 	Schedule      string    `json:"schedule,omitempty"` // cron jobs: 5-field cron expression
@@ -144,6 +147,18 @@ type Route struct {
 	// StaticOrigin serves StaticRoot over the mesh for proxies on other nodes.
 	StaticOrigin string `json:"static_origin,omitempty"`
 	SPA          bool   `json:"spa,omitempty"`
+	// Gate admits only browsers holding a ticket from the control plane (the DB studio).
+	Gate *RouteGate `json:"gate,omitempty"`
+}
+
+// RouteGate protects a route that has no login of its own. The control plane
+// hands the user a short-lived ticket (signed with Key) in the URL; the edge
+// trades it for a session cookie and adds Header: Value to forwarded requests,
+// which the upstream requires, so nothing else on its network can use it.
+type RouteGate struct {
+	Key    string `json:"key"`
+	Header string `json:"header"`
+	Value  string `json:"value"`
 }
 
 type RouteTable struct {

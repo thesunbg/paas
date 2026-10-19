@@ -25,6 +25,8 @@ type Server struct {
 	ClusterBase     string // PAAS_CLUSTER_BASE, first two octets of the container address space (default 10.100)
 	S3              S3     // off-site backups
 	DBHost          string // PAAS_DB_HOST, public host for external database access (default db.<base>)
+	StudioRepo      string // PAAS_STUDIO_REPO, git repository of the DB studio (dbweb)
+	StudioBranch    string // PAAS_STUDIO_BRANCH
 	DBPortMin       int    // PAAS_DB_PORT_MIN, first public port for databases (default 20000)
 	DBPortMax       int    // PAAS_DB_PORT_MAX (default 20999)
 
@@ -132,6 +134,8 @@ func LoadServer() Server {
 		AllowLocalGit:   envBool("PAAS_ALLOW_LOCAL_GIT", false),
 		ImageRetention:  envInt("PAAS_IMAGE_RETENTION", 3),
 		DBHost:          env("PAAS_DB_HOST", "db."+base),
+		StudioRepo:      env("PAAS_STUDIO_REPO", "https://github.com/thesunbg/dbweb.git"),
+		StudioBranch:    env("PAAS_STUDIO_BRANCH", "main"),
 		DBPortMin:       envInt("PAAS_DB_PORT_MIN", 20000),
 		DBPortMax:       envInt("PAAS_DB_PORT_MAX", 20999),
 		ClusterBase:     env("PAAS_CLUSTER_BASE", "10.100"),

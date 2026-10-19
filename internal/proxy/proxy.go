@@ -290,6 +290,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	sw := &statusWriter{ResponseWriter: w, status: 200}
 	defer func() { p.record(e.route.ServiceID, sw.status) }()
+	if g := e.route.Gate; g != nil && !gate(sw, r, g, hostOnly(r.Host)) {
+		return
+	}
 	switch e.route.Kind {
 	case "dashboard":
 		if p.dashboard == nil {

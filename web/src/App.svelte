@@ -10,6 +10,7 @@
   import Projects from './pages/Projects.svelte';
   import ProjectPage from './pages/Project.svelte';
   import NewService from './pages/NewService.svelte';
+  import Studio from './pages/Studio.svelte';
   import ServicePage from './pages/Service.svelte';
   import DatabasePage from './pages/Database.svelte';
   import Nodes from './pages/Nodes.svelte';
@@ -85,6 +86,8 @@
     {#key p.slice(0, 2).join('/')}
       {#if p.length === 0 || p[0] === 'projects' && p.length === 1}
         <Projects />
+      {:else if p[0] === 'projects' && p[2] === 'studio'}
+        <Studio projectId={p[1]} />
       {:else if p[0] === 'projects' && p[2] === 'new-service'}
         <NewService projectId={p[1]} />
       {:else if p[0] === 'projects' && p[1]}

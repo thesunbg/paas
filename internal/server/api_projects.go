@@ -33,7 +33,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		it := item{Project: p}
 		svcs, _ := s.store.ServicesForProject(r.Context(), p.ID)
 		for _, sv := range svcs {
-			if sv.Type == model.TypeDatabase {
+			if hiddenService(&sv) {
 				continue
 			}
 			it.Services++
@@ -138,7 +138,7 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	}
 	services := []svcItem{}
 	for _, sv := range svcs {
-		if sv.Type == model.TypeDatabase {
+		if hiddenService(&sv) {
 			continue
 		}
 		it := svcItem{Service: sv}
@@ -199,7 +199,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		for _, p := range ps {
 			svcs, _ := s.store.ServicesForProject(ctx, p.ID)
 			for _, sv := range svcs {
-				if sv.Type == model.TypeDatabase {
+				if hiddenService(&sv) {
 					continue
 				}
 				services++

@@ -505,6 +505,9 @@ func (s *Server) syncBaseDomain(ctx context.Context) {
 			continue
 		}
 		host := s.generatedDomain(svc.Slug, proj.Slug)
+		if svc.Spec.Role == roleStudio {
+			host = s.studioHost(proj)
+		}
 		if _, err := s.store.Q(ctx).Exec(ctx, `UPDATE domains SET hostname=$2 WHERE id=$1`, d.ID, host); err != nil {
 			slog.Warn("move generated domain", "from", d.Hostname, "to", host, "err", err)
 			continue
