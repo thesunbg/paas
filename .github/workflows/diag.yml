@@ -3,21 +3,19 @@ on:
   push:
     branches: [diag]
 jobs:
-  diag:
+  dbweb-image:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      HOST: 202.92.6.129
-      PORT: "24700"
-      SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+    timeout-minutes: 25
     steps:
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass >/dev/null
-      - name: Diagnose
+      - run: git clone --depth 1 https://github.com/thesunbg/dbweb /tmp/dbweb
+      - run: docker build -t dbweb-test /tmp/dbweb
+      - name: Run embedded and probe the guard
         run: |
-          sshpass -e ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -p $PORT root@$HOST 'bash -s' <<'SH'
-          set +e
-          . /etc/paas/db.env
-          hostname; sha256sum /usr/local/bin/paasd; ls -la /usr/local/bin/paasd
-          psql "$PAAS_DATABASE_URL" -XAtc "select name,address,status,version,last_seen_at from nodes"
-          psql "$PAAS_DATABASE_URL" -XAtc "select s.slug,p.slug,i.status,n.name from instances i join services s on s.id=i.service_id join projects p on p.id=s.project_id join nodes n on n.id=i.node_id where s.slug in ('web','server') order by i.created_at desc limit 6"
-          SH
+          docker run -d --name dbweb -p 4317:4317 -e DBWEB_EMBED_TOKEN=test-token-1234567890 \
+            -e DBWEB_CONNECTIONS='[{"id":"paas-1","name":"x","kind":"postgres","host":"127.0.0.1","port":5432}]' dbweb-test
+          for i in $(seq 1 60); do curl -sf localhost:4317/api/health && break; sleep 2; done
+          echo; docker logs dbweb 2>&1 | tail -20
+          echo "--- no token:"; curl -s localhost:4317/api/connections; echo
+          echo "--- token:"; curl -s -H 'x-dbweb-token: test-token-1234567890' localhost:4317/api/connections; echo
+          echo "--- ui:"; curl -s -H 'x-dbweb-token: test-token-1234567890' localhost:4317/ | head -c 200; echo
+          docker images dbweb-test
