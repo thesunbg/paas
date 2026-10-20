@@ -25,6 +25,7 @@ type Database struct {
 	BackupScheduleHours int        `json:"backup_schedule_hours"`
 	LastBackupAt        *time.Time `json:"last_backup_at"`
 	Options             DBOptions  `json:"options"`
+	MoveState           *MoveState `json:"-"`
 	OptionsVersion      int64      `json:"options_version"` // bumped by UpdateDatabaseOptions
 	CreatedAt           time.Time  `json:"created_at"`
 }
@@ -48,12 +49,12 @@ type DBOptions struct {
 	ReplicaServiceID string `json:"replica_service_id,omitempty"`
 }
 
-const databaseCols = `id, project_id, name, engine, version, mode, server_service_id, db_name, username, password_enc, size_preset, status, error, backup_schedule_hours, last_backup_at, options, options_version, created_at`
+const databaseCols = `id, project_id, name, engine, version, mode, server_service_id, db_name, username, password_enc, size_preset, status, error, backup_schedule_hours, last_backup_at, options, move_state, options_version, created_at`
 
 func scanDatabase(row pgx.Row) (*Database, error) {
 	var d Database
 	err := row.Scan(&d.ID, &d.ProjectID, &d.Name, &d.Engine, &d.Version, &d.Mode, &d.ServerServiceID, &d.DBName, &d.Username, &d.PasswordEnc,
-		&d.SizePreset, &d.Status, &d.Error, &d.BackupScheduleHours, &d.LastBackupAt, &d.Options, &d.OptionsVersion, &d.CreatedAt)
+		&d.SizePreset, &d.Status, &d.Error, &d.BackupScheduleHours, &d.LastBackupAt, &d.Options, &d.MoveState, &d.OptionsVersion, &d.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -115,9 +116,37 @@ func (s *Store) SetDatabaseStatus(ctx context.Context, id, status, errMsg string
 	return err
 }
 
-func (s *Store) SetDatabaseMode(ctx context.Context, id, mode string, serverServiceID *string) error {
-	_, err := s.q(ctx).Exec(ctx, `UPDATE databases SET mode=$2, server_service_id=$3 WHERE id=$1`, id, mode, serverServiceID)
+// Phases of a MoveState: before the flip the old server is still the database; from the flip on the
+// new one is.
+const (
+	MovePrepare = "prepare"
+	MoveFlip    = "flip"
+)
+
+// MoveState is the progress record of a database move (see migration 021).
+type MoveState struct {
+	Phase           string   `json:"phase"`
+	OldService      string   `json:"old_service"`
+	NewService      string   `json:"new_service,omitempty"`
+	TargetVersion   string   `json:"target_version"`
+	TargetDedicated bool     `json:"target_dedicated"`
+	OldShared       bool     `json:"old_shared"`
+	Stopped         []string `json:"stopped,omitempty"` // linked services stopped for the move, to start again at the end
+}
+
+// SetMoveState records (nil clears) the progress of a move.
+func (s *Store) SetMoveState(ctx context.Context, id string, m *MoveState) error {
+	_, err := s.q(ctx).Exec(ctx, `UPDATE databases SET move_state=$2 WHERE id=$1`, id, m)
 	return err
+}
+
+// FlipDatabase points the database at its new server in one compare-and-swap on the old one, and
+// records the flip phase in the same statement. It reports whether the swap happened.
+func (s *Store) FlipDatabase(ctx context.Context, id, oldService, newService, version, mode string, m MoveState) (bool, error) {
+	m.Phase = MoveFlip
+	tag, err := s.q(ctx).Exec(ctx, `UPDATE databases SET server_service_id=$3, version=$4, mode=$5, move_state=$6 WHERE id=$1 AND server_service_id=$2`,
+		id, oldService, newService, version, mode, m)
+	return tag.RowsAffected() == 1, err
 }
 
 // ClaimDatabaseStatus moves a database from `from` to `to` and reports whether it was in `from`.

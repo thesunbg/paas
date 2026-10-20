@@ -37,6 +37,21 @@ type minorAgent struct {
 	refreshErr string
 	digest     string
 	refreshed  []string
+	tl         []string                                  // timeline of container commands: "exec <cid> ...", "stop <cid>", "run <cid> <image>"
+	runs       []proto.RunRequest                        // every run request, in order
+	execHook   func(*proto.ExecRequest) *proto.ExecReply // a test's answer to an exec (nil = success)
+}
+
+func (a *minorAgent) timeline(op string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tl = append(a.tl, op)
+}
+
+func (a *minorAgent) tlCopy() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.tl...)
 }
 
 func (a *minorAgent) log(op string) {
@@ -60,6 +75,15 @@ func newMinorAgent(t *testing.T, s *Server, nodeID string) *minorAgent {
 	}
 	reg(bus.Handle(s.nc, proto.AgentSubject(nodeID, proto.CmdExec), func(_ context.Context, r *proto.ExecRequest) *proto.ExecReply {
 		a.log("exec")
+		a.mu.Lock()
+		hook := a.execHook
+		a.mu.Unlock()
+		a.timeline("exec " + r.ContainerID + " " + strings.Join(r.Cmd, " ") + " | " + r.Stdin + " | " + strings.Join(r.Env, " "))
+		if hook != nil {
+			if rep := hook(r); rep != nil {
+				return rep
+			}
+		}
 		return &proto.ExecReply{StdoutBytes: 42}
 	}))
 	reg(bus.Handle(s.nc, proto.AgentSubject(nodeID, proto.CmdRefreshImage), func(_ context.Context, r *proto.RefreshImageRequest) *proto.RefreshImageReply {
@@ -74,10 +98,15 @@ func newMinorAgent(t *testing.T, s *Server, nodeID string) *minorAgent {
 	}))
 	reg(bus.Handle(s.nc, proto.AgentSubject(nodeID, proto.CmdStop), func(_ context.Context, r *proto.StopRequest) *proto.GenericReply {
 		a.log("stop")
+		a.timeline("stop " + r.ContainerID)
 		return &proto.GenericReply{}
 	}))
 	reg(bus.Handle(s.nc, proto.AgentSubject(nodeID, proto.CmdRun), func(_ context.Context, r *proto.RunRequest) *proto.RunReply {
 		a.log("run " + r.Image)
+		a.timeline("run " + r.ContainerID + " " + r.Image)
+		a.mu.Lock()
+		a.runs = append(a.runs, *r)
+		a.mu.Unlock()
 		return &proto.RunReply{ContainerID: r.ContainerID, IP: "10.0.0.9"}
 	}))
 	reg(bus.Handle(s.nc, proto.AgentSubject(nodeID, proto.CmdRemoveFiles), func(_ context.Context, r *proto.RemoveFilesRequest) *proto.GenericReply {

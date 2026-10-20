@@ -47,6 +47,9 @@
     act('resize', () => api.resizeDatabase(id, resizeSize), `Resizing to ${resizeSize} — the server restarts`);
   }
   let upgradeSize = $state('small');
+  let versionOpen = $state(false);
+  let versionTarget = $state('');
+  let versionConfirm = $state(false);
 
   const transitional = (s?: string) => s === 'provisioning' || s === 'upgrading' || s === 'deleting' || s === 'importing';
 
@@ -177,6 +180,24 @@
     await act('update-minor', () => api.updateMinor(id, shared), 'Minor update started');
   }
 
+  // Newer, not end-of-life versions of this engine (the catalog lists newest first). Redis cannot be
+  // upgraded; HA, PITR and the pooler must be off first (the API answers 409 otherwise).
+  const upgradeTargets = $derived.by(() => {
+    const vs = cat?.engines?.[db?.engine ?? '']?.versions ?? [];
+    const i = vs.findIndex((v) => v.name === detail?.version);
+    return i < 0 ? [] : vs.slice(0, i).filter((v) => v.status !== 'eol');
+  });
+  const canUpgradeVersion = $derived(
+    !!db && isAdmin && db.status === 'ready' && db.engine !== 'redis' && !db.options?.ha && !db.options?.pitr && !db.options?.pooler && upgradeTargets.length > 0
+  );
+
+  async function upgradeVersion(e: SubmitEvent) {
+    e.preventDefault();
+    if (!versionConfirm || !versionTarget) return;
+    versionOpen = false;
+    await act('version', () => api.upgradeVersion(id, versionTarget), `Upgrade to ${versionTarget} started`);
+  }
+
   async function upgrade(e: SubmitEvent) {
     e.preventDefault();
     upgradeOpen = false;
@@ -214,6 +235,9 @@
         {/if}
         {#if canUpdateMinor}
           <button onclick={updateMinor} disabled={!!busy} title="Pull the newest minor build of this version and restart the server"><Icon name="zap" size={14} />Update minor version</button>
+        {/if}
+        {#if canUpgradeVersion}
+          <button onclick={() => ((versionTarget = upgradeTargets[0].name), (versionConfirm = false), (versionOpen = true))} disabled={!!busy} title="Move to a newer major version (one way)"><Icon name="zap" size={14} />Upgrade version</button>
         {/if}
         {#if isAdmin && db.mode === 'dedicated' && db.status === 'ready'}
           <button onclick={() => ((resizeSize = db.size_preset), (resizeOpen = true))} disabled={!!busy}><Icon name="zap" size={14} />Change size</button>
@@ -382,7 +406,7 @@
 
     <Modal bind:open={upgradeOpen} title="Upgrade to a dedicated server" width={460}>
       <form id="upgrade-form" class="stack" onsubmit={upgrade}>
-        <p class="muted small">Moves {db.name} from the shared server to its own {engineLabel[db.engine]} container. Data is copied with a dump and restore; expect a short write pause. Linked services are restarted with the new URL.</p>
+        <p class="muted small">Moves {db.name} from the shared server to its own {engineLabel[db.engine]} container. Data is copied with a dump and restore. Linked services are stopped while it runs and started again with the new URL.</p>
         <label class="field">
           <span>Size</span>
           <select bind:value={upgradeSize}>
@@ -393,6 +417,28 @@
       {#snippet footer()}
         <button type="button" onclick={() => (upgradeOpen = false)}>Cancel</button>
         <button type="submit" form="upgrade-form" class="primary">Upgrade</button>
+      {/snippet}
+    </Modal>
+    <Modal bind:open={versionOpen} title="Upgrade major version" width={520}>
+      <form id="version-form" class="stack" onsubmit={upgradeVersion}>
+        <p class="muted small">
+          Copies {db.name} to a new {engineLabel[db.engine] ?? db.engine} server on the version you pick, checks that every table and row count matches, then switches over and
+          deletes the old server. <b>This cannot be undone</b>: there is no way back to {detail?.version}. A backup taken just before is kept until the database is deleted.
+        </p>
+        <label class="field">
+          <span>New version</span>
+          <select bind:value={versionTarget}>
+            {#each upgradeTargets as v (v.name)}<option value={v.name}>{v.name}{v.status === 'ending' ? ` (ends ${v.eol})` : ''}</option>{/each}
+          </select>
+        </label>
+        <label class="row nowrap">
+          <input type="checkbox" bind:checked={versionConfirm} />
+          <span class="small">I understand that services using this database stop until the upgrade is finished (from a few minutes, longer for big databases).</span>
+        </label>
+      </form>
+      {#snippet footer()}
+        <button type="button" onclick={() => (versionOpen = false)}>Cancel</button>
+        <button type="submit" form="version-form" class="primary" disabled={!versionConfirm || !versionTarget}>Upgrade</button>
       {/snippet}
     </Modal>
     <Modal bind:open={resizeOpen} title="Change size" width={460}>

@@ -205,7 +205,7 @@ func (s *Server) provisionDatabase(ctx context.Context, dbID string) {
 			return
 		}
 	} else {
-		srv, err = s.createDedicatedServer(ctx, db, nil)
+		srv, err = s.createDedicatedServer(ctx, db, dedicatedOpts{onCreated: func(id string) error { return s.store.SetDatabaseServer(ctx, db.ID, id) }})
 		if err != nil {
 			fail(err)
 			return
@@ -216,14 +216,18 @@ func (s *Server) provisionDatabase(ctx context.Context, dbID string) {
 	s.restartLinked(ctx, db.ID)
 }
 
+func sharedSlug(engine, version string) string {
+	slug := "shared-" + engine
+	if version != databases.Engines[engine].DefaultVersion {
+		slug += "-" + strings.ReplaceAll(version, ".", "-")
+	}
+	return slug
+}
+
 // ensureSharedServer returns the shared server for an engine, creating and deploying it on first use.
 // Each engine version has its own shared server; the default one keeps "shared-<engine>".
 func (s *Server) ensureSharedServer(ctx context.Context, engine, version string) (*store.Service, error) {
-	slug := "shared-" + engine
-	e := databases.Engines[engine]
-	if version != e.DefaultVersion {
-		slug += "-" + strings.ReplaceAll(version, ".", "-")
-	}
+	slug := sharedSlug(engine, version)
 	unlock := s.lock("shared-server-" + slug)
 	defer unlock()
 	services, err := s.store.ServicesForProject(ctx, s.systemProjectID)
@@ -267,19 +271,24 @@ func (s *Server) ensureSharedServer(ctx context.Context, engine, version string)
 	return srv, s.waitServiceRunning(ctx, srv.ID, 10*time.Minute)
 }
 
-func (s *Server) createDedicatedServer(ctx context.Context, db *store.Database, pinNode *string) (*store.Service, error) {
+// dedicatedOpts tune createDedicatedServer. The server is never attached to the database here: the
+// caller does it (provisioning at once, a move only at the flip).
+type dedicatedOpts struct {
+	pinNode   *string
+	slug      string                // "" = the database name
+	onCreated func(id string) error // the service row exists, nothing is deployed yet
+}
+
+func (s *Server) createDedicatedServer(ctx context.Context, db *store.Database, o dedicatedOpts) (*store.Service, error) {
 	c, _, _ := s.dbCreds(ctx, db) // server not yet linked; host is filled later
 	spec, err := s.dedicatedSpec(db, c)
 	if err != nil {
 		return nil, err
 	}
-	slug := util.Slugify(db.Name)
-	if db.Mode == "shared" { // upgrading: avoid a clash with an app of the same name
-		slug = util.Slugify(db.Name + "-db")
-	}
+	slug := util.Slugify(firstNonEmpty(o.slug, db.Name))
 	srv, err := s.store.CreateService(ctx, &store.Service{
 		ProjectID: db.ProjectID, Name: db.Name + " (" + db.Engine + ")", Slug: slug, Type: model.TypeDatabase,
-		Source: model.ServiceSource{Kind: "image", Image: spec.Image}, Spec: spec, WebhookSecret: util.RandomToken(16), NodeID: pinNode,
+		Source: model.ServiceSource{Kind: "image", Image: spec.Image}, Spec: spec, WebhookSecret: util.RandomToken(16), NodeID: o.pinNode,
 	})
 	if err != nil {
 		if store.IsUniqueViolation(err) {
@@ -287,13 +296,14 @@ func (s *Server) createDedicatedServer(ctx context.Context, db *store.Database, 
 		}
 		return nil, err
 	}
-	if db.Mode != "shared" {
-		if err := s.store.SetDatabaseServer(ctx, db.ID, srv.ID); err != nil {
+	if o.onCreated != nil {
+		if err := o.onCreated(srv.ID); err != nil {
+			_ = s.store.DeleteService(ctx, srv.ID)
 			return nil, err
 		}
 	}
 	if _, err := s.QueueDeployment(ctx, srv, "system", "", "", nil); err != nil {
-		return nil, err
+		return srv, err
 	}
 	return srv, s.waitServiceRunning(ctx, srv.ID, 10*time.Minute)
 }
@@ -377,33 +387,8 @@ func (s *Server) deleteDatabase(ctx context.Context, db *store.Database) error {
 	s.removePooler(ctx, db)
 	s.removeStandby(ctx, db)
 	if db.ServerServiceID != nil {
-		srv, err := s.store.ServiceByID(ctx, *db.ServerServiceID)
-		if err == nil {
-			if db.Mode == "shared" {
-				c, _, err := s.dbCreds(ctx, db)
-				if err == nil {
-					// Roles are global on a shared server: drop the extra users first.
-					users, _ := s.store.DBUsers(ctx, db.ID)
-					for _, u := range users {
-						if cmd, err := databases.DropUser(db.Engine, true, c, u.Username); err == nil {
-							_ = s.execOnService(ctx, srv.ID, cmd, "", "", 1)
-						}
-					}
-					if cmd, err := databases.DropLogical(db.Engine, c); err == nil {
-						if err := s.execOnService(ctx, srv.ID, cmd, "", "", 2); err != nil {
-							slog.Warn("drop logical database", "db", db.Name, "err", err)
-						}
-					}
-				}
-			} else {
-				node := srv.NodeID
-				if err := s.deleteService(ctx, srv); err != nil {
-					return err
-				}
-				if node != nil {
-					_ = s.requestAgent(ctx, *node, proto.CmdRemoveFiles, proto.RemoveFilesRequest{Paths: []string{filepath.Join("volumes", srv.ID)}}, &proto.GenericReply{}, time.Minute)
-				}
-			}
+		if err := s.dropPlacement(ctx, db, *db.ServerServiceID, db.Mode == "shared"); err != nil {
+			return err
 		}
 	}
 	backups, _ := s.store.BackupsForDatabase(ctx, db.ID)
@@ -413,6 +398,44 @@ func (s *Server) deleteDatabase(ctx context.Context, db *store.Database) error {
 		}
 	}
 	return s.store.DeleteDatabase(ctx, db.ID)
+}
+
+// dropPlacement removes a database from a server it lives on (or lived on): on a shared server the
+// logical database and its roles (extra users first: roles are global there), on a dedicated one the
+// whole server with its volume.
+func (s *Server) dropPlacement(ctx context.Context, db *store.Database, serviceID string, shared bool) error {
+	srv, err := s.store.ServiceByID(ctx, serviceID)
+	if err != nil {
+		return nil // already gone
+	}
+	if shared {
+		at := *db
+		at.ServerServiceID, at.Mode = &serviceID, "shared"
+		c, _, err := s.dbCreds(ctx, &at)
+		if err != nil {
+			return nil
+		}
+		users, _ := s.store.DBUsers(ctx, db.ID)
+		for _, u := range users {
+			if cmd, err := databases.DropUser(db.Engine, true, c, u.Username); err == nil {
+				_ = s.execOnService(ctx, srv.ID, cmd, "", "", 1)
+			}
+		}
+		if cmd, err := databases.DropLogical(db.Engine, c); err == nil {
+			if err := s.execOnService(ctx, srv.ID, cmd, "", "", 2); err != nil {
+				slog.Warn("drop logical database", "db", db.Name, "err", err)
+			}
+		}
+		return nil
+	}
+	node := srv.NodeID
+	if err := s.deleteService(ctx, srv); err != nil {
+		return err
+	}
+	if node != nil {
+		_ = s.requestAgent(ctx, *node, proto.CmdRemoveFiles, proto.RemoveFilesRequest{Paths: []string{filepath.Join("volumes", srv.ID)}}, &proto.GenericReply{}, time.Minute)
+	}
+	return nil
 }
 
 // backupDatabase dumps a database to a file on the node running its server.
@@ -475,7 +498,9 @@ func (s *Server) backupDatabase(ctx context.Context, db *store.Database) (*store
 	return b, nil
 }
 
-func (s *Server) restoreBackup(ctx context.Context, db *store.Database, b *store.Backup) error {
+// restoreBackup restores a backup into the server db points at. foreign: the dump came from another
+// server (a move), see databases.Restore.
+func (s *Server) restoreBackup(ctx context.Context, db *store.Database, b *store.Backup, foreign bool) error {
 	if b.Status != "completed" {
 		return errors.New("backup is not complete")
 	}
@@ -496,7 +521,7 @@ func (s *Server) restoreBackup(ctx context.Context, db *store.Database, b *store
 			return fmt.Errorf("download backup from S3: %w", err)
 		}
 	}
-	cmd, err := databases.Restore(db.Engine, db.Mode == "shared", c)
+	cmd, err := databases.Restore(db.Engine, db.Mode == "shared", c, foreign)
 	if err != nil {
 		return err
 	}
@@ -525,46 +550,6 @@ func (s *Server) runScheduledBackups(ctx context.Context) {
 			_ = s.store.TouchDatabaseBackup(ctx, db.ID) // do not retry every minute
 		}
 	}
-}
-
-// upgradeDatabase moves a logical database from the shared server to its own dedicated server.
-func (s *Server) upgradeDatabase(ctx context.Context, db *store.Database) error {
-	if db.Mode != "shared" {
-		return errors.New("database is already dedicated")
-	}
-	b, err := s.backupDatabase(ctx, db)
-	if err != nil {
-		return fmt.Errorf("backup before upgrade: %w", err)
-	}
-	oldServer := *db.ServerServiceID
-	oldCreds, _, err := s.dbCreds(ctx, db)
-	if err != nil {
-		return err
-	}
-	srv, err := s.createDedicatedServer(ctx, db, b.NodeID)
-	if err != nil {
-		return err
-	}
-	if err := s.store.SetDatabaseMode(ctx, db.ID, "dedicated", &srv.ID); err != nil {
-		return err
-	}
-	db.Mode, db.ServerServiceID = "dedicated", &srv.ID
-	c, _, err := s.dbCreds(ctx, db)
-	if err != nil {
-		return err
-	}
-	cmd, err := databases.Restore(db.Engine, false, c)
-	if err != nil {
-		return err
-	}
-	if err := s.execOnService(ctx, srv.ID, cmd, b.Path, "", 5); err != nil {
-		return fmt.Errorf("restore into dedicated server: %w", err)
-	}
-	if drop, err := databases.DropLogical(db.Engine, oldCreds); err == nil {
-		_ = s.execOnService(ctx, oldServer, drop, "", "", 1)
-	}
-	s.restartLinked(ctx, db.ID)
-	return nil
 }
 
 // transfer asks an agent to move a file to or from object storage with a presigned URL.

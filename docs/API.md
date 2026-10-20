@@ -118,6 +118,7 @@ MySQL 8.4 authenticates with `caching_sha2_password` (`mysql_native_password` is
 | GET/POST | `/databases/{id}/backups` | POST runs a backup now |
 | POST | `/databases/{id}/backups/{backupId}/restore` | |
 | POST | `/databases/{id}/upgrade` | `{size?}` shared → dedicated |
+| POST | `/databases/{id}/version` | `{version, confirm_downtime}` → 202, status `upgrading`. One-way major upgrade, see below |
 | POST | `/databases/{id}/update-minor` | `{confirm_shared?}` → 202, status `upgrading`. See below |
 | POST | `/databases/{id}/retry` | retry failed provisioning |
 
@@ -131,6 +132,24 @@ A database server runs a tag (`postgres:17`) that each node freezes at its first
 - 409 for a database with HA on (turn HA off first) or one that is not `ready`.
 - There is no rollback: the pinned backup is the only way back (restore it into a new database of the same version). Updating a server whose node runs an agent older than this feature fails with "agent is too old" before touching anything.
 - Audit event `database.update_minor`.
+
+### Major upgrade
+
+`POST /databases/{id}/version {"version": "18", "confirm_downtime": true}` moves a database to a newer version of its engine (PostgreSQL, MariaDB, MySQL, MongoDB). It is **one way**: there is no rollback, the old database is deleted at the end. It is a dump and restore into a new server, so it needs downtime for the services that use the database.
+
+1. The services linked to the database are stopped and the database is set read-only (Mongo has no read-only switch: only the stop).
+2. A backup is taken (after the stop) and pinned: retention keeps it until the database is deleted.
+3. The target is created: shared database, the shared server of the new version plus the logical database; dedicated database, a new server `<name>-v<version>` (the old one keeps running).
+4. The backup is restored into it (PostgreSQL without ACLs, which the extra users get again from the replay below; Mongo without `admin.*`) and the extra users are created again.
+5. Verification: same tables (collections) and the same row counts (the 200 biggest tables), and every extra user can log in. A PostgreSQL database that uses an extension the new image lacks is refused before anything is touched when the target shared server already exists, otherwise right after the target is created (before the restore).
+6. The flip: `server_service_id` and `version` change in one compare-and-swap. The linked services start again, one by one, with the new `DATABASE_URL`.
+7. The old logical database (shared) or the old server and its volume (dedicated) is removed at once.
+
+A failure before the flip deletes the target, allows writes again and starts the linked services again: the database stays on its old server, `ready`, with the reason in `error`. `databases.move_state` records progress, so a restart of paasd does the same (before the flip) or finishes steps 6-7 (after it). While a move runs the database is `upgrading` and refuses HA, PITR, import, resize, manual and scheduled backups, restore, update-minor and delete, and the HA monitor skips it.
+
+- Team `admin` (same as `upgrade`). Audit event `database.version`.
+- 400: `confirm_downtime` missing, or a `version` that is not an exact catalog name newer than the current one (only upgrades, in catalog order). 409: target past its end of life, Redis (no restore), HA, PITR or the pooler on (turn them off, upgrade, turn them on), or the database is not `ready`.
+- Extra caveat: a PostgreSQL database loses grants made by hand to roles other than its own extra users.
 
 Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 

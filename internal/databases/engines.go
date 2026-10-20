@@ -161,6 +161,32 @@ func CheckCreate(engine, version string, now time.Time) (string, error) {
 	return st, nil
 }
 
+// CheckUpgrade validates a major upgrade from one catalog version to another: both are in the
+// catalog (exact names), the target is newer (earlier in the list, which is newest first) and is not
+// past its end of life. It returns the target's status.
+func CheckUpgrade(engine, from, to string, now time.Time) (string, error) {
+	st, err := CheckCreate(engine, to, now)
+	if err != nil {
+		return st, err
+	}
+	cur, err := Lookup(engine, from)
+	if err != nil {
+		return "", fmt.Errorf("the current version %s %q is not in the catalog: cannot tell what is newer", engine, from)
+	}
+	for _, v := range Engines[engine].Versions {
+		switch v.Name {
+		case to:
+			if to == cur.Name {
+				return "", fmt.Errorf("%s is already on %s", engine, to)
+			}
+			return st, nil
+		case cur.Name:
+			return "", fmt.Errorf("%s %s is not newer than %s: only upgrades are possible", engine, to, from)
+		}
+	}
+	return st, nil
+}
+
 // ImageFor returns the image of an engine version.
 func ImageFor(engine, version string) (string, error) {
 	if _, err := Lookup(engine, version); err != nil {
@@ -379,8 +405,10 @@ func Backup(engine string, shared bool, c Credentials) (Command, string, error) 
 	return Command{}, "", fmt.Errorf("unknown engine %q", engine)
 }
 
-// Restore returns a command that reads a dump on stdin.
-func Restore(engine string, shared bool, c Credentials) (Command, error) {
+// Restore returns a command that reads a dump on stdin. foreign says the dump was taken on another
+// server (a move): the roles its ACLs name may not exist here (pg_restore would exit non-zero), and
+// a Mongo dump carries the source's admin users, which must not replace the new server's own root.
+func Restore(engine string, shared bool, c Credentials, foreign bool) (Command, error) {
 	switch engine {
 	case Postgres:
 		user := c.Username
@@ -388,6 +416,9 @@ func Restore(engine string, shared bool, c Credentials) (Command, error) {
 			user = "postgres"
 		}
 		cmd := []string{"pg_restore", "-U", user, "--clean", "--if-exists", "--no-owner", "-d", c.DBName}
+		if foreign {
+			cmd = append(cmd, "--no-acl") // extra users get their grants again from CreateUser
+		}
 		if shared {
 			cmd = append(cmd, "--role="+c.Username)
 		}
@@ -396,7 +427,15 @@ func Restore(engine string, shared bool, c Credentials) (Command, error) {
 		f := myFamilies[engine]
 		return Command{Cmd: f.cmd("-uroot"), Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}, nil
 	case Mongo:
-		return Command{Cmd: []string{"mongorestore", "--quiet", "--archive", "--gzip", "--drop", "-u", c.Username, "-p", c.Password, "--authenticationDatabase", "admin"}}, nil
+		cmd := []string{"mongorestore", "--quiet", "--archive", "--gzip", "-u", c.Username, "-p", c.Password, "--authenticationDatabase", "admin"}
+		if foreign {
+			// A new server starts empty: nothing to drop, and admin.* (users, system.version) of the
+			// old server would clobber what the new one just initialised.
+			cmd = append(cmd, "--nsExclude=admin.*", "--nsExclude=config.*")
+		} else {
+			cmd = append(cmd, "--drop")
+		}
+		return Command{Cmd: cmd}, nil
 	}
 	return Command{}, fmt.Errorf("restore is not supported for %s yet", engine)
 }

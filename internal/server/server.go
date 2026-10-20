@@ -414,6 +414,10 @@ func (s *Server) resumeProvisioning(ctx context.Context) {
 		return
 	}
 	for _, db := range dbs {
+		if db.MoveState != nil { // a move in flight: undo it or finish it, whatever the status says
+			go s.resumeMove(ctx, db.ID)
+			continue
+		}
 		switch db.Status {
 		case "provisioning":
 			go s.provisionDatabase(ctx, db.ID)

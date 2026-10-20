@@ -128,6 +128,10 @@ func (s *Server) handleDeleteDatabase(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		return
 	}
+	if db.MoveState != nil {
+		writeError(w, 409, "the database is being moved: wait for it to finish")
+		return
+	}
 	if err := s.deleteDatabase(context.WithoutCancel(r.Context()), db); err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -232,6 +236,10 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		return
 	}
+	if db.Status == "upgrading" {
+		writeError(w, 409, "the database is being upgraded")
+		return
+	}
 	b, err := s.store.BackupByID(r.Context(), r.PathValue("backup"))
 	if err != nil || b.DatabaseID != db.ID {
 		writeError(w, 404, "backup not found")
@@ -241,7 +249,7 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "base backups are restored with point-in-time recovery")
 		return
 	}
-	if err := s.restoreBackup(context.WithoutCancel(r.Context()), db, b); err != nil {
+	if err := s.restoreBackup(context.WithoutCancel(r.Context()), db, b, false); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -268,18 +276,15 @@ func (s *Server) handleUpgradeDatabase(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "unknown size")
 			return
 		}
-		db.SizePreset = in.Size
-		_, _ = s.store.Q(r.Context()).Exec(r.Context(), `UPDATE databases SET size_preset=$2 WHERE id=$1`, db.ID, in.Size)
 	}
-	_ = s.store.SetDatabaseStatus(r.Context(), db.ID, "upgrading", "")
-	go func() {
-		ctx := context.Background()
-		if err := s.upgradeDatabase(ctx, db); err != nil {
-			_ = s.store.SetDatabaseStatus(ctx, db.ID, "ready", "upgrade failed: "+err.Error())
-			return
-		}
-		_ = s.store.SetDatabaseStatus(ctx, db.ID, "ready", "")
-	}()
+	if ok, err := s.store.ClaimDatabaseStatus(r.Context(), db.ID, "ready", "upgrading"); err != nil || !ok {
+		writeError(w, 409, "database is not ready")
+		return
+	}
+	if in.Size != "" {
+		_ = s.store.SetDatabaseSize(r.Context(), db.ID, in.Size)
+	}
+	go s.moveDatabase(context.Background(), db.ID, moveTarget{Version: db.Version, Dedicated: true})
 	u := currentUser(r)
 	s.store.Audit(r.Context(), &u.ID, &p.TeamID, "database.upgrade", db.Name)
 	writeJSON(w, 202, map[string]string{"status": "upgrading"})

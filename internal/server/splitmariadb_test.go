@@ -124,7 +124,7 @@ func TestSplitMariaDBMigration(t *testing.T) {
 		t.Fatalf("creds %+v on %s", c, srv2.Slug)
 	}
 	bak, _, _ := databases.Backup(got.Engine, true, c)
-	res, _ := databases.Restore(got.Engine, true, c)
+	res, _ := databases.Restore(got.Engine, true, c, false)
 	ro, _ := databases.SetReadOnly(got.Engine, true, c, true)
 	for name, cmd := range map[string]databases.Command{"backup": bak, "restore": res, "readonly": ro} {
 		if cmd.Env[0] != "MYSQL_PWD=rootpw" || !strings.HasPrefix(cmd.Cmd[0], "mariadb") {

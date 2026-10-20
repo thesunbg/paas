@@ -221,7 +221,8 @@ func (s *Server) haTick(ctx context.Context) {
 	}
 	for i := range dbs {
 		db := &dbs[i]
-		if !db.Options.HA || db.ServerServiceID == nil || (db.Status != "ready" && db.Status != "upgrading") {
+		// Not while `upgrading`: a move or resize owns the server, a failover would race it.
+		if !db.Options.HA || db.ServerServiceID == nil || db.Status != "ready" {
 			continue
 		}
 		srv, err := s.store.ServiceByID(ctx, *db.ServerServiceID)

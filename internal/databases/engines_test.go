@@ -162,7 +162,7 @@ func TestMySQLFamily(t *testing.T) {
 			dropU, _ := DropUser(tc.engine, true, c, "x")
 			pw, _ := SetPassword(tc.engine, true, c, "x", "z")
 			stats, _ := Stats(tc.engine, true, c)
-			restore, _ := Restore(tc.engine, true, c)
+			restore, _ := Restore(tc.engine, true, c, false)
 			ver := VersionCommand(tc.engine, true, c)
 			for name, cmd := range map[string]Command{"create": create, "drop": drop, "ro": ro, "rw": rw, "user": user, "dropuser": dropU, "pw": pw, "stats": stats, "restore": restore, "version": ver} {
 				if len(cmd.Cmd) < 2 || cmd.Cmd[0] != tc.client || cmd.Cmd[1] != "-uroot" || cmd.Env[0] != "MYSQL_PWD=r" {

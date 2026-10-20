@@ -967,6 +967,9 @@ export const api = {
   backupNow: (id: string) => post<Backup>(`/databases/${e(id)}/backups`),
   restoreBackup: (id: string, backup: string) => post<{ status: string }>(`/databases/${e(id)}/backups/${e(backup)}/restore`),
   upgradeDatabase: (id: string, size?: string) => post<{ status: string }>(`/databases/${e(id)}/upgrade`, size ? { size } : {}),
+  /** One-way major upgrade: stops the linked services until it is done (confirm_downtime). */
+  upgradeVersion: (id: string, version: string) =>
+    post<{ status: string }>(`/databases/${e(id)}/version`, { version, confirm_downtime: true }),
   updateMinor: (id: string, confirm_shared = false) => post<{ status: string }>(`/databases/${e(id)}/update-minor`, { confirm_shared }),
   retryDatabase: (id: string) => post<{ status: string }>(`/databases/${e(id)}/retry`),
   myIP: () => get<{ ip: string }>('/me/ip'),
