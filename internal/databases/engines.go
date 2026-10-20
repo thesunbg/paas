@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/thesunbg/paas/internal/model"
 )
@@ -29,34 +30,117 @@ type Engine struct {
 	DefaultEnv  string `json:"default_env"` // env var name injected into linked services
 	MinMemoryMB int    `json:"min_memory_mb"`
 	// Versions offered for new databases (newest first) and the default one.
-	Versions       []string `json:"versions"`
-	DefaultVersion string   `json:"default_version"`
-	// LegacyVersion is what Image runs, for databases created before versions existed.
-	LegacyVersion string `json:"legacy_version"`
+	// Serialised by Catalog (with a status); never as plain names.
+	Versions       []Version `json:"-"`
+	DefaultVersion string    `json:"default_version"`
 }
 
+// Version is one engine version. EOL is the end-of-life date (zero = none announced).
+type Version struct {
+	Name string
+	EOL  time.Time
+}
+
+// Version lifecycle states.
+const (
+	StatusOK     = "ok"
+	StatusEnding = "ending"
+	StatusEOL    = "eol"
+)
+
+// EndingWindow is how long before its EOL date a version is reported as "ending".
+const EndingWindow = 180 * 24 * time.Hour
+
+// Status is the lifecycle state of v at now: eol from the EOL date on, ending in the
+// EndingWindow before it, ok otherwise (and always ok without an EOL date).
+func Status(v Version, now time.Time) string {
+	switch {
+	case v.EOL.IsZero():
+		return StatusOK
+	case !now.Before(v.EOL):
+		return StatusEOL
+	case v.EOL.Sub(now) < EndingWindow:
+		return StatusEnding
+	}
+	return StatusOK
+}
+
+func eol(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }
+
+// EOL dates: https://endoflife.date, checked 2026-10-20. The redis tag "8" tracks the
+// newest cycle, so it has none.
 var Engines = map[string]Engine{
 	Postgres: {Name: Postgres, Image: "docker.io/library/postgres:17", Port: 5432, DataPath: "/var/lib/postgresql/data", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 128,
-		Versions: []string{"18", "17", "16", "15", "14"}, DefaultVersion: "17", LegacyVersion: "17"},
+		Versions: []Version{{"18", eol(2030, 11, 14)}, {"17", eol(2029, 11, 8)}, {"16", eol(2028, 11, 9)}, {"15", eol(2027, 11, 11)}, {"14", eol(2026, 11, 12)}}, DefaultVersion: "17"},
 	MySQL: {Name: MySQL, Image: "docker.io/library/mariadb:11", Port: 3306, DataPath: "/var/lib/mysql", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 192,
-		Versions: []string{"11.8", "11.4", "10.11", "10.6"}, DefaultVersion: "11.8", LegacyVersion: "11"},
+		Versions: []Version{{"11.8", eol(2028, 6, 4)}, {"11.4", eol(2029, 5, 29)}, {"10.11", eol(2028, 2, 16)}, {"10.6", eol(2026, 7, 6)}}, DefaultVersion: "11.8"},
 	Redis: {Name: Redis, Image: "docker.io/library/redis:7-alpine", Port: 6379, DataPath: "/data", DefaultEnv: "REDIS_URL", MinMemoryMB: 32,
-		Versions: []string{"8", "7.4", "7.2"}, DefaultVersion: "7.4", LegacyVersion: "7"},
+		Versions: []Version{{"8", time.Time{}}, {"7.4", eol(2029, 12, 1)}, {"7.2", eol(2029, 12, 1)}}, DefaultVersion: "7.4"},
 	Mongo: {Name: Mongo, Image: "docker.io/library/mongo:7", Port: 27017, DataPath: "/data/db", DefaultEnv: "MONGODB_URL", MinMemoryMB: 256,
-		Versions: []string{"8.0", "7.0", "6.0"}, DefaultVersion: "7.0", LegacyVersion: "7"},
+		Versions: []Version{{"8.0", eol(2029, 10, 31)}, {"7.0", eol(2027, 8, 31)}, {"6.0", eol(2025, 7, 31)}}, DefaultVersion: "7.0"},
 }
 
-// ImageFor returns the image of an engine version ("" = the legacy image).
-func ImageFor(engine, version string) (string, error) {
+// VersionInfo is a catalog entry as the API shows it.
+type VersionInfo struct {
+	Name   string `json:"name"`
+	EOL    string `json:"eol,omitempty"` // YYYY-MM-DD
+	Status string `json:"status"`
+}
+
+// Catalog lists the versions of e with their status at now.
+func (e Engine) Catalog(now time.Time) []VersionInfo {
+	out := make([]VersionInfo, 0, len(e.Versions))
+	for _, v := range e.Versions {
+		vi := VersionInfo{Name: v.Name, Status: Status(v, now)}
+		if !v.EOL.IsZero() {
+			vi.EOL = v.EOL.Format("2006-01-02")
+		}
+		out = append(out, vi)
+	}
+	return out
+}
+
+// Lookup finds an offered version by exact name. User input is never spliced into an image tag.
+func Lookup(engine, version string) (Version, error) {
 	e, ok := Engines[engine]
 	if !ok {
-		return "", fmt.Errorf("unknown engine %q", engine)
+		return Version{}, fmt.Errorf("unknown engine %q", engine)
 	}
-	if version == "" || version == e.LegacyVersion && !contains(e.Versions, version) {
-		return e.Image, nil
+	names := make([]string, 0, len(e.Versions))
+	for _, v := range e.Versions {
+		if v.Name == version {
+			return v, nil
+		}
+		names = append(names, v.Name)
 	}
-	if !contains(e.Versions, version) {
-		return "", fmt.Errorf("%s %s is not available (choose one of %s)", engine, version, strings.Join(e.Versions, ", "))
+	return Version{}, fmt.Errorf("%s %q is not available (choose one of %s)", engine, version, strings.Join(names, ", "))
+}
+
+// ErrEOL is returned by CheckCreate for a version past its end of life.
+type ErrEOL struct{ Engine, Version, Date string }
+
+func (e *ErrEOL) Error() string {
+	return fmt.Sprintf("%s %s reached end of life on %s", e.Engine, e.Version, e.Date)
+}
+
+// CheckCreate is the one gate for new database servers: the version must be in the
+// catalog and not past EOL. It returns the status so callers can warn on "ending".
+func CheckCreate(engine, version string, now time.Time) (string, error) {
+	v, err := Lookup(engine, version)
+	if err != nil {
+		return "", err
+	}
+	st := Status(v, now)
+	if st == StatusEOL {
+		return st, &ErrEOL{engine, version, v.EOL.Format("2006-01-02")}
+	}
+	return st, nil
+}
+
+// ImageFor returns the image of an engine version.
+func ImageFor(engine, version string) (string, error) {
+	if _, err := Lookup(engine, version); err != nil {
+		return "", err
 	}
 	switch engine {
 	case Postgres:
@@ -68,23 +152,6 @@ func ImageFor(engine, version string) (string, error) {
 	default:
 		return "docker.io/library/mongo:" + version, nil
 	}
-}
-
-// DisplayVersion is the version shown for a database ("" = legacy).
-func DisplayVersion(engine, version string) string {
-	if version != "" {
-		return version
-	}
-	return Engines[engine].LegacyVersion
-}
-
-func contains(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // Preset is a sizing preset: container limit plus engine tuning derived from it.

@@ -268,8 +268,8 @@ func (s *Server) installPlan(ctx context.Context, p *store.Project, svcs []templ
 			continue
 		}
 		version := tdb.Version
-		if _, err := databases.ImageFor(tdb.Engine, version); err != nil {
-			version = "" // not offered: the engine's default
+		if _, err := databases.CheckCreate(tdb.Engine, version, time.Now()); err != nil {
+			version = "" // not offered or past EOL: the engine's default
 		}
 		db, err := s.createDatabase(ctx, p, CreateDatabaseInput{Name: opts.name(tdb.Name), Engine: tdb.Engine, Mode: tdb.Mode, Version: version})
 		if err != nil {

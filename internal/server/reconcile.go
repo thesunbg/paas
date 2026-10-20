@@ -417,6 +417,7 @@ func (s *Server) maintenanceLoop(ctx context.Context) {
 		if tick%30 == 1 {
 			s.store.PurgeExpiredSessions(ctx)
 			s.imageGC(ctx)
+			s.eolTick(ctx, time.Now())
 		}
 	}
 }

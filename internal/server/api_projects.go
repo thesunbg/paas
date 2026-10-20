@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/thesunbg/paas/internal/databases"
 	"github.com/thesunbg/paas/internal/model"
@@ -184,7 +185,16 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSizes(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"sizes": resources.Sizes, "database_sizes": databases.Presets, "engines": databases.Engines})
+	type engineView struct {
+		databases.Engine
+		Versions []databases.VersionInfo `json:"versions"`
+	}
+	now := time.Now()
+	engines := make(map[string]engineView, len(databases.Engines))
+	for name, e := range databases.Engines {
+		engines[name] = engineView{Engine: e, Versions: e.Catalog(now)}
+	}
+	writeJSON(w, 200, map[string]any{"sizes": resources.Sizes, "database_sizes": databases.Presets, "engines": engines})
 }
 
 // handleOverview returns cluster-wide numbers for the dashboard home page.

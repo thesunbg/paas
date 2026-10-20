@@ -140,7 +140,7 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/v1/databases/{id}/public` | `{enabled, allowed_cidrs}`: external access on `db.<base domain>:<port>` (ports `PAAS_DB_PORT_MIN`–`MAX`, default 20000–20999). PostgreSQL TLS via SSLRequest (`sslmode=require`), Redis `rediss://`, MongoDB `tls=true` when HTTPS is on |
-| POST | `/api/v1/projects/{id}/databases` | `version` picks the engine version (`/api/v1/sizes` → `engines.<engine>.versions`); shared databases of one version share a server |
+| POST | `/api/v1/projects/{id}/databases` | `version` picks the engine version, matched exactly against `/api/v1/sizes` → `engines.<engine>.versions` (unknown → 400). A version past its end of life → 409; one within 180 days of it is created and the 201 body carries `warning`. Shared databases of one version share a server |
 | GET | `/api/v1/databases/{id}/metrics?hours=24` | size and connections per minute (7 days), quota, read-only flag |
 | PUT | `/api/v1/databases/{id}/quota` | administrators: `{quota_mb}` (0 = default: shared 1 GB, dedicated by size). Over quota PostgreSQL is read-only, MySQL loses write privileges |
 | POST | `/api/v1/databases/{id}/pooler` | `{enabled}` PgBouncer (transaction mode); linked services get `<ENV>_POOLED` |
@@ -245,7 +245,7 @@ Events: `deploy.succeeded`, `deploy.failed`, `instance.crashloop`, `instance.evi
 When enabled, `/auth/login` answers `401 {"error": "two-factor code required", "two_factor": true}` until the body includes `"code"`. `user.totp_enabled` tells whether it is on.
 
 ### Other
-- `GET /sizes` also returns `database_sizes` (presets with `Name`, `MemoryMB`, `CPU`, `MaxConns`) and `engines`.
+- `GET /sizes` also returns `database_sizes` (presets with `Name`, `MemoryMB`, `CPU`, `MaxConns`) and `engines`; each engine lists `versions` as `{name, eol, status}` (`status` is `ok`, `ending` or `eol`; no `eol` date means none announced). `GET /databases/{id}` returns `version_status` and `version_eol`. The `database.eol` notification event fires once per database and status (`ending`, then `eol`).
 - Backups have `s3_key` when copied off-site (`PAAS_S3_*` settings); restoring on another node downloads from S3.
 - SSE deployment streams send `id:` per line and honor `Last-Event-ID`.
 - Viewers can read env var names (values masked).

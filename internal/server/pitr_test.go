@@ -36,7 +36,7 @@ func TestNeededWAL(t *testing.T) {
 
 func TestDedicatedSpecArchive(t *testing.T) {
 	s := &Server{}
-	db := &store.Database{Engine: "postgres", Mode: "dedicated", SizePreset: "nano", Options: store.DBOptions{PITR: true}}
+	db := &store.Database{Engine: "postgres", Version: "17", Mode: "dedicated", SizePreset: "nano", Options: store.DBOptions{PITR: true}}
 	spec, err := s.dedicatedSpec(db, databases.Credentials{Username: "u", Password: "p", DBName: "d"})
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestSetPITRNeedsS3(t *testing.T) {
 	_ = u
 	_, tok := login(t, h, "a@example.com", "password1", "198.51.100.1")
 	svc := seedDeployService(t, s)
-	db, err := s.store.CreateDatabase(context.Background(), &store.Database{ProjectID: svc.ProjectID, Name: "d", Engine: "postgres", Mode: "dedicated", DBName: "d", Username: "u", SizePreset: "nano"})
+	db, err := s.store.CreateDatabase(context.Background(), &store.Database{ProjectID: svc.ProjectID, Name: "d", Engine: "postgres", Version: "17", Mode: "dedicated", DBName: "d", Username: "u", SizePreset: "nano"})
 	if err != nil {
 		t.Fatal(err)
 	}

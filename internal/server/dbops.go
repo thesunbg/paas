@@ -65,7 +65,7 @@ func (s *Server) createDatabase(ctx context.Context, proj *store.Project, in Cre
 	if in.Version == "" {
 		in.Version = eng.DefaultVersion
 	}
-	if _, err := databases.ImageFor(in.Engine, in.Version); err != nil {
+	if _, err := databases.CheckCreate(in.Engine, in.Version, time.Now()); err != nil {
 		return nil, err
 	}
 	if in.Size == "" {
@@ -217,15 +217,12 @@ func (s *Server) provisionDatabase(ctx context.Context, dbID string) {
 }
 
 // ensureSharedServer returns the shared server for an engine, creating and deploying it on first use.
-// Each engine version has its own shared server; the default (and legacy) one keeps "shared-<engine>".
+// Each engine version has its own shared server; the default one keeps "shared-<engine>".
 func (s *Server) ensureSharedServer(ctx context.Context, engine, version string) (*store.Service, error) {
 	slug := "shared-" + engine
 	e := databases.Engines[engine]
-	if version != "" && version != e.DefaultVersion && version != e.LegacyVersion {
+	if version != e.DefaultVersion {
 		slug += "-" + strings.ReplaceAll(version, ".", "-")
-	}
-	if version == e.LegacyVersion && version != e.DefaultVersion && !contains(e.Versions, version) {
-		version = "" // created before versions: keep the legacy image
 	}
 	unlock := s.lock("shared-server-" + slug)
 	defer unlock()
@@ -258,7 +255,7 @@ func (s *Server) ensureSharedServer(ctx context.Context, engine, version string)
 		return nil, err
 	}
 	srv, err := s.store.CreateService(ctx, &store.Service{
-		ProjectID: s.systemProjectID, Name: "Shared " + engine + " " + databases.DisplayVersion(engine, version), Slug: slug, Type: model.TypeDatabase,
+		ProjectID: s.systemProjectID, Name: "Shared " + engine + " " + version, Slug: slug, Type: model.TypeDatabase,
 		Source: model.ServiceSource{Kind: "image", Image: spec.Image}, Spec: spec, WebhookSecret: util.RandomToken(16),
 	})
 	if err != nil {
@@ -632,13 +629,4 @@ func (s *Server) uploadLarge(ctx context.Context, nodeID, key, path string, size
 		_ = s.s3.AbortMultipart(key, id)
 	}
 	return err
-}
-
-func contains(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

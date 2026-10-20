@@ -26,7 +26,9 @@
   let engine = $state<Engine>('postgres');
   let mode = $state<'shared' | 'dedicated'>('shared');
   let version = $state('');
-  const versions = $derived(cat?.engines?.[engine]?.versions ?? []);
+  // End-of-life versions cannot be created (the API answers 409).
+  const versionInfos = $derived((cat?.engines?.[engine]?.versions ?? []).filter((v) => v.status !== 'eol'));
+  const versions = $derived(versionInfos.map((v) => v.name));
   const defaultVersion = $derived(cat?.engines?.[engine]?.default_version ?? '');
   $effect(() => {
     // Reset to the engine's default when the engine changes.
@@ -90,7 +92,7 @@
       <label class="field">
         <span>Version</span>
         <select bind:value={version}>
-          {#each versions as v (v)}<option value={v}>{v}{v === defaultVersion ? ' (recommended)' : ''}</option>{/each}
+          {#each versionInfos as v (v.name)}<option value={v.name}>{v.name}{v.name === defaultVersion ? ' (recommended)' : ''}{v.status === 'ending' ? ` (end of life ${v.eol})` : ''}</option>{/each}
         </select>
         <span class="hint">{engine === 'mysql' ? 'MariaDB (MySQL-compatible). ' : ''}Shared databases of the same version share one server; minor updates are applied on restart.</span>
       </label>

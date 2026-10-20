@@ -13,7 +13,7 @@ type Database struct {
 	ProjectID           string     `json:"project_id"`
 	Name                string     `json:"name"`
 	Engine              string     `json:"engine"`
-	Version             string     `json:"version"` // engine version ("" = created before versions were selectable)
+	Version             string     `json:"version"` // engine version, a catalog name
 	Mode                string     `json:"mode"`
 	ServerServiceID     *string    `json:"server_service_id"`
 	DBName              string     `json:"db_name"`
@@ -77,6 +77,13 @@ func (s *Store) CreateDatabase(ctx context.Context, d *Database) (*Database, err
 	return scanDatabase(s.q(ctx).QueryRow(ctx, `INSERT INTO databases (project_id, name, engine, mode, db_name, username, password_enc, size_preset, backup_schedule_hours, version)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+databaseCols,
 		d.ProjectID, d.Name, d.Engine, d.Mode, d.DBName, d.Username, d.PasswordEnc, d.SizePreset, d.BackupScheduleHours, d.Version))
+}
+
+// MarkEOLNotified records status as the last notified lifecycle status and reports whether it
+// changed, so a notification is sent once per (database, status), also across restarts.
+func (s *Store) MarkEOLNotified(ctx context.Context, id, status string) (bool, error) {
+	tag, err := s.q(ctx).Exec(ctx, `UPDATE databases SET eol_notified=$2 WHERE id=$1 AND eol_notified<>$2`, id, status)
+	return tag.RowsAffected() == 1, err
 }
 
 func (s *Store) DatabaseByID(ctx context.Context, id string) (*Database, error) {

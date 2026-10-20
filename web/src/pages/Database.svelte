@@ -199,6 +199,13 @@
     </div>
     {#if error}<div style="margin-bottom:12px"><ErrorMsg {error} /></div>{/if}
 
+    {#if detail?.version_status === 'eol' || detail?.version_status === 'ending'}
+      <div class="alert {detail.version_status === 'eol' ? 'error' : 'warn'}" style="margin-bottom:16px">
+        <Icon name="x" /><span style="flex:1">{engineLabel[db.engine] ?? db.engine} {detail.version}
+          {detail.version_status === 'eol' ? `reached end of life on ${detail.version_eol} and no longer gets security fixes.` : `reaches end of life on ${detail.version_eol}.`}
+          Create a new database on a newer version and move your data to it.</span>
+      </div>
+    {/if}
     {#if transitional(db.status)}
       <div class="alert info" style="margin-bottom:16px"><span class="spinner"></span>Database is {db.status}… this page refreshes every 3 seconds.</div>
     {/if}

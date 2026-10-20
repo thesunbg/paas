@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, errorMessage, type ProjectDetail } from '../lib/api';
+  import { api, catalog, errorMessage, type ProjectDetail, type SizesResponse } from '../lib/api';
   import { can } from '../lib/session.svelte';
   import { href, navigate } from '../lib/router.svelte';
   import { mb, relTime, plural } from '../lib/format';
@@ -145,7 +145,11 @@
     }
   }
 
+  let cat = $state<SizesResponse | null>(null);
+  const versionStatus = (engine: string, version?: string) => cat?.engines?.[engine]?.versions?.find((v) => v.name === version);
+
   onMount(() => {
+    catalog().then((c) => (cat = c)).catch(() => {});
     load();
     return poll(load, 5000);
   });
@@ -404,7 +408,9 @@
               {#each visibleDBs as d (d.id)}
                 <tr class="clickable" onclick={() => navigate(`/databases/${d.id}`)}>
                   <td><a href={href(`/databases/${d.id}`)}><Icon name="database" size={14} /> {d.name}</a></td>
-                  <td>{engineLabel[d.engine] ?? d.engine} <span class="faint small">{d.version ?? ""}</span></td>
+                  <td>{engineLabel[d.engine] ?? d.engine} <span class="faint small">{d.version ?? ""}</span>
+                    {#if versionStatus(d.engine, d.version)?.status === 'eol'}<span class="badge red" title="End of life {versionStatus(d.engine, d.version)?.eol}">EOL</span>
+                    {:else if versionStatus(d.engine, d.version)?.status === 'ending'}<span class="badge yellow" title="End of life {versionStatus(d.engine, d.version)?.eol}">ends {versionStatus(d.engine, d.version)?.eol}</span>{/if}</td>
                   <td><span class="badge {d.mode === 'dedicated' ? 'blue' : ''}">{d.mode}</span></td>
                   <td class="hide-sm mono small">{d.mode === 'dedicated' ? d.size_preset : '—'}</td>
                   <td><Status status={d.status} /></td>

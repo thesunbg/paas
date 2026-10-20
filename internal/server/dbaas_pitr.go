@@ -436,6 +436,15 @@ func (s *Server) handlePITRRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, err.Error())
 		return
 	}
+	if _, err := databases.CheckCreate(src.Engine, src.Version, time.Now()); err != nil {
+		code := 400
+		var eol *databases.ErrEOL
+		if errors.As(err, &eol) {
+			code = 409
+		}
+		writeError(w, code, err.Error())
+		return
+	}
 	name := util.Slugify(src.Name + "-restored-" + target.UTC().Format("0102-1504"))
 	if strings.TrimSpace(in.Name) != "" {
 		name = util.Slugify(in.Name)

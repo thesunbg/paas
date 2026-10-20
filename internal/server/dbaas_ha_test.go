@@ -85,7 +85,7 @@ func newHAFixture(t *testing.T) *haFixture {
 	}
 	f.old = svc("old", f.nodeA, "old-1", model.InstLost, model.ServiceSpec{DNSAliases: []string{"db-rw.p.internal"}})
 	f.rep = svc("rep", f.nodeB, "rep-1", model.InstRunning, model.ServiceSpec{})
-	db, err := s.store.CreateDatabase(bg, &store.Database{ProjectID: proj.ID, Name: "db", Engine: "postgres", Mode: "dedicated",
+	db, err := s.store.CreateDatabase(bg, &store.Database{ProjectID: proj.ID, Name: "db", Engine: "postgres", Version: "17", Mode: "dedicated",
 		Username: "app", PasswordEnc: s.box.MustEncrypt("pw"), SizePreset: "small"})
 	if err != nil {
 		t.Fatal(err)

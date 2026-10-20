@@ -243,3 +243,31 @@ func (s *Server) serverVersion(ctx context.Context, db *store.Database) string {
 	versionCache.Store(db.ID, cachedVersion{v: v, at: time.Now()})
 	return v
 }
+
+// eolTick sends one database.eol notification per (database, ending/eol status). The dedup
+// state is databases.eol_notified, so a restart does not repeat it.
+func (s *Server) eolTick(ctx context.Context, now time.Time) {
+	dbs, err := s.store.AllDatabases(ctx)
+	if err != nil {
+		return
+	}
+	for i := range dbs {
+		db := &dbs[i]
+		v, err := databases.Lookup(db.Engine, db.Version)
+		if err != nil {
+			continue
+		}
+		st := databases.Status(v, now)
+		if st == databases.StatusOK {
+			continue
+		}
+		if fresh, err := s.store.MarkEOLNotified(ctx, db.ID, st); err != nil || !fresh {
+			continue
+		}
+		msg := fmt.Sprintf("Database %s runs %s %s, which reaches end of life on %s. Plan a move to a newer version.", db.Name, db.Engine, db.Version, v.EOL.Format("2006-01-02"))
+		if st == databases.StatusEOL {
+			msg = fmt.Sprintf("Database %s runs %s %s, which reached end of life on %s and no longer gets security fixes.", db.Name, db.Engine, db.Version, v.EOL.Format("2006-01-02"))
+		}
+		s.notify(ctx, s.teamOfDatabase(ctx, db), "database.eol", msg, map[string]any{"database": db.ID, "status": st})
+	}
+}

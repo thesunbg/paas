@@ -438,6 +438,8 @@ export interface DatabaseServer {
 export interface DatabaseDetail {
   database: Database;
   version?: string;
+  version_status?: 'ok' | 'ending' | 'eol';
+  version_eol?: string;
   server_version?: string;
   connection?: Connection;
   external?: ExternalAccess;
@@ -547,8 +549,15 @@ export interface EngineInfo {
   shared: boolean;
   default_env: string;
   min_memory_mb: number;
-  versions?: string[];
+  versions?: VersionInfo[];
   default_version?: string;
+}
+
+// status: ok | ending (EOL within 180 days) | eol. Redis "8" has no eol date.
+export interface VersionInfo {
+  name: string;
+  eol?: string;
+  status: 'ok' | 'ending' | 'eol';
 }
 
 export interface SizesResponse {

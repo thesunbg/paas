@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/thesunbg/paas/internal/databases"
 	"github.com/thesunbg/paas/internal/store"
@@ -24,12 +27,24 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 	db, err := s.createDatabase(r.Context(), p, in)
 	if err != nil {
+		var eol *databases.ErrEOL
+		if errors.As(err, &eol) {
+			writeError(w, 409, err.Error())
+			return
+		}
 		writeError(w, 400, err.Error())
 		return
 	}
 	u := currentUser(r)
 	s.store.Audit(r.Context(), &u.ID, &p.TeamID, "database.create", db.Name)
-	writeJSON(w, 201, db)
+	out := struct {
+		*store.Database
+		Warning string `json:"warning,omitempty"`
+	}{Database: db}
+	if v, err := databases.Lookup(db.Engine, db.Version); err == nil && databases.Status(v, time.Now()) == databases.StatusEnding {
+		out.Warning = fmt.Sprintf("%s %s reaches end of life on %s", db.Engine, db.Version, v.EOL.Format("2006-01-02"))
+	}
+	writeJSON(w, 201, out)
 }
 
 func (s *Server) databaseFor(w http.ResponseWriter, r *http.Request, min string) (*store.Database, *store.Project) {
@@ -51,7 +66,13 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setETag(w, db.OptionsVersion)
-	out := map[string]any{"database": db, "version": databases.DisplayVersion(db.Engine, db.Version)}
+	out := map[string]any{"database": db, "version": db.Version}
+	if v, err := databases.Lookup(db.Engine, db.Version); err == nil {
+		out["version_status"] = databases.Status(v, time.Now())
+		if !v.EOL.IsZero() {
+			out["version_eol"] = v.EOL.Format("2006-01-02")
+		}
+	}
 	if v := s.serverVersion(r.Context(), db); v != "" {
 		out["server_version"] = v
 	}
