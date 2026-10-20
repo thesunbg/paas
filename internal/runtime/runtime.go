@@ -360,14 +360,16 @@ func (r *Runtime) writeNetFiles(id string, req proto.RunRequest) error {
 	return os.WriteFile(filepath.Join(dir, "hosts"), []byte(hosts), 0o644)
 }
 
-func (r *Runtime) runtimeFor(class string) (string, any) {
+// runtimeFor fails closed: a sandboxed service never silently falls back to
+// runc, because standard is not a boundary for untrusted code.
+func (r *Runtime) runtimeFor(class string) (string, any, error) {
 	if class == model.RuntimeSandboxed {
-		if _, err := exec.LookPath("containerd-shim-runsc-v1"); err == nil {
-			return "io.containerd.runsc.v1", nil
+		if _, err := exec.LookPath("containerd-shim-runsc-v1"); err != nil {
+			return "", nil, fmt.Errorf("sandboxed runtime requested but gVisor (containerd-shim-runsc-v1) is not installed on this node")
 		}
-		slog.Warn("sandboxed runtime requested but gVisor is not installed; using standard runtime")
+		return "io.containerd.runsc.v1", nil, nil
 	}
-	return "io.containerd.runc.v2", &options.Options{BinaryName: r.ociBinary}
+	return "io.containerd.runc.v2", &options.Options{BinaryName: r.ociBinary}, nil
 }
 
 func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *managed) error {
@@ -411,12 +413,15 @@ func (r *Runtime) createContainer(ctx context.Context, img client.Image, m *mana
 	if len(req.Command) > 0 {
 		specOpts = append(specOpts, withCommand(img, req.Command))
 	}
-	rtName, rtOpts := r.runtimeFor(req.RuntimeClass)
+	rtName, rtOpts, err := r.runtimeFor(req.RuntimeClass)
+	if err != nil {
+		return err
+	}
 	labels := map[string]string{labelManaged: "true", labelInstance: req.InstanceID, labelService: req.ServiceID}
 	if req.HAPostgres {
 		labels[labelHAPG] = "true"
 	}
-	_, err := r.client.NewContainer(ctx, req.ContainerID,
+	_, err = r.client.NewContainer(ctx, req.ContainerID,
 		client.WithImage(img),
 		client.WithNewSnapshot(req.ContainerID+"-snap", img),
 		client.WithRuntime(rtName, rtOpts),

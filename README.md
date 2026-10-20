@@ -3,7 +3,7 @@
 A fast, lightweight, self-hosted PaaS, similar to Coolify, Heroku and Vercel. Push to GitHub and your app is live on its own domain with HTTPS in seconds. It handles frontends (static sites, React, Vue, Next.js…), backends (Node.js, Go, Python, PHP, Ruby, Rust, Java, Deno) and managed databases (PostgreSQL, MySQL/MariaDB, Redis, MongoDB). Servers can be added to the cluster with one command.
 
 - **One binary** (`paasd`, about 37 MB) contains the control plane, node agent, edge proxy and an embedded NATS bus. Running everything on one node uses about 40 MB of RAM.
-- **No Docker daemon.** Containers run on containerd with crun or runc. gVisor is used for sandboxed workloads.
+- **No Docker daemon.** Containers run on containerd with crun or runc. gVisor is used for sandboxed workloads. `standard` (namespaces, seccomp, dropped capabilities, root inside the container, no user namespace) is not a boundary for untrusted code: a kernel or runc CVE can escape to the host. Only `sandboxed` (gVisor) is, and a node without gVisor refuses to start sandboxed services.
 - **Fast.** Builds use BuildKit with layer and cache-mount caching. Static sites are served directly by the proxy, with no container. Rollouts have zero downtime. Measured in the dev environment:
   - a cached Go redeploy goes live in about 2.4 s;
   - a static site goes live in about 0.9 s;

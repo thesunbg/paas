@@ -239,9 +239,10 @@ paas-agent (Go)
 - Đa vùng (multi-region) ở giai đoạn sau: edge node ở nhiều nơi, dùng GeoDNS.
 
 ### 4.8. Bảo mật
-- Container chạy bằng crun, non-root với user namespace, seccomp/AppArmor mặc định, filesystem read-only khi có thể.
+- Container `standard` chạy bằng crun/runc với namespaces + seccomp mặc định + drop capability, root trong container, **không** có user namespace. Đây **không** phải ranh giới cho code không tin cậy: lỗi kernel/runc có thể thoát ra host. Tenant không tin cậy phải dùng `runtime_class: sandboxed` (gVisor).
+- Node thiếu `containerd-shim-runsc-v1` từ chối tạo container `sandboxed` (fail closed), không tự hạ xuống `standard`.
 - **Cô lập mạng giữa các project** bằng nftables do agent quản lý: service khác project không thấy nhau.
-- `runtime_class: sandboxed` (**gVisor**) cho code không tin cậy trên VPS thường. `runtime_class: microvm` (**Firecracker**) khi node có KVM.
+- `runtime_class: sandboxed` (**gVisor**) là ranh giới duy nhất cho code không tin cậy trên VPS thường. `runtime_class: microvm` (**Firecracker**) khi node có KVM.
 - Giới hạn tốc độ request (rate limit) ở edge, bảo vệ dashboard bằng 2FA, quét image (Trivy) khi build.
 - Secret không bao giờ xuất hiện trong log, bị che khi hiển thị trên UI.
 
