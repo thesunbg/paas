@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -30,6 +31,8 @@ func tcpMode(engine string) string {
 }
 
 // tlsAtEdge reports whether the edge proxies terminate TLS (automatic HTTPS on).
+// It reads the control plane's PublicURL; on a multi-node edge an individual
+// proxy may still lack TLS, in which case it keeps the database ports closed.
 func (s *Server) tlsAtEdge() bool { return strings.HasPrefix(s.cfg.PublicURL, "https://") }
 
 // tcpRoutes lists the public database ports for the route table.
@@ -43,8 +46,13 @@ func (s *Server) tcpRoutes(ctx context.Context, upstreams map[string][]string) [
 		if db.Options.PublicPort == 0 || db.ServerServiceID == nil {
 			continue
 		}
+		mode := tcpMode(db.Engine)
+		if mode == "plain" { // no TLS for this engine: never exposed
+			slog.Warn("public port closed: engine has no TLS support", "database", db.Name, "engine", db.Engine, "port", db.Options.PublicPort)
+			continue
+		}
 		out = append(out, model.TCPRoute{
-			Port: db.Options.PublicPort, DatabaseID: db.ID, Mode: tcpMode(db.Engine),
+			Port: db.Options.PublicPort, DatabaseID: db.ID, Mode: mode,
 			Upstreams: upstreams[*db.ServerServiceID], Allow: db.Options.AllowedCIDRs,
 		})
 	}
@@ -62,22 +70,14 @@ func (s *Server) externalURL(db *store.Database, c databases.Credentials) string
 		return ""
 	}
 	q := u.Query()
-	tlsOn := s.tlsAtEdge()
+	// Public ports only open with TLS, so every URL asks for it.
 	switch db.Engine {
 	case databases.Postgres:
-		if tlsOn {
-			q.Set("sslmode", "require")
-		} else {
-			q.Set("sslmode", "disable")
-		}
+		q.Set("sslmode", "require")
 	case databases.Redis:
-		if tlsOn {
-			u.Scheme = "rediss"
-		}
+		u.Scheme = "rediss"
 	case databases.Mongo:
-		if tlsOn {
-			q.Set("tls", "true")
-		}
+		q.Set("tls", "true")
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
@@ -148,6 +148,14 @@ func (s *Server) handleDatabasePublic(w http.ResponseWriter, r *http.Request) {
 	var cidrs []string
 	if in.Enabled {
 		var err error
+		if !s.tlsAtEdge() {
+			writeError(w, 409, "public database access needs HTTPS: set PAAS_TLS / an https PublicURL first")
+			return
+		}
+		if tcpMode(db.Engine) == "plain" {
+			writeError(w, 409, db.Engine+" has no TLS support on the public port, so it cannot be exposed")
+			return
+		}
 		if cidrs, err = normalizeCIDRs(in.AllowedCIDRs); err != nil {
 			writeError(w, 400, err.Error())
 			return

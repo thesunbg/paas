@@ -78,6 +78,11 @@ func (m *tcpManager) apply(routes []model.TCPRoute) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	want := map[int]bool{}
+	// Public database ports are TLS-only: without TLS at the edge nothing listens.
+	if m.p.dbTLS.Load() == nil && len(routes) > 0 {
+		slog.Warn("database ports stay closed: TLS is not enabled at the edge", "routes", len(routes))
+		routes = nil
+	}
 	for _, r := range routes {
 		if r.Port <= 0 {
 			continue
@@ -157,6 +162,7 @@ func allowed(r *tcpRoute, ip netip.Addr) bool {
 const (
 	pgSSLRequest    = 80877103
 	pgGSSENCRequest = 80877104
+	pgCancelRequest = 80877102
 )
 
 func (m *tcpManager) handle(client net.Conn, l *tcpListener) {
@@ -217,11 +223,7 @@ func (m *tcpManager) handle(client net.Conn, l *tcpListener) {
 			if length == 8 && code == pgSSLRequest {
 				_, _ = br.Discard(8)
 				if tlsCfg == nil {
-					if _, err := client.Write([]byte{'N'}); err != nil {
-						return
-					}
-					conn = &bufConn{Conn: client, r: br}
-					break
+					return
 				}
 				if _, err := client.Write([]byte{'S'}); err != nil {
 					return
@@ -233,18 +235,24 @@ func (m *tcpManager) handle(client net.Conn, l *tcpListener) {
 				conn = tc
 				break
 			}
-			// A plain startup message.
-			conn = &bufConn{Conn: client, r: br}
-			break
+			// A CancelRequest carries only a pid and secret, so it may pass in the
+			// clear (libpq sends it unencrypted); a plain startup would carry the
+			// password, so it is dropped.
+			if length == 16 && code == pgCancelRequest {
+				conn = &bufConn{Conn: client, r: br}
+				break
+			}
+			return
 		}
 	case "tls":
-		if tlsCfg != nil {
-			tc := tls.Server(client, tlsCfg)
-			if err := tc.Handshake(); err != nil {
-				return
-			}
-			conn = tc
+		if tlsCfg == nil {
+			return
 		}
+		tc := tls.Server(client, tlsCfg)
+		if err := tc.Handshake(); err != nil {
+			return
+		}
+		conn = tc
 	}
 	_ = client.SetDeadline(time.Time{})
 

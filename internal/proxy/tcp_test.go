@@ -99,11 +99,10 @@ func TestTCPPostgresTLSAndAllowlist(t *testing.T) {
 	}
 	tc.Close()
 
-	// A plain startup message passes through.
+	// A plain startup message (it would carry the password) is dropped.
 	c2, _ := net.Dial("tcp", addr)
-	if got := roundTrip(t, c2, "\x00\x00\x00\x09plain"); got != "\x00\x00\x00\x09plain" {
-		t.Fatalf("plain got %q", got)
-	}
+	c2.Write([]byte("\x00\x00\x00\x09plain"))
+	wantClosed(t, c2)
 	c2.Close()
 
 	// The allowlist closes connections from other addresses.
@@ -126,6 +125,8 @@ func TestTCPPostgresTLSAndAllowlist(t *testing.T) {
 // tcpFixture starts a plain-mode route on a free port and returns the proxy and address.
 func tcpFixture(t *testing.T, r model.TCPRoute) (*Proxy, model.TCPRoute, string) {
 	p := New(config.Proxy{}, nil)
+	cert := selfSigned(t)
+	p.setDBTLS(&tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil }})
 	r.Port, r.Mode = freePort(t), "plain"
 	p.SetRoutes(&model.RouteTable{Version: 1, TCP: []model.TCPRoute{r}})
 	t.Cleanup(func() { p.tcp.apply(nil) }) // closes the port; its l.mu also orders handle's reads before later test writes
@@ -205,4 +206,80 @@ func TestTCPConnCap(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	dialEcho(t, addr)
 	_ = c2
+}
+
+// tlsProxy serves one route of the given mode with a TLS config.
+func tlsProxy(t *testing.T, mode string) (*Proxy, string) {
+	t.Helper()
+	p := New(config.Proxy{}, nil)
+	cert := selfSigned(t)
+	p.setDBTLS(&tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil }})
+	port := freePort(t)
+	p.SetRoutes(&model.RouteTable{Version: 1, DBHost: "db.test", TCP: []model.TCPRoute{
+		{Port: port, Upstreams: []string{echo(t)}, Mode: mode, Allow: []string{"127.0.0.0/8"}},
+	}})
+	t.Cleanup(func() { p.tcp.apply(nil) })
+	return p, "127.0.0.1:" + strconv.Itoa(port)
+}
+
+func TestTCPPostgresCancelRequestPasses(t *testing.T) {
+	_, addr := tlsProxy(t, "postgres")
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	msg := make([]byte, 16)
+	binary.BigEndian.PutUint32(msg, 16)
+	binary.BigEndian.PutUint32(msg[4:], pgCancelRequest)
+	if got := roundTrip(t, c, string(msg)); got != string(msg) {
+		t.Fatalf("cancel request not forwarded: %q", got)
+	}
+}
+
+func TestTCPPostgresDirectTLS(t *testing.T) {
+	_, addr := tlsProxy(t, "postgres")
+	tc, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, ServerName: "db.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Close()
+	if got := roundTrip(t, tc, "direct"); got != "direct" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestTCPTLSModeRejectsPlaintext(t *testing.T) {
+	_, addr := tlsProxy(t, "tls")
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte("PING\r\n"))
+	wantClosed(t, c)
+	tc, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, ServerName: "db.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Close()
+	if got := roundTrip(t, tc, "PING"); got != "PING" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// Without TLS at the edge no database port opens, whatever the mode.
+func TestTCPNoTLSNoListener(t *testing.T) {
+	for _, mode := range []string{"postgres", "tls", "plain"} {
+		p := New(config.Proxy{}, nil)
+		port := freePort(t)
+		p.SetRoutes(&model.RouteTable{Version: 1, TCP: []model.TCPRoute{
+			{Port: port, Upstreams: []string{echo(t)}, Mode: mode, Allow: []string{"127.0.0.0/8"}},
+		}})
+		if c, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), time.Second); err == nil {
+			c.Close()
+			t.Fatalf("%s: port open without TLS", mode)
+		}
+		p.tcp.apply(nil)
+	}
 }
