@@ -57,7 +57,7 @@ type ComposeOptions struct {
 // dbImages maps database images to managed engines.
 var dbImages = map[string]string{
 	"postgres": "postgres", "postgis": "postgres", "timescaledb": "postgres",
-	"mysql": "mysql", "mariadb": "mysql",
+	"mysql": "mysql", "mariadb": "mariadb",
 	"mongo": "mongo", "mongodb": "mongo", "mongodb-community-server": "mongo",
 	"redis": "redis", "valkey": "redis", "redis-stack-server": "redis",
 }
@@ -686,7 +686,7 @@ var (
 	envKey           = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	selfSecret       = regexp.MustCompile(`(?i)^(JWT|SESSION|COOKIE|AUTH|NEXTAUTH|ENCRYPTION|SIGNING|CSRF|APP|SECRET)[A-Z0-9_]*(SECRET|_KEY|_SALT)$|^SECRET(_KEY)?(_BASE)?$|^SALT$`)
 	placeholderValue = regexp.MustCompile(`(?i)your[-_ ]|change[-_ ]?(this|me|it)|replace[-_ ]?me|example\.(com|org)|xxxx|^<[^>]+>$|^\.\.\.$|_here$|-here$`)
-	dbSchemes        = map[string]string{"postgres": "postgres", "postgresql": "postgres", "mysql": "mysql", "mariadb": "mysql", "mongodb": "mongo", "mongodb+srv": "mongo", "redis": "redis", "rediss": "redis"}
+	dbSchemes        = map[string]string{"postgres": "postgres", "postgresql": "postgres", "mysql": "mysql", "mariadb": "mariadb", "mongodb": "mongo", "mongodb+srv": "mongo", "redis": "redis", "rediss": "redis"}
 )
 
 func localHost(h string) bool {

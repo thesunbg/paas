@@ -105,7 +105,9 @@ Deployment `status`: `queued`, `building`, `deploying`, `active`, `superseded`, 
 ## Databases
 
 Create body: `{"name": "main", "engine": "postgres", "mode": "shared", "size": "micro", "link_services": ["<service id>"], "env_name": "DATABASE_URL", "backup_schedule_hours": 24}`.
-Engines: `postgres`, `mysql` (MariaDB), `redis`, `mongo`. `shared` mode is available for postgres and mysql.
+Engines: `postgres`, `mysql` (MySQL 8.4), `mariadb`, `redis`, `mongo`. `shared` mode is available for postgres, mysql and mariadb. Before the split, `mysql` ran MariaDB: upgrading paasd renames those databases (and their shared server, `shared-mysql*` → `shared-mariadb*`) to `mariadb` in one migration. paasd restarts as a single binary on upgrade; do not run the old and new binaries side by side.
+
+MySQL 8.4 authenticates with `caching_sha2_password` (`mysql_native_password` is off by default in 8.4 and the platform does not enable it). Clients that cannot use `caching_sha2_password` over a connection without TLS (for example an older PHP mysqlnd) may fail to connect to a plain `mysql://` URL: update the driver rather than weakening the server. MariaDB is unaffected.
 
 | Method | Path | Notes |
 |---|---|---|
@@ -142,10 +144,10 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 | POST | `/api/v1/databases/{id}/public` | `{enabled, allowed_cidrs}`: external access on `db.<base domain>:<port>` (ports `PAAS_DB_PORT_MIN`–`MAX`, default 20000–20999). PostgreSQL TLS via SSLRequest (`sslmode=require`), Redis `rediss://`, MongoDB `tls=true` when HTTPS is on |
 | POST | `/api/v1/projects/{id}/databases` | `version` picks the engine version, matched exactly against `/api/v1/sizes` → `engines.<engine>.versions` (unknown → 400). A version past its end of life → 409; one within 180 days of it is created and the 201 body carries `warning`. Shared databases of one version share a server |
 | GET | `/api/v1/databases/{id}/metrics?hours=24` | size and connections per minute (7 days), quota, read-only flag |
-| PUT | `/api/v1/databases/{id}/quota` | administrators: `{quota_mb}` (0 = default: shared 1 GB, dedicated by size). Over quota PostgreSQL is read-only, MySQL loses write privileges |
+| PUT | `/api/v1/databases/{id}/quota` | administrators: `{quota_mb}` (0 = default: shared 1 GB, dedicated by size). Over quota PostgreSQL is read-only, MySQL and MariaDB lose write privileges |
 | POST | `/api/v1/databases/{id}/pooler` | `{enabled}` PgBouncer (transaction mode); linked services get `<ENV>_POOLED` |
 | PUT | `/api/v1/databases/{id}/size` | `{size}` resize a dedicated server in place |
-| GET/POST | `/api/v1/databases/{id}/users` | extra users `{name, role: readonly\|readwrite}` (PostgreSQL, MySQL) |
+| GET/POST | `/api/v1/databases/{id}/users` | extra users `{name, role: readonly\|readwrite}` (PostgreSQL, MySQL, MariaDB) |
 | DELETE | `/api/v1/databases/{id}/users/{user}` | |
 | POST | `/api/v1/databases/{id}/users/{user}/password` | rotate |
 | GET/POST | `/api/v1/databases/{id}/pitr` | `{enabled, retention_days}` WAL archiving + daily base backups (dedicated PostgreSQL) |

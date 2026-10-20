@@ -48,7 +48,7 @@ type CreateDatabaseInput struct {
 func (s *Server) createDatabase(ctx context.Context, proj *store.Project, in CreateDatabaseInput) (*store.Database, error) {
 	eng, ok := databases.Engines[in.Engine]
 	if !ok {
-		return nil, fmt.Errorf("unsupported engine %q (postgres, mysql, redis, mongo)", in.Engine)
+		return nil, fmt.Errorf("unsupported engine %q (postgres, mysql, mariadb, redis, mongo)", in.Engine)
 	}
 	if in.Mode == "" {
 		in.Mode = "shared"

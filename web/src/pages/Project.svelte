@@ -176,7 +176,7 @@
 
   const typeBadge: Record<string, string> = { web: 'blue', worker: 'purple', static: 'green', cron: 'yellow' };
   const typeIcon: Record<string, string> = { web: 'box', worker: 'zap', static: 'globe', cron: 'clock' };
-  const engineLabel: Record<string, string> = { postgres: 'PostgreSQL', mysql: 'MySQL', redis: 'Redis', mongo: 'MongoDB' };
+  const engineLabel: Record<string, string> = { postgres: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB', redis: 'Redis', mongo: 'MongoDB' };
 
   function source(s: ProjectDetail['services'][number]): string {
     if (s.source.kind === 'image') return s.source.image ?? '';
@@ -395,7 +395,7 @@
       {#if data.databases.length === 0}
         <div class="card empty">
           <Icon name="database" size={28} />
-          <p>No databases. Add PostgreSQL, MySQL, Redis or MongoDB.</p>
+          <p>No databases. Add PostgreSQL, MySQL, MariaDB, Redis or MongoDB.</p>
           {#if can('developer', p.team_id)}<button onclick={() => (dbOpen = true)}><Icon name="plus" />New database</button>{/if}
         </div>
       {:else if visibleDBs.length === 0}

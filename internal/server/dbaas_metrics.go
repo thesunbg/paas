@@ -120,9 +120,9 @@ func (s *Server) sampleDatabase(ctx context.Context, db *store.Database, now tim
 }
 
 // enforceQuota switches the database to read-only above its quota and back once
-// it is under 90% of it (PostgreSQL and MySQL; other engines are only reported).
+// it is under 90% of it (PostgreSQL, MySQL and MariaDB; other engines are only reported).
 func (s *Server) enforceQuota(ctx context.Context, db *store.Database, c databases.Credentials, serverID string, size int64) {
-	if db.Engine != databases.Postgres && db.Engine != databases.MySQL {
+	if db.Engine != databases.Postgres && db.Engine != databases.MySQL && db.Engine != databases.MariaDB {
 		return
 	}
 	limit := int64(quotaMB(db)) << 20

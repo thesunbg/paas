@@ -4,7 +4,7 @@ export type ServiceType = 'web' | 'worker' | 'static' | 'cron';
 export type ServiceStatus = 'created' | 'deploying' | 'running' | 'sleeping' | 'stopped' | 'failed';
 export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'active' | 'superseded' | 'failed' | 'cancelled';
 export type DatabaseStatus = 'provisioning' | 'ready' | 'failed' | 'upgrading' | 'deleting' | 'importing';
-export type Engine = 'postgres' | 'mysql' | 'redis' | 'mongo';
+export type Engine = 'postgres' | 'mysql' | 'mariadb' | 'redis' | 'mongo';
 export type QoS = 'guaranteed' | 'burstable' | 'best-effort';
 export type Role = 'owner' | 'admin' | 'developer' | 'viewer';
 
@@ -994,7 +994,7 @@ export const api = {
 };
 
 /** Fallback env var names when /sizes does not list engines. */
-const fallbackEnv: Record<string, string> = { postgres: 'DATABASE_URL', mysql: 'DATABASE_URL', redis: 'REDIS_URL', mongo: 'MONGODB_URL' };
+const fallbackEnv: Record<string, string> = { postgres: 'DATABASE_URL', mysql: 'DATABASE_URL', mariadb: 'DATABASE_URL', redis: 'REDIS_URL', mongo: 'MONGODB_URL' };
 
 let sizesCache: Promise<SizesResponse> | null = null;
 /** /sizes is static per server; fetch it once per page load. */

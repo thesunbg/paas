@@ -173,7 +173,7 @@ Usage:
   paas exec <service> -- <command>
   paas domains <service> [add|rm <hostname>]
   paas db ls
-  paas db create <name> --engine postgres|mysql|redis|mongo [--mode shared|dedicated] [--size micro] [--link svc]
+  paas db create <name> --engine postgres|mysql|mariadb|redis|mongo [--mode shared|dedicated] [--size micro] [--link svc]
   paas db info <name>
   paas db backup <name>
   paas db link <name> <service> [--env DATABASE_URL]
@@ -1047,7 +1047,7 @@ func cmdDB(args []string) error {
 	case "create":
 		pos, flags := splitFlags(args[1:])
 		fs := flag.NewFlagSet("db create", flag.ExitOnError)
-		engine := fs.String("engine", "postgres", "postgres | mysql | redis | mongo")
+		engine := fs.String("engine", "postgres", "postgres | mysql | mariadb | redis | mongo")
 		mode := fs.String("mode", "", "shared | dedicated")
 		size := fs.String("size", "micro", "size preset")
 		link := fs.String("link", "", "comma separated services to link")

@@ -28,7 +28,7 @@ See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap, and [docs/API.md](d
 | Build | Language detection for Node (npm/pnpm/yarn/bun, Next/Nuxt/SvelteKit/Remix/Astro/Vite/CRA/Angular/Nest/Express), Go, Python (Django/FastAPI/Flask), PHP (Laravel via FrankenPHP), Ruby (Rails), Rust, Java (Maven/Gradle), Deno and static HTML. Your own Dockerfile always wins. Build-time secrets never land in image layers |
 | Run | Web services, workers, static sites (SPA fallback, gzip, immutable asset caching), cron jobs, PR preview deployments, persistent volumes |
 | Operate | Zero-downtime rolling deploys, instant rollback, environment variables encrypted at rest, custom domains with automatic HTTPS (Let's Encrypt), live build and runtime logs, web console (exec), scaling, autoscaling (CPU / requests per second), metrics history, crash restarts and self-healing |
-| Databases | Shared or dedicated PostgreSQL / MariaDB, plus Redis and MongoDB; linking injects `DATABASE_URL`; scheduled backups and restore; off-site copies to S3/R2/B2/MinIO; one-click upgrade from shared to dedicated |
+| Databases | Shared or dedicated PostgreSQL / MySQL / MariaDB, plus Redis and MongoDB; linking injects `DATABASE_URL`; scheduled backups and restore; off-site copies to S3/R2/B2/MinIO; one-click upgrade from shared to dedicated |
 | Density | QoS classes (guaranteed / burstable / best-effort), per-node overcommit, sleep mode, memory-pressure eviction (PSI), language runtime tuning, right-sizing, zram, image and build-cache GC |
 | Cluster | `join` with one command, WireGuard mesh, internal DNS (`<service>.<project>.internal`), cross-node project isolation, internal image registry, cordon / drain, node health and rescheduling |
 | Security | Sessions + API tokens, TOTP two-factor auth, team RBAC (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, per-IP rate limiting at the edge |
@@ -86,7 +86,7 @@ The server's `PAAS_PUBLIC_URL` must be reachable from GitHub.
 
 ## Databases as a service
 
-Managed PostgreSQL, MySQL (MariaDB), Redis and MongoDB, shared or dedicated, with:
+Managed PostgreSQL, MySQL, MariaDB, Redis and MongoDB, shared or dedicated, with:
 external access on `db.<base domain>:<port>` (TLS and an IP allowlist; open TCP
 20000–20999 in the firewall), usage metrics and storage quotas, PgBouncer pooling,
 extra read-only / read-write users, in-place resize, point-in-time recovery and

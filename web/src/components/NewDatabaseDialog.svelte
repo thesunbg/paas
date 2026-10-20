@@ -17,7 +17,8 @@
 
   const engineList: { id: Engine; label: string; shared: boolean }[] = [
     { id: 'postgres', label: 'PostgreSQL', shared: true },
-    { id: 'mysql', label: 'MySQL (MariaDB)', shared: true },
+    { id: 'mysql', label: 'MySQL', shared: true },
+    { id: 'mariadb', label: 'MariaDB', shared: true },
     { id: 'redis', label: 'Redis', shared: false },
     { id: 'mongo', label: 'MongoDB', shared: false },
   ];
@@ -94,7 +95,7 @@
         <select bind:value={version}>
           {#each versionInfos as v (v.name)}<option value={v.name}>{v.name}{v.name === defaultVersion ? ' (recommended)' : ''}{v.status === 'ending' ? ` (end of life ${v.eol})` : ''}</option>{/each}
         </select>
-        <span class="hint">{engine === 'mysql' ? 'MariaDB (MySQL-compatible). ' : ''}Shared databases of the same version share one server; minor updates are applied on restart.</span>
+        <span class="hint">{engine === 'mariadb' ? 'MariaDB (MySQL-compatible). ' : ''}Shared databases of the same version share one server; minor updates are applied on restart.</span>
       </label>
     {/if}
     <fieldset class="field">

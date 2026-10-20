@@ -61,7 +61,7 @@ var All = []Template{
 	{
 		ID: "wordpress", Title: "WordPress", Category: "CMS",
 		Description: "The world's most popular CMS, with a MariaDB database on the shared server.",
-		Databases:   []Database{{Name: "wordpress", Engine: "mysql"}},
+		Databases:   []Database{{Name: "wordpress", Engine: "mariadb"}},
 		Services: []Service{{
 			Name: "wordpress", Image: "docker.io/library/wordpress:6-apache", Type: "web", Port: 80, Size: "small",
 			Env: map[string]string{

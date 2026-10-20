@@ -16,6 +16,7 @@ import (
 const (
 	Postgres = "postgres"
 	MySQL    = "mysql"
+	MariaDB  = "mariadb"
 	Redis    = "redis"
 	Mongo    = "mongo"
 )
@@ -72,13 +73,36 @@ func eol(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0,
 var Engines = map[string]Engine{
 	Postgres: {Name: Postgres, Image: "docker.io/library/postgres:17", Port: 5432, DataPath: "/var/lib/postgresql/data", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 128,
 		Versions: []Version{{"18", eol(2030, 11, 14)}, {"17", eol(2029, 11, 8)}, {"16", eol(2028, 11, 9)}, {"15", eol(2027, 11, 11)}, {"14", eol(2026, 11, 12)}}, DefaultVersion: "17"},
-	MySQL: {Name: MySQL, Image: "docker.io/library/mariadb:11", Port: 3306, DataPath: "/var/lib/mysql", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 192,
+	// MySQL 8.4 needs more than MariaDB to initialise its data directory; the floor is unverified
+	// on a real node at nano/micro (raise it on OOM).
+	MySQL: {Name: MySQL, Image: "docker.io/library/mysql:8.4", Port: 3306, DataPath: "/var/lib/mysql", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 512,
+		Versions: []Version{{"8.4", eol(2032, 4, 30)}}, DefaultVersion: "8.4"},
+	MariaDB: {Name: MariaDB, Image: "docker.io/library/mariadb:11", Port: 3306, DataPath: "/var/lib/mysql", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 192,
 		Versions: []Version{{"11.8", eol(2028, 6, 4)}, {"11.4", eol(2029, 5, 29)}, {"10.11", eol(2028, 2, 16)}, {"10.6", eol(2026, 7, 6)}}, DefaultVersion: "11.8"},
 	Redis: {Name: Redis, Image: "docker.io/library/redis:7-alpine", Port: 6379, DataPath: "/data", DefaultEnv: "REDIS_URL", MinMemoryMB: 32,
 		Versions: []Version{{"8", time.Time{}}, {"7.4", eol(2029, 12, 1)}, {"7.2", eol(2029, 12, 1)}}, DefaultVersion: "7.4"},
 	Mongo: {Name: Mongo, Image: "docker.io/library/mongo:7", Port: 27017, DataPath: "/data/db", DefaultEnv: "MONGODB_URL", MinMemoryMB: 256,
 		Versions: []Version{{"8.0", eol(2029, 10, 31)}, {"7.0", eol(2027, 8, 31)}, {"6.0", eol(2025, 7, 31)}}, DefaultVersion: "7.0"},
 }
+
+// myFamily is what differs between the MySQL-family engines: the binaries in the image, the
+// prefix of the image's environment variables, and the server flags. Everything else (SQL,
+// ports, paths) is shared, so each function below reads this instead of switching per engine.
+type myFamily struct {
+	image, client, dump, server, envPrefix string
+	serverArgs                             []string // flags only this server understands
+	dumpSkipsCertCheck                     bool     // its dump client needs --skip-ssl-verify-server-cert for MySQL sources
+}
+
+var myFamilies = map[string]myFamily{
+	MariaDB: {image: "docker.io/library/mariadb:", client: "mariadb", dump: "mariadb-dump", server: "mariadbd", envPrefix: "MARIADB",
+		serverArgs: []string{"--performance-schema=OFF"}, dumpSkipsCertCheck: true},
+	// performance_schema stays at the MySQL default: the flag is MariaDB tuning, unverified on 8.4.
+	MySQL: {image: "docker.io/library/mysql:", client: "mysql", dump: "mysqldump", server: "mysqld", envPrefix: "MYSQL"},
+}
+
+// cmd is a client invocation: the client binary plus args.
+func (f myFamily) cmd(args ...string) []string { return append([]string{f.client}, args...) }
 
 // VersionInfo is a catalog entry as the API shows it.
 type VersionInfo struct {
@@ -142,11 +166,12 @@ func ImageFor(engine, version string) (string, error) {
 	if _, err := Lookup(engine, version); err != nil {
 		return "", err
 	}
+	if f, ok := myFamilies[engine]; ok {
+		return f.image + version, nil
+	}
 	switch engine {
 	case Postgres:
 		return "docker.io/library/postgres:" + version, nil
-	case MySQL:
-		return "docker.io/library/mariadb:" + version, nil
 	case Redis:
 		return "docker.io/library/redis:" + version + "-alpine", nil
 	default:
@@ -242,19 +267,19 @@ func ServerSpec(engine, version string, preset Preset, shared bool, c Credential
 			"-c", "maintenance_work_mem=" + strconv.Itoa(max(16, mem/16)) + "MB",
 			"-c", "max_connections=" + strconv.Itoa(preset.MaxConns),
 		}
-	case MySQL:
-		spec.Env["MARIADB_ROOT_PASSWORD"] = firstNonEmpty(c.RootPass, c.Password)
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
+		spec.Env[f.envPrefix+"_ROOT_PASSWORD"] = firstNonEmpty(c.RootPass, c.Password)
 		if !shared {
-			spec.Env["MARIADB_DATABASE"] = c.DBName
-			spec.Env["MARIADB_USER"] = c.Username
-			spec.Env["MARIADB_PASSWORD"] = c.Password
+			spec.Env[f.envPrefix+"_DATABASE"] = c.DBName
+			spec.Env[f.envPrefix+"_USER"] = c.Username
+			spec.Env[f.envPrefix+"_PASSWORD"] = c.Password
 		}
-		spec.Command = []string{"docker-entrypoint.sh", "mariadbd",
+		spec.Command = append([]string{"docker-entrypoint.sh", f.server,
 			"--innodb-buffer-pool-size=" + strconv.Itoa(max(32, mem*45/100)) + "M",
 			"--max-connections=" + strconv.Itoa(preset.MaxConns),
-			"--performance-schema=OFF",
 			"--skip-name-resolve",
-		}
+		}, f.serverArgs...)
 	case Redis:
 		spec.Command = []string{"redis-server", "--requirepass", c.Password, "--appendonly", "yes",
 			"--maxmemory", strconv.Itoa(max(16, mem*80/100)) + "mb", "--maxmemory-policy", "noeviction"}
@@ -277,7 +302,7 @@ func URL(engine string, c Credentials) string {
 	switch engine {
 	case Postgres:
 		return (&url.URL{Scheme: "postgres", User: user, Host: host, Path: "/" + c.DBName, RawQuery: "sslmode=disable"}).String()
-	case MySQL:
+	case MySQL, MariaDB:
 		return (&url.URL{Scheme: "mysql", User: user, Host: host, Path: "/" + c.DBName}).String()
 	case Redis:
 		return (&url.URL{Scheme: "redis", User: url.UserPassword("default", c.Password), Host: host}).String()
@@ -311,10 +336,11 @@ REVOKE ALL ON DATABASE %[5]s FROM PUBLIC;
 GRANT ALL ON DATABASE %[5]s TO %[2]s;
 `, quoteLit(c.Username), quoteIdent(c.Username), quoteLit(c.Password), maxConns, quoteIdent(c.DBName), quoteLit(c.DBName))
 		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "postgres"}, Stdin: sql}, nil
-	case MySQL:
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
 		sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s;\nCREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED BY %s WITH MAX_USER_CONNECTIONS %d;\nGRANT ALL PRIVILEGES ON %s.* TO %s@'%%';\nFLUSH PRIVILEGES;\n",
 			quoteMy(c.DBName), quoteLit(c.Username), quoteLit(c.Password), maxConns, quoteMy(c.DBName), quoteLit(c.Username))
-		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + c.RootPass}, Stdin: sql}, nil
+		return Command{Cmd: f.cmd("-uroot"), Env: []string{"MYSQL_PWD=" + c.RootPass}, Stdin: sql}, nil
 	}
 	return Command{}, fmt.Errorf("%s does not support shared servers", engine)
 }
@@ -325,9 +351,10 @@ func DropLogical(engine string, c Credentials) (Command, error) {
 	case Postgres:
 		sql := fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE);\nDROP ROLE IF EXISTS %s;\n", quoteIdent(c.DBName), quoteIdent(c.Username))
 		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "postgres"}, Stdin: sql}, nil
-	case MySQL:
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
 		sql := fmt.Sprintf("DROP DATABASE IF EXISTS %s;\nDROP USER IF EXISTS %s@'%%';\n", quoteMy(c.DBName), quoteLit(c.Username))
-		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + c.RootPass}, Stdin: sql}, nil
+		return Command{Cmd: f.cmd("-uroot"), Env: []string{"MYSQL_PWD=" + c.RootPass}, Stdin: sql}, nil
 	}
 	return Command{}, fmt.Errorf("%s does not support shared servers", engine)
 }
@@ -341,8 +368,9 @@ func Backup(engine string, shared bool, c Credentials) (Command, string, error) 
 			user = "postgres"
 		}
 		return Command{Cmd: []string{"pg_dump", "-U", user, "-Fc", "-d", c.DBName}}, "dump", nil
-	case MySQL:
-		return Command{Cmd: []string{"mariadb-dump", "-uroot", "--single-transaction", "--routines", "--databases", c.DBName}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}, "sql", nil
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
+		return Command{Cmd: []string{f.dump, "-uroot", "--single-transaction", "--routines", "--databases", c.DBName}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}, "sql", nil
 	case Redis:
 		return Command{Cmd: []string{"sh", "-c", "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" SAVE >/dev/null && cat /data/dump.rdb"}, Env: []string{"REDIS_PASSWORD=" + c.Password}}, "rdb", nil
 	case Mongo:
@@ -364,8 +392,9 @@ func Restore(engine string, shared bool, c Credentials) (Command, error) {
 			cmd = append(cmd, "--role="+c.Username)
 		}
 		return Command{Cmd: cmd}, nil
-	case MySQL:
-		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}, nil
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
+		return Command{Cmd: f.cmd("-uroot"), Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}, nil
 	case Mongo:
 		return Command{Cmd: []string{"mongorestore", "--quiet", "--archive", "--gzip", "--drop", "-u", c.Username, "-p", c.Password, "--authenticationDatabase", "admin"}}, nil
 	}
@@ -382,9 +411,10 @@ func Stats(engine string, shared bool, c Credentials) (Command, error) {
 		}
 		q := fmt.Sprintf("SELECT pg_database_size(%[1]s), (SELECT count(*) FROM pg_stat_activity WHERE datname = %[1]s)", quoteLit(c.DBName))
 		return Command{Cmd: []string{"psql", "-At", "-F", " ", "-U", user, "-d", "postgres", "-c", q}}, nil
-	case MySQL:
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
 		q := fmt.Sprintf("SELECT (SELECT COALESCE(SUM(data_length+index_length),0) FROM information_schema.tables WHERE table_schema=%[1]s), (SELECT COUNT(*) FROM information_schema.processlist WHERE db=%[1]s)", quoteLit(c.DBName))
-		return Command{Cmd: []string{"mariadb", "-uroot", "-N", "-B", "-e", q}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}, nil
+		return Command{Cmd: f.cmd("-uroot", "-N", "-B", "-e", q), Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}, nil
 	case Redis:
 		return Command{Cmd: []string{"sh", "-c", `redis-cli --no-auth-warning -a "$REDIS_PASSWORD" INFO | awk -F: '/^used_memory:/{m=$2} /^connected_clients:/{c=$2} END{gsub(/\r/,"",m); gsub(/\r/,"",c); print m, c}'`}, Env: []string{"REDIS_PASSWORD=" + c.Password}}, nil
 	case Mongo:
@@ -403,8 +433,9 @@ func VersionCommand(engine string, shared bool, c Credentials) Command {
 			user = "postgres"
 		}
 		return Command{Cmd: []string{"psql", "-At", "-U", user, "-d", "postgres", "-c", "SHOW server_version"}}
-	case MySQL:
-		return Command{Cmd: []string{"mariadb", "-uroot", "-N", "-B", "-e", "SELECT VERSION()"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
+		return Command{Cmd: f.cmd("-uroot", "-N", "-B", "-e", "SELECT VERSION()"), Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}}
 	case Redis:
 		return Command{Cmd: []string{"redis-server", "--version"}}
 	default:
@@ -448,12 +479,13 @@ func SetReadOnly(engine string, shared bool, c Credentials, on bool) (Command, e
 				quoteIdent(c.DBName), quoteLit(c.DBName))
 		}
 		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", "postgres"}, Stdin: sql}, nil
-	case MySQL:
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
 		sql := fmt.Sprintf("GRANT ALL PRIVILEGES ON %s.* TO %s@'%%';\nFLUSH PRIVILEGES;\n", quoteMy(c.DBName), quoteLit(c.Username))
 		if on {
 			sql = fmt.Sprintf("REVOKE INSERT, UPDATE, CREATE, ALTER, INDEX ON %s.* FROM %s@'%%';\nFLUSH PRIVILEGES;\n", quoteMy(c.DBName), quoteLit(c.Username))
 		}
-		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
+		return Command{Cmd: f.cmd("-uroot"), Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
 	}
 	return Command{}, fmt.Errorf("read-only mode is not supported for %s", engine)
 }
@@ -491,14 +523,15 @@ ALTER DEFAULT PRIVILEGES FOR ROLE %[6]s IN SCHEMA public GRANT %[5]s ON SEQUENCE
 			admin = "postgres"
 		}
 		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", admin, "-d", "postgres"}, Stdin: sql}, nil
-	case MySQL:
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
 		priv := "SELECT"
 		if role == "readwrite" {
 			priv = "SELECT, INSERT, UPDATE, DELETE"
 		}
 		sql := fmt.Sprintf("CREATE USER %[1]s@'%%' IDENTIFIED BY %[2]s WITH MAX_USER_CONNECTIONS 20;\nGRANT %[3]s ON %[4]s.* TO %[1]s@'%%';\nFLUSH PRIVILEGES;\n",
 			quoteLit(name), quoteLit(password), priv, quoteMy(c.DBName))
-		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
+		return Command{Cmd: f.cmd("-uroot"), Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
 	}
 	return Command{}, fmt.Errorf("extra users are supported for PostgreSQL and MySQL")
 }
@@ -524,9 +557,10 @@ DROP ROLE IF EXISTS %[1]s;
 			admin = "postgres"
 		}
 		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", admin, "-d", "postgres"}, Stdin: sql}, nil
-	case MySQL:
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
 		sql := fmt.Sprintf("DROP USER IF EXISTS %s@'%%';\n", quoteLit(name))
-		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
+		return Command{Cmd: f.cmd("-uroot"), Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)}, Stdin: sql}, nil
 	}
 	return Command{}, fmt.Errorf("extra users are supported for PostgreSQL and MySQL")
 }
@@ -541,8 +575,9 @@ func SetPassword(engine string, shared bool, c Credentials, name, password strin
 		}
 		return Command{Cmd: []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", admin, "-d", "postgres"},
 			Stdin: fmt.Sprintf("ALTER ROLE %s PASSWORD %s;\n", quoteIdent(name), quoteLit(password))}, nil
-	case MySQL:
-		return Command{Cmd: []string{"mariadb", "-uroot"}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)},
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
+		return Command{Cmd: f.cmd("-uroot"), Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password)},
 			Stdin: fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED BY %s;\nFLUSH PRIVILEGES;\n", quoteLit(name), quoteLit(password))}, nil
 	}
 	return Command{}, fmt.Errorf("not supported for %s", engine)
@@ -588,7 +623,8 @@ pg_dump --no-owner --no-acl -Fc -d "$SRC_URL" -f "$F" || { rm -f "$F"; exit %[2]
 pg_restore -U %[3]s --clean --if-exists --no-owner --no-acl%[4]s -d %[5]s "$F"
 rc=$?; rm -f "$F"; exit $rc`, shQuote(file), ImportExitDump, shQuote(user), role, shQuote(c.DBName))
 		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{"SRC_URL=" + sourceURL}}, nil
-	case MySQL:
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
 		if u.Scheme != "mysql" && u.Scheme != "mariadb" {
 			return Command{}, fmt.Errorf("the source must be a mysql:// URL")
 		}
@@ -598,13 +634,21 @@ rc=$?; rm -f "$F"; exit $rc`, shQuote(file), ImportExitDump, shQuote(user), role
 		}
 		pass, _ := u.User.Password()
 		port := firstNonEmpty(u.Port(), "3306")
-		// MariaDB 11.4+ clients verify the server certificate by default, which
-		// fails against most MySQL servers; older clients lack the option.
+		// The image only carries its own family's dump tool, so that tool dumps whatever the
+		// source is. mariadb-dump 11.4+ verifies the server certificate by default, which
+		// fails against most MySQL servers, so only that tool gets the skip flag; mysqldump
+		// does not verify. Options a tool may not know are probed, not assumed.
+		sslProbe := ""
+		if f.dumpSkipsCertCheck {
+			sslProbe = "$D --help 2>/dev/null | grep -q ssl-verify-server-cert && OPTS=\"$OPTS --skip-ssl-verify-server-cert\"\n"
+		}
 		script := fmt.Sprintf(`F=%[1]s
-SSL=""; mariadb-dump --help 2>/dev/null | grep -q ssl-verify-server-cert && SSL="--skip-ssl-verify-server-cert"
-MYSQL_PWD="$SRC_PASS" mariadb-dump $SSL -h "$SRC_HOST" -P "$SRC_PORT" -u "$SRC_USER" --single-transaction --routines --triggers --no-tablespaces "$SRC_DB" > "$F" || { rm -f "$F"; exit %[2]d; }
-MYSQL_PWD="$DST_PASS" mariadb -uroot %[3]s < "$F"
-rc=$?; rm -f "$F"; exit $rc`, shQuote(file), ImportExitDump, shQuote(c.DBName))
+D=%[4]s; OPTS=""
+%[6]s$D --help 2>/dev/null | grep -q column-statistics && OPTS="$OPTS --column-statistics=0"
+$D --help 2>/dev/null | grep -q set-gtid-purged && OPTS="$OPTS --set-gtid-purged=OFF"
+MYSQL_PWD="$SRC_PASS" $D $OPTS -h "$SRC_HOST" -P "$SRC_PORT" -u "$SRC_USER" --single-transaction --routines --triggers --no-tablespaces "$SRC_DB" > "$F" || { rm -f "$F"; exit %[2]d; }
+MYSQL_PWD="$DST_PASS" %[5]s -uroot %[3]s < "$F"
+rc=$?; rm -f "$F"; exit $rc`, shQuote(file), ImportExitDump, shQuote(c.DBName), f.dump, f.client, sslProbe)
 		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{
 			"SRC_HOST=" + u.Hostname(), "SRC_PORT=" + port, "SRC_USER=" + u.User.Username(), "SRC_PASS=" + pass, "SRC_DB=" + src,
 			"DST_PASS=" + firstNonEmpty(c.RootPass, c.Password),

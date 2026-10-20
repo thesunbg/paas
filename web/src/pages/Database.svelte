@@ -85,7 +85,7 @@
   const isAdmin = $derived(teamId ? can('admin', teamId) : false);
   const serviceName = (sid: string) => project?.services.find((s) => s.id === sid)?.name ?? sid.slice(0, 8);
   const linkable = $derived((project?.services ?? []).filter((s) => !detail?.links.some((l) => l.service_id === s.id)));
-  const engineLabel: Record<string, string> = { postgres: 'PostgreSQL', mysql: 'MySQL (MariaDB)', redis: 'Redis', mongo: 'MongoDB' };
+  const engineLabel: Record<string, string> = { postgres: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB', redis: 'Redis', mongo: 'MongoDB' };
   let cat = $state<SizesResponse | null>(null);
   const dbSizes = $derived(cat?.database_sizes ?? []);
   const sizePreset = $derived(dbSizes.find((s) => s.name === db?.size_preset));
@@ -261,7 +261,7 @@
       {#if db.status === 'ready'}<Usage {detail} />{/if}
       <ExternalAccess {detail} {isAdmin} reload={load} />
       {#if db.engine === 'postgres'}<Pooler {detail} {isAdmin} reload={load} />{/if}
-      {#if (db.engine === 'postgres' || db.engine === 'mysql') && isDev}<Users {detail} {isAdmin} />{/if}
+      {#if (db.engine === 'postgres' || db.engine === 'mysql' || db.engine === 'mariadb') && isDev}<Users {detail} {isAdmin} />{/if}
       {#if db.engine === 'postgres'}<PITR {detail} {isAdmin} reload={load} />{/if}
       {#if db.engine === 'postgres'}<HA {detail} {isAdmin} reload={load} />{/if}
       {#if isAdmin && db.engine !== 'redis'}<Import {detail} reload={load} />{/if}

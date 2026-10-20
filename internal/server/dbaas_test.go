@@ -27,7 +27,7 @@ func TestExternalURLAlwaysTLS(t *testing.T) {
 }
 
 func TestTCPModePlainEngines(t *testing.T) {
-	for _, e := range []string{databases.MySQL} {
+	for _, e := range []string{databases.MySQL, databases.MariaDB} {
 		if tcpMode(e) != "plain" {
 			t.Fatalf("%s should be plain (never exposed)", e)
 		}

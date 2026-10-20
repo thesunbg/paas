@@ -56,6 +56,17 @@ func TestMigrationDropsMySQLPublicPort(t *testing.T) {
 	if got.Options.PublicPort != 20002 || got.OptionsVersion != pg.OptionsVersion {
 		t.Errorf("postgres touched: %+v v%d", got.Options, got.OptionsVersion)
 	}
+	// 019 renames the engine; the closed port must survive it, for either engine name.
+	split, err := migrationsFS.ReadFile("migrations/019_split_mariadb.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(ctx, string(split)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = st.DatabaseByID(ctx, my.ID); err != nil || got.Engine != "mariadb" || got.Options.PublicPort != 0 {
+		t.Errorf("after split: %v engine=%q options=%+v", err, got.Engine, got.Options)
+	}
 	used, err := st.UsedPublicPorts(ctx)
 	if err != nil {
 		t.Fatal(err)

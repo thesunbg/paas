@@ -8,6 +8,7 @@
   const examples: Record<string, string> = {
     postgres: 'postgresql://user:password@old-server:5432/dbname',
     mysql: 'mysql://user:password@old-server:3306/dbname',
+    mariadb: 'mysql://user:password@old-server:3306/dbname',
     mongo: 'mongodb://user:password@old-server:27017/dbname?authSource=admin',
   };
   let source = $state('');

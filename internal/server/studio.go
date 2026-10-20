@@ -86,7 +86,7 @@ type studioConnection struct {
 	Options  map[string]any `json:"options,omitempty"`
 }
 
-var studioKinds = map[string]string{databases.Postgres: "postgres", databases.MySQL: "mysql", databases.Mongo: "mongodb", databases.Redis: "redis"}
+var studioKinds = map[string]string{databases.Postgres: "postgres", databases.MySQL: "mysql", databases.MariaDB: "mysql", databases.Mongo: "mongodb", databases.Redis: "redis"}
 
 // studioConnections lists the project's databases for dbweb, with the
 // credentials linked services use.

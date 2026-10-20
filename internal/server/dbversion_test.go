@@ -39,7 +39,8 @@ func TestCreateDatabaseVersionGate(t *testing.T) {
 		engine, version string
 		want            int
 	}{
-		{"mysql", "10.6", 409},
+		{"mariadb", "10.6", 409},
+		{"mysql", "10.6", 400},
 		{"mongo", "6.0", 409},
 		{"postgres", "17@sha256:0123456789abcdef", 400},
 		{"postgres", "../x", 400},
