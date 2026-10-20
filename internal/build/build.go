@@ -106,6 +106,11 @@ func (b *Builder) Build(ctx context.Context, req proto.BuildRequest, log Logger)
 	rep.Port = plan.Port
 	rep.Prisma = plan.Prisma
 	log(fmt.Sprintf("==> detected %s", plan.Summary()))
+	if plan.UserDockerfile != "" {
+		if err := vetDockerfile(filepath.Join(root, plan.UserDockerfile), req.ProjectID); err != nil {
+			return proto.BuildReply{Error: err.Error(), CommitSHA: sha, CommitMessage: msg, Detected: rep.Detected}
+		}
+	}
 
 	dfDir := root
 	dfName := plan.UserDockerfile
@@ -140,6 +145,9 @@ func (b *Builder) Build(ctx context.Context, req proto.BuildRequest, log Logger)
 	if plan.UserDockerfile != "" {
 		// Generated Dockerfiles read env through the secret mount only; for user Dockerfiles pass
 		// just the variables they declare with ARG.
+		// Never resolve a base from the node's local image store: images built for other tenants
+		// live there as paas.local/<service>:<deployment>. With pull, paas.local fails to resolve.
+		args = append(args, "--opt", "image-resolve-mode=pull")
 		declared := declaredArgs(filepath.Join(root, plan.UserDockerfile))
 		for _, k := range keys {
 			if declared[k] {
