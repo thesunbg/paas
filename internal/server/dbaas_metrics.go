@@ -197,6 +197,10 @@ func (s *Server) handleDatabaseQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "database not found")
 		return
 	}
+	if db.Status == "upgrading" || db.MoveState != nil {
+		writeError(w, 409, "the database is being upgraded: wait for it to finish")
+		return
+	}
 	var in struct {
 		QuotaMB int `json:"quota_mb"`
 	}

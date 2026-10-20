@@ -193,7 +193,7 @@ func (s *Server) handleCreateDBUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name: 2-31 lowercase letters, digits or _, starting with a letter")
 		return
 	}
-	if db.Status != "ready" {
+	if dbBusy(db) {
 		writeError(w, 409, "the database is not ready")
 		return
 	}
@@ -234,6 +234,10 @@ func (s *Server) handleDeleteDBUser(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		return
 	}
+	if dbBusy(db) {
+		writeError(w, 409, "the database is not ready")
+		return
+	}
 	du, err := s.store.DBUser(r.Context(), db.ID, r.PathValue("user"))
 	if err != nil {
 		writeError(w, 404, "user not found")
@@ -265,6 +269,10 @@ func (s *Server) handleRotateDBUser(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		return
 	}
+	if dbBusy(db) {
+		writeError(w, 409, "the database is not ready")
+		return
+	}
 	du, err := s.store.DBUser(r.Context(), db.ID, r.PathValue("user"))
 	if err != nil {
 		writeError(w, 404, "user not found")
@@ -288,3 +296,6 @@ func (s *Server) handleRotateDBUser(w http.ResponseWriter, r *http.Request) {
 	_ = s.store.SetDBUserPassword(r.Context(), db.ID, du.Username, s.box.MustEncrypt(pass))
 	writeJSON(w, 200, map[string]string{"username": du.Username, "password": pass})
 }
+
+// dbBusy: a resize, move or update owns the server, so requests that change it must wait.
+func dbBusy(db *store.Database) bool { return db.Status != "ready" || db.MoveState != nil }

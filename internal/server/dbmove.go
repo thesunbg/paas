@@ -38,11 +38,16 @@ type moveTarget struct {
 // linkedStartWait is how long each linked service gets to come up before the next one starts.
 var linkedStartWait = 2 * time.Minute
 
+// errFlipUnknown: the flip failed and the row could not be read back, so whether the pointer moved is unknown.
+var errFlipUnknown = errors.New("outcome of the flip is unknown")
+
 func (s *Server) moveDatabase(ctx context.Context, dbID string, t moveTarget) {
 	unlock := s.lock("db-" + dbID)
 	defer unlock()
 	db, err := s.store.DatabaseByID(ctx, dbID)
 	if err != nil {
+		slog.Error("database move: read database", "db", dbID, "err", err)
+		_ = s.store.SetDatabaseStatus(ctx, dbID, "ready", "upgrade failed: "+err.Error())
 		return
 	}
 	label := "upgrade"
@@ -56,6 +61,9 @@ func (s *Server) moveDatabase(ctx context.Context, dbID string, t moveTarget) {
 	st := &store.MoveState{Phase: store.MovePrepare, OldService: *db.ServerServiceID, TargetVersion: t.Version, TargetDedicated: t.Dedicated, OldShared: db.Mode == "shared"}
 	if err := s.prepareMove(ctx, db, st, t); err != nil {
 		slog.Error("database move", "db", db.Name, "err", err)
+		if errors.Is(err, errFlipUnknown) {
+			return // the pointer may be new: leave move_state for resumeMove to decide
+		}
 		s.abortMove(ctx, db, st, label+" failed: "+err.Error())
 		return
 	}
@@ -189,7 +197,11 @@ func (s *Server) prepareMove(ctx context.Context, db *store.Database, st *store.
 	ok, err := s.store.FlipDatabase(ctx, db.ID, st.OldService, target.ID, t.Version, tdb.Mode, *st)
 	if err != nil {
 		// The statement may have committed before the connection broke: the row says which.
-		if fresh, rerr := s.store.DatabaseByID(ctx, db.ID); rerr != nil || fresh.MoveState == nil || fresh.MoveState.Phase != store.MoveFlip {
+		fresh, rerr := s.store.DatabaseByID(ctx, db.ID)
+		if rerr != nil {
+			return fmt.Errorf("%w: %v (flip: %v)", errFlipUnknown, rerr, err)
+		}
+		if fresh.MoveState == nil || fresh.MoveState.Phase != store.MoveFlip {
 			return err
 		}
 	} else if !ok {

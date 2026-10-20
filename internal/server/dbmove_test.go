@@ -441,6 +441,12 @@ func TestUpgradingBlocksOtherOperations(t *testing.T) {
 		{"restore backup", "POST", id + "/backups/" + b.ID + "/restore", nil, []int{409}},
 		{"update-minor", "POST", id + "/update-minor", nil, []int{409}},
 		{"major upgrade", "POST", id + "/version", map[string]any{"version": "18", "confirm_downtime": true}, []int{409}},
+		{"rotate user password", "POST", id + "/users/x/password", nil, []int{409}},
+		{"delete user", "DELETE", id + "/users/x", nil, []int{409}},
+		{"create user", "POST", id + "/users", map[string]any{"name": "ab", "role": "readonly"}, []int{409}},
+		{"public access", "POST", id + "/public", map[string]any{"enabled": false}, []int{409}},
+		{"quota", "PUT", id + "/quota", map[string]any{"quota_mb": 5}, []int{409}},
+		{"delete database", "DELETE", id, nil, []int{409}},
 		{"shared to dedicated", "POST", "/api/v1/databases/" + sh.ID + "/upgrade", nil, []int{400, 409}},
 	}
 	for _, r := range reqs {

@@ -145,6 +145,10 @@ func (s *Server) handleDatabasePublic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "database not found")
 		return
 	}
+	if dbBusy(db) {
+		writeError(w, 409, "the database is not ready")
+		return
+	}
 	var cidrs []string
 	if in.Enabled {
 		var err error

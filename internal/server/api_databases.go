@@ -128,11 +128,19 @@ func (s *Server) handleDeleteDatabase(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		return
 	}
-	if db.MoveState != nil {
-		writeError(w, 409, "the database is being moved: wait for it to finish")
+	ctx := context.WithoutCancel(r.Context())
+	unlock := s.lock("db-" + db.ID) // waits for a move or update in flight
+	defer unlock()
+	db, err := s.store.DatabaseByID(ctx, db.ID)
+	if err != nil {
+		writeError(w, 404, "database not found")
 		return
 	}
-	if err := s.deleteDatabase(context.WithoutCancel(r.Context()), db); err != nil {
+	if db.MoveState != nil || db.Status == "upgrading" {
+		writeError(w, 409, "the database is being upgraded: wait for it to finish")
+		return
+	}
+	if err := s.deleteDatabase(ctx, db); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
