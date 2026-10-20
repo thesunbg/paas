@@ -24,6 +24,7 @@ import (
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/contrib/seccomp"
 	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/remotes"
 	"github.com/containerd/containerd/v2/core/remotes/docker"
@@ -33,6 +34,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/netns"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/thesunbg/paas/internal/model"
@@ -47,9 +49,16 @@ const (
 	labelHAPG     = "paas.ha-postgres"
 )
 
+// imageAPI is the part of the containerd client that image handling uses (faked in tests).
+type imageAPI interface {
+	GetImage(ctx context.Context, ref string) (client.Image, error)
+	Pull(ctx context.Context, ref string, opts ...client.RemoteOpt) (client.Image, error)
+}
+
 // Runtime manages containers on this node.
 type Runtime struct {
 	client    *client.Client
+	images    imageAPI
 	ns        string
 	dataDir   string
 	ociBinary string // crun | runc
@@ -71,21 +80,22 @@ func (r *Runtime) changed() {
 }
 
 type managed struct {
-	Req       proto.RunRequest `json:"req"`
-	IP        string           `json:"ip"`
-	NetNS     string           `json:"netns"`
-	Restarts  int              `json:"restarts"`
-	Stopped   bool             `json:"stopped"`
-	Evicted   bool             `json:"evicted"`
-	Fenced    bool             `json:"fenced,omitempty"` // stopped by the agent's lease fence; only an unfence ack starts it again
-	ExitCode  int              `json:"exit_code"`
-	lastCPU   uint64
-	lastCPUAt time.Time
-	cpuMillis int
-	memMB     int
-	running   bool
-	cancel    context.CancelFunc
-	exited    chan struct{} // closed when a run-once container exits
+	Req         proto.RunRequest `json:"req"`
+	ImageDigest string           `json:"image_digest,omitempty"` // platform manifest digest of the image it was created from
+	IP          string           `json:"ip"`
+	NetNS       string           `json:"netns"`
+	Restarts    int              `json:"restarts"`
+	Stopped     bool             `json:"stopped"`
+	Evicted     bool             `json:"evicted"`
+	Fenced      bool             `json:"fenced,omitempty"` // stopped by the agent's lease fence; only an unfence ack starts it again
+	ExitCode    int              `json:"exit_code"`
+	lastCPU     uint64
+	lastCPUAt   time.Time
+	cpuMillis   int
+	memMB       int
+	running     bool
+	cancel      context.CancelFunc
+	exited      chan struct{} // closed when a run-once container exits
 }
 
 func New(ctx context.Context, sock, ns, dataDir, ociRuntime string, nm *network.Manager) (*Runtime, error) {
@@ -107,6 +117,7 @@ func New(ctx context.Context, sock, ns, dataDir, ociRuntime string, nm *network.
 	}
 	r := &Runtime{
 		client:     c,
+		images:     c,
 		ns:         ns,
 		dataDir:    dataDir,
 		ociBinary:  ociRuntime,
@@ -158,17 +169,61 @@ func (r *Runtime) saveState(id string, m *managed) {
 
 // EnsureImage makes sure an image exists locally, pulling it when allowed.
 // plainHost names a registry (host:port) reached over plain HTTP (the internal registry).
+// An image that is already here is never pulled again: use RefreshImage to move a tag.
 func (r *Runtime) EnsureImage(ctx context.Context, ref string, pull bool, plainHost string) (client.Image, error) {
 	ctx = r.ctx(ctx)
-	img, err := r.client.GetImage(ctx, ref)
+	img, err := r.images.GetImage(ctx, ref)
 	if err == nil {
 		return img, nil
 	}
 	if !errdefs.IsNotFound(err) || !pull {
 		return nil, fmt.Errorf("image %s: %w", ref, err)
 	}
+	return r.pull(ctx, ref, plainHost)
+}
+
+func (r *Runtime) pull(ctx context.Context, ref, plainHost string) (client.Image, error) {
 	slog.Info("pulling image", "ref", ref)
-	return r.client.Pull(ctx, ref, client.WithPullUnpack, client.WithResolver(r.resolver(ctx, plainHost)))
+	return r.images.Pull(ctx, ref, client.WithPullUnpack, client.WithResolver(r.resolver(ctx, plainHost)))
+}
+
+// RefreshImage pulls ref even when it is already on the node, so a moving tag (postgres:17) picks
+// up the newest minor, and returns the digest of the platform manifest it now points at. A failed
+// pull leaves the tag as it was.
+func (r *Runtime) RefreshImage(ctx context.Context, ref, plainHost string) (string, error) {
+	ctx = r.ctx(ctx)
+	img, err := r.pull(ctx, ref, plainHost)
+	if err != nil {
+		return "", fmt.Errorf("pull %s: %w", ref, err)
+	}
+	return platformDigest(ctx, img)
+}
+
+// platformDigest is the digest of the manifest for this machine's platform: the same for two
+// nodes of one architecture, unlike the digest of a multi-arch index.
+func platformDigest(ctx context.Context, img client.Image) (string, error) {
+	target := img.Target()
+	if images.IsManifestType(target.MediaType) {
+		return target.Digest.String(), nil
+	}
+	if !images.IsIndexType(target.MediaType) {
+		return "", fmt.Errorf("image %s: unexpected media type %s", img.Name(), target.MediaType)
+	}
+	raw, err := content.ReadBlob(ctx, img.ContentStore(), target)
+	if err != nil {
+		return "", err
+	}
+	var idx ocispec.Index
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		return "", err
+	}
+	plat := img.Platform()
+	for _, d := range idx.Manifests {
+		if d.Platform != nil && images.IsManifestType(d.MediaType) && plat.Match(*d.Platform) {
+			return d.Digest.String(), nil
+		}
+	}
+	return "", fmt.Errorf("image %s has no manifest for this platform", img.Name())
 }
 
 func (r *Runtime) resolver(ctx context.Context, plainHost string) remotes.Resolver {
@@ -233,6 +288,9 @@ func (r *Runtime) Run(ctx context.Context, req proto.RunRequest) (string, error)
 		return "", err
 	}
 	m := &managed{Req: req}
+	if m.ImageDigest, err = platformDigest(r.ctx(ctx), img); err != nil {
+		slog.Warn("image digest unknown", "image", req.Image, "err", err) // reported empty: the service stays on its tag
+	}
 	nsh, ip, err := r.attachNet(ctx, id, m)
 	if err != nil {
 		return "", err
@@ -877,7 +935,7 @@ func (r *Runtime) Statuses(ctx context.Context) []proto.ContainerStatus {
 		out = append(out, proto.ContainerStatus{
 			ContainerID: id, InstanceID: m.Req.InstanceID, ServiceID: m.Req.ServiceID,
 			Running: m.running || m.Stopped, ExitCode: m.ExitCode, Restarts: m.Restarts, IP: m.IP,
-			MemoryMB: m.memMB, CPUMillis: m.cpuMillis, Evicted: m.Evicted,
+			MemoryMB: m.memMB, CPUMillis: m.cpuMillis, Evicted: m.Evicted, ImageDigest: m.ImageDigest,
 		})
 		r.mu.Unlock()
 	}

@@ -111,14 +111,26 @@ MySQL 8.4 authenticates with `caching_sha2_password` (`mysql_native_password` is
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/databases/{id}` | `{database, connection: {host, port, database, username, password, url}, server, links}` |
+| GET | `/databases/{id}` | `{database, version, version_status, server_version, image_digest?, image_pinned, connection: {host, port, database, username, password, url}, server, links}`. `server_version` is what the server reports (cached 10 min). `image_digest` is the digest of the platform manifest (linux/<arch>) the server runs; `image_pinned: false` means the server still follows its tag (its node does not report digests) |
 | DELETE | `/databases/{id}` | |
 | POST | `/databases/{id}/links` | `{service_id, env_name?, restart?}` |
 | DELETE | `/databases/{id}/links/{serviceId}` | |
 | GET/POST | `/databases/{id}/backups` | POST runs a backup now |
 | POST | `/databases/{id}/backups/{backupId}/restore` | |
 | POST | `/databases/{id}/upgrade` | `{size?}` shared → dedicated |
+| POST | `/databases/{id}/update-minor` | `{confirm_shared?}` → 202, status `upgrading`. See below |
 | POST | `/databases/{id}/retry` | retry failed provisioning |
+
+### Image pinning and minor updates
+
+A database server runs a tag (`postgres:17`) that each node freezes at its first pull. Once a node reports the digest of the manifest a server runs, the service is pinned to `<tag>@sha256:<digest>`: redeploys, reschedules to another node and new standbys all run that exact image. A node that does not report digests (an older agent) leaves the server on its tag (`image_pinned: false`).
+
+`POST /databases/{id}/update-minor` moves the server to the newest build of the tag it already runs (17 → 17.x); it never changes the major version. In order: a backup is taken and pinned (retention keeps it until the database is deleted), the node pulls the tag again and, only if that succeeds, the server is stopped and started on the new image (the server is unavailable for the restart: a stateful service is stopped before it is started), then the new digest is written to the service and the cached `server_version` is dropped. A failed pull aborts before anything is stopped. Errors of the background job are in `database.error`.
+
+- Dedicated: team `admin` (same as `upgrade`). Shared: platform administrators only (it restarts every tenant's database on that server), and `{"confirm_shared": true}` is required (400 otherwise); 409 while another database on that server is `upgrading`.
+- 409 for a database with HA on (turn HA off first) or one that is not `ready`.
+- There is no rollback: the pinned backup is the only way back (restore it into a new database of the same version). Updating a server whose node runs an agent older than this feature fails with "agent is too old" before touching anything.
+- Audit event `database.update_minor`.
 
 Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 

@@ -156,6 +156,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		{proto.CmdJob, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleJob) }},
 		{proto.CmdTransfer, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleTransfer) }},
 		{proto.CmdDetect, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleDetect) }},
+		{proto.CmdRefreshImage, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
+			return bus.Handle(nc, s, a.handleRefreshImage)
+		}},
 	}
 	for _, s := range subs {
 		if (s.cmd == proto.CmdBuild || s.cmd == proto.CmdDetect || s.cmd == proto.CmdPush) && a.builder == nil {
@@ -286,6 +289,17 @@ func (a *Agent) handleRun(ctx context.Context, req *proto.RunRequest) *proto.Run
 		return &proto.RunReply{ContainerID: req.ContainerID, Error: err.Error()}
 	}
 	return &proto.RunReply{ContainerID: req.ContainerID, IP: ip}
+}
+
+func (a *Agent) handleRefreshImage(ctx context.Context, req *proto.RefreshImageRequest) *proto.RefreshImageReply {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	digest, err := a.rt.RefreshImage(ctx, req.Image, req.PlainHTTPRegistry)
+	if err != nil {
+		slog.Warn("refresh image failed", "image", req.Image, "err", err)
+		return &proto.RefreshImageReply{Error: err.Error()}
+	}
+	return &proto.RefreshImageReply{Digest: digest}
 }
 
 func (a *Agent) handleStop(ctx context.Context, req *proto.StopRequest) *proto.GenericReply {

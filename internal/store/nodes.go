@@ -285,16 +285,17 @@ type Instance struct {
 	MemoryPeakMB     int       `json:"memory_peak_mb"`
 	CPUUsageMillis   int       `json:"cpu_usage_millis"`
 	Restarts         int       `json:"restarts"`
+	ImageDigest      string    `json:"image_digest"` // platform manifest digest the agent reported; '' = not reported
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-const instanceCols = `id, service_id, deployment_id, node_id, container_id, ip, port, status, memory_request_mb, cpu_request_millis, memory_usage_mb, memory_peak_mb, cpu_usage_millis, restarts, created_at, updated_at`
+const instanceCols = `id, service_id, deployment_id, node_id, container_id, ip, port, status, memory_request_mb, cpu_request_millis, memory_usage_mb, memory_peak_mb, cpu_usage_millis, restarts, image_digest, created_at, updated_at`
 
 func scanInstance(row pgx.Row) (*Instance, error) {
 	var i Instance
 	err := row.Scan(&i.ID, &i.ServiceID, &i.DeploymentID, &i.NodeID, &i.ContainerID, &i.IP, &i.Port, &i.Status, &i.MemoryRequestMB,
-		&i.CPURequestMillis, &i.MemoryUsageMB, &i.MemoryPeakMB, &i.CPUUsageMillis, &i.Restarts, &i.CreatedAt, &i.UpdatedAt)
+		&i.CPURequestMillis, &i.MemoryUsageMB, &i.MemoryPeakMB, &i.CPUUsageMillis, &i.Restarts, &i.ImageDigest, &i.CreatedAt, &i.UpdatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -366,9 +367,9 @@ func (s *Store) ApplyContainerStatus(ctx context.Context, nodeID string, c proto
 		status = "failed"
 	}
 	_, err := s.q(ctx).Exec(ctx, `UPDATE instances SET memory_usage_mb=$3, memory_peak_mb=GREATEST(memory_peak_mb, $3), cpu_usage_millis=$4,
-		restarts=$5, ip=CASE WHEN $6<>'' THEN $6 ELSE ip END,
+		restarts=$5, ip=CASE WHEN $6<>'' THEN $6 ELSE ip END, image_digest=CASE WHEN $8<>'' THEN $8 ELSE image_digest END,
 		status = CASE WHEN status IN ('running','failed','lost') THEN $7 ELSE status END, updated_at=now()
-		WHERE node_id=$1 AND container_id=$2`, nodeID, c.ContainerID, c.MemoryMB, c.CPUMillis, c.Restarts, c.IP, status)
+		WHERE node_id=$1 AND container_id=$2`, nodeID, c.ContainerID, c.MemoryMB, c.CPUMillis, c.Restarts, c.IP, status, c.ImageDigest)
 	return err
 }
 

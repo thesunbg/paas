@@ -93,6 +93,13 @@ func (s *Store) UpdateDeploymentBuilt(ctx context.Context, d *Deployment) error 
 	return err
 }
 
+// SetDeploymentImage rewrites the artifact a deployment runs (pinning a tag to a digest), so a
+// reschedule or restart of the current deployment starts that exact image.
+func (s *Store) SetDeploymentImage(ctx context.Context, id, image string) error {
+	_, err := s.q(ctx).Exec(ctx, `UPDATE deployments SET image=$2 WHERE id=$1`, id, image)
+	return err
+}
+
 func (s *Store) SetDeploymentStatus(ctx context.Context, id, status, errMsg string) error {
 	_, err := s.q(ctx).Exec(ctx, `UPDATE deployments SET status=$2, error=$3,
 		finished_at = CASE WHEN $2 IN ('active','failed','cancelled','superseded') THEN COALESCE(finished_at, now()) ELSE finished_at END

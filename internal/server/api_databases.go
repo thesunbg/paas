@@ -76,6 +76,16 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 	if v := s.serverVersion(r.Context(), db); v != "" {
 		out["server_version"] = v
 	}
+	// image_digest is what the server's instance runs; image_pinned says whether a redeploy or
+	// reschedule would run that same image (false: still on the tag, "not pinned yet").
+	if db.ServerServiceID != nil {
+		if srv, err := s.store.ServiceByID(r.Context(), *db.ServerServiceID); err == nil {
+			out["image_pinned"] = isPinned(specImage(srv))
+			if in, err := s.firstInstance(r.Context(), srv.ID); err == nil && in.ImageDigest != "" {
+				out["image_digest"] = in.ImageDigest
+			}
+		}
+	}
 	if role, _ := s.teamRoleForDB(r, db); roleRank[role] >= roleRank["developer"] && (db.Status == "ready" || db.Status == "upgrading") {
 		if c, srv, err := s.dbCreds(r.Context(), db); err == nil {
 			out["connection"] = map[string]any{

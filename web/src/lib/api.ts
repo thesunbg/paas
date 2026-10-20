@@ -441,6 +441,8 @@ export interface DatabaseDetail {
   version_status?: 'ok' | 'ending' | 'eol';
   version_eol?: string;
   server_version?: string;
+  image_digest?: string; // platform manifest digest the server runs; absent when the node does not report it
+  image_pinned?: boolean; // false: the server still follows the tag ("not pinned yet")
   connection?: Connection;
   external?: ExternalAccess;
   server?: DatabaseServer;
@@ -461,6 +463,7 @@ export interface CreateDatabaseInput {
 export interface Backup {
   s3_key?: string;
   kind?: 'dump' | 'base';
+  pinned?: boolean;
   id: string;
   database_id: string;
   node_id: string | null;
@@ -964,6 +967,7 @@ export const api = {
   backupNow: (id: string) => post<Backup>(`/databases/${e(id)}/backups`),
   restoreBackup: (id: string, backup: string) => post<{ status: string }>(`/databases/${e(id)}/backups/${e(backup)}/restore`),
   upgradeDatabase: (id: string, size?: string) => post<{ status: string }>(`/databases/${e(id)}/upgrade`, size ? { size } : {}),
+  updateMinor: (id: string, confirm_shared = false) => post<{ status: string }>(`/databases/${e(id)}/update-minor`, { confirm_shared }),
   retryDatabase: (id: string) => post<{ status: string }>(`/databases/${e(id)}/retry`),
   myIP: () => get<{ ip: string }>('/me/ip'),
   databaseMetrics: (id: string, hours = 24) => get<DBMetricsResponse>(`/databases/${e(id)}/metrics?hours=${hours}`),

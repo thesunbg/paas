@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, catalog, defaultEnvFor, errorMessage, type Backup, type DatabaseDetail, type ProjectDetail, type SizesResponse } from '../lib/api';
-  import { can } from '../lib/session.svelte';
+  import { can, session } from '../lib/session.svelte';
   import { href, navigate } from '../lib/router.svelte';
   import { mb, cpu, relTime, absTime, bytes, between } from '../lib/format';
   import { poll } from '../lib/poll';
@@ -156,6 +156,27 @@
     }
   }
 
+  // Only a platform administrator may restart a shared server (it hosts every tenant's database).
+  const canUpdateMinor = $derived(
+    !!db && db.status === 'ready' && !db.options?.ha && (db.mode === 'shared' ? !!session.me?.user.is_admin : isAdmin)
+  );
+
+  async function updateMinor() {
+    if (!db) return;
+    const shared = db.mode === 'shared';
+    const ok = await confirmDialog({
+      title: 'Update to the latest minor version',
+      message:
+        `Pulls the newest ${engineLabel[db.engine] ?? db.engine} ${detail?.version ?? ''}.x build and restarts the server: ${db.name} is unavailable while it restarts. ` +
+        `A backup is taken first and kept as the only way back; a minor update cannot be rolled back. The major version never changes.` +
+        (shared ? ' This is a shared server: every database on it restarts, for every team that uses it.' : ''),
+      confirmLabel: shared ? 'Restart shared server' : 'Update and restart',
+      danger: shared,
+    });
+    if (!ok) return;
+    await act('update-minor', () => api.updateMinor(id, shared), 'Minor update started');
+  }
+
   async function upgrade(e: SubmitEvent) {
     e.preventDefault();
     upgradeOpen = false;
@@ -190,6 +211,9 @@
         {/if}
         {#if isAdmin && db.mode === 'shared' && db.status === 'ready'}
           <button onclick={() => (upgradeOpen = true)} disabled={!!busy}><Icon name="zap" size={14} />Upgrade to dedicated</button>
+        {/if}
+        {#if canUpdateMinor}
+          <button onclick={updateMinor} disabled={!!busy} title="Pull the newest minor build of this version and restart the server"><Icon name="zap" size={14} />Update minor version</button>
         {/if}
         {#if isAdmin && db.mode === 'dedicated' && db.status === 'ready'}
           <button onclick={() => ((resizeSize = db.size_preset), (resizeOpen = true))} disabled={!!busy}><Icon name="zap" size={14} />Change size</button>
@@ -242,6 +266,13 @@
         <dl class="kv card-body">
           <dt>Engine</dt><dd>{engineLabel[db.engine] ?? db.engine} {detail.version ?? ''}</dd>
           {#if detail.server_version}<dt>Server version</dt><dd class="mono small">{detail.server_version}</dd>{/if}
+          {#if detail.image_pinned !== undefined}
+            <dt>Image</dt>
+            <dd class="mono small">
+              {#if detail.image_pinned && detail.image_digest}{detail.image_digest}
+              {:else}<span class="muted">not pinned yet</span> <span class="faint">(follows the tag; this node did not report a digest)</span>{/if}
+            </dd>
+          {/if}
           <dt>Mode</dt><dd>{db.mode === 'shared' ? 'Shared server (logical database)' : 'Dedicated server'}</dd>
           <dt>Size</dt><dd>{db.mode === 'shared' ? 'shared' : `${db.size_preset}${sizePreset ? ` — ${mb(sizePreset.memory_mb)}, ${cpu(sizePreset.cpu_millis)}, ${sizePreset.max_connections} connections` : ''}`}</dd>
           {#if detail.server}
@@ -330,6 +361,7 @@
                   <td title={absTime(b.created_at)} class="nowrap">{relTime(b.created_at)}</td>
                   <td>
                     <Status status={b.status === 'completed' ? 'completed' : b.status === 'failed' ? 'failed' : 'deploying'} label={b.status} />
+                    {#if b.pinned}<span class="badge" title="Restore point before a version update: kept until the database is deleted">pinned</span>{/if}
                     {#if b.error}<div class="small" style="color:var(--red)">{b.error}</div>{/if}
                   </td>
                   <td class="right nowrap">{bytes(b.size_bytes)}</td>

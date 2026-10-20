@@ -120,6 +120,12 @@ func (s *Store) SetDatabaseMode(ctx context.Context, id, mode string, serverServ
 	return err
 }
 
+// ClaimDatabaseStatus moves a database from `from` to `to` and reports whether it was in `from`.
+func (s *Store) ClaimDatabaseStatus(ctx context.Context, id, from, to string) (bool, error) {
+	tag, err := s.q(ctx).Exec(ctx, `UPDATE databases SET status=$3, error='' WHERE id=$1 AND status=$2`, id, from, to)
+	return tag.RowsAffected() == 1, err
+}
+
 func (s *Store) DeleteDatabase(ctx context.Context, id string) error {
 	_, err := s.q(ctx).Exec(ctx, `DELETE FROM databases WHERE id=$1`, id)
 	return err
@@ -180,16 +186,17 @@ type Backup struct {
 	SizeBytes  int64      `json:"size_bytes"`
 	Error      string     `json:"error"`
 	S3Key      string     `json:"s3_key"`
-	Kind       string     `json:"kind"` // dump | base
+	Kind       string     `json:"kind"`   // dump | base
+	Pinned     bool       `json:"pinned"` // kept by retention until the database is deleted
 	CreatedAt  time.Time  `json:"created_at"`
 	FinishedAt *time.Time `json:"finished_at"`
 }
 
-const backupCols = `id, database_id, node_id, status, path, size_bytes, error, s3_key, kind, created_at, finished_at`
+const backupCols = `id, database_id, node_id, status, path, size_bytes, error, s3_key, kind, pinned, created_at, finished_at`
 
 func scanBackup(row pgx.Row) (*Backup, error) {
 	var b Backup
-	if err := row.Scan(&b.ID, &b.DatabaseID, &b.NodeID, &b.Status, &b.Path, &b.SizeBytes, &b.Error, &b.S3Key, &b.Kind, &b.CreatedAt, &b.FinishedAt); err != nil {
+	if err := row.Scan(&b.ID, &b.DatabaseID, &b.NodeID, &b.Status, &b.Path, &b.SizeBytes, &b.Error, &b.S3Key, &b.Kind, &b.Pinned, &b.CreatedAt, &b.FinishedAt); err != nil {
 		return nil, notFound(err)
 	}
 	return &b, nil
@@ -224,7 +231,7 @@ func (s *Store) BackupsForDatabase(ctx context.Context, databaseID string) ([]Ba
 
 // OldBackups returns completed backups beyond the newest `keep` for a database.
 func (s *Store) OldBackups(ctx context.Context, databaseID string, keep int) ([]Backup, error) {
-	rows, err := s.q(ctx).Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='dump' AND status<>'running' ORDER BY created_at DESC OFFSET $2`, databaseID, keep)
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='dump' AND status<>'running' AND NOT pinned ORDER BY created_at DESC OFFSET $2`, databaseID, keep)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +246,12 @@ func (s *Store) OldBackups(ctx context.Context, databaseID string, keep int) ([]
 
 func (s *Store) DeleteBackup(ctx context.Context, id string) error {
 	_, err := s.q(ctx).Exec(ctx, `DELETE FROM backups WHERE id=$1`, id)
+	return err
+}
+
+// PinBackup exempts a backup from retention.
+func (s *Store) PinBackup(ctx context.Context, id string) error {
+	_, err := s.q(ctx).Exec(ctx, `UPDATE backups SET pinned=true WHERE id=$1`, id)
 	return err
 }
 

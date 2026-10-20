@@ -95,6 +95,9 @@ func (s *Server) handleHeartbeat(m *nats.Msg, hb *proto.Heartbeat) {
 		}
 		wasRunning := in.Status == model.InstRunning
 		_ = s.store.ApplyContainerStatus(ctx, hb.NodeID, c)
+		if c.ImageDigest != "" && c.ImageDigest != in.ImageDigest {
+			s.pinFirstDigest(ctx, in, c.ImageDigest)
+		}
 		if (in.Status == model.InstRunning || in.Status == model.InstFailed || in.Status == model.InstLost) && wasRunning != c.Running {
 			changed = true
 		}

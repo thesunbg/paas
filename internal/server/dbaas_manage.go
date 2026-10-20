@@ -79,6 +79,7 @@ func (s *Server) applyServerSpec(ctx context.Context, db *store.Database) error 
 	}
 	fresh, err := s.store.UpdateService(ctx, srv.ID, func(f *store.Service) error {
 		spec.DNSAliases = f.Spec.DNSAliases
+		spec.Image = keepPin(specImage(f), spec.Image) // a resize must not unpin the binary
 		f.Spec = spec
 		f.Source.Image = spec.Image
 		return nil

@@ -122,6 +122,7 @@ func (s *Server) createReplica(ctx context.Context, db *store.Database, primary 
 	if err != nil {
 		return nil, err
 	}
+	spec.Image = keepPin(specImage(primary), spec.Image) // same binary as the primary
 	spec.Env["PRIMARY_HOST"] = internalHost(primary.Slug, proj.Slug)
 	spec.Env["REPL_USER"] = c.Username
 	spec.Env["REPL_PASSWORD"] = c.Password

@@ -83,6 +83,9 @@ const (
 	CmdJob         = "job"
 	CmdTransfer    = "transfer"
 	CmdDetect      = "detect"
+	// CmdRefreshImage pulls an image even when it is already on the node (agents without it do
+	// not answer: the caller sees no responders and must not go on).
+	CmdRefreshImage = "refreshimage"
 )
 
 type RegisterRequest struct {
@@ -137,6 +140,9 @@ type ContainerStatus struct {
 	CPUMillis   int    `json:"cpu_millis"`
 	Evicted     bool   `json:"evicted,omitempty"`
 	Fenced      bool   `json:"fenced,omitempty"` // an HA postgres the agent stopped because its lease expired
+	// ImageDigest is the digest of the platform manifest (linux/<arch>) of the image the container
+	// runs, not of the multi-arch index. Empty from agents that do not report it.
+	ImageDigest string `json:"image_digest,omitempty"`
 }
 
 type Heartbeat struct {
@@ -198,6 +204,16 @@ type RunReply struct {
 type StopRequest struct {
 	ContainerID string `json:"container_id"`
 	GraceSec    int    `json:"grace_sec"`
+}
+
+type RefreshImageRequest struct {
+	Image             string `json:"image"`
+	PlainHTTPRegistry string `json:"plain_http_registry,omitempty"`
+}
+
+type RefreshImageReply struct {
+	Digest string `json:"digest,omitempty"` // platform manifest digest of what the tag points at now
+	Error  string `json:"error,omitempty"`
 }
 
 type GenericReply struct {
