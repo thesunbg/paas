@@ -36,7 +36,7 @@ type Engine struct {
 }
 
 var Engines = map[string]Engine{
-	Postgres: {Name: Postgres, Image: "docker.io/library/postgres:17-alpine", Port: 5432, DataPath: "/var/lib/postgresql/data", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 128,
+	Postgres: {Name: Postgres, Image: "docker.io/library/postgres:17", Port: 5432, DataPath: "/var/lib/postgresql/data", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 128,
 		Versions: []string{"18", "17", "16", "15", "14"}, DefaultVersion: "17", LegacyVersion: "17"},
 	MySQL: {Name: MySQL, Image: "docker.io/library/mariadb:11", Port: 3306, DataPath: "/var/lib/mysql", SharedOK: true, DefaultEnv: "DATABASE_URL", MinMemoryMB: 192,
 		Versions: []string{"11.8", "11.4", "10.11", "10.6"}, DefaultVersion: "11.8", LegacyVersion: "11"},
@@ -60,7 +60,7 @@ func ImageFor(engine, version string) (string, error) {
 	}
 	switch engine {
 	case Postgres:
-		return "docker.io/library/postgres:" + version + "-alpine", nil
+		return "docker.io/library/postgres:" + version, nil
 	case MySQL:
 		return "docker.io/library/mariadb:" + version, nil
 	case Redis:

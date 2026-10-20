@@ -19,10 +19,10 @@ func TestParseStats(t *testing.T) {
 }
 
 func TestVersions(t *testing.T) {
-	if img, _ := ImageFor(Postgres, ""); img != "docker.io/library/postgres:17-alpine" {
+	if img, _ := ImageFor(Postgres, ""); img != "docker.io/library/postgres:17" {
 		t.Fatalf("legacy %s", img)
 	}
-	if img, _ := ImageFor(Postgres, "16"); img != "docker.io/library/postgres:16-alpine" {
+	if img, _ := ImageFor(Postgres, "16"); img != "docker.io/library/postgres:16" {
 		t.Fatalf("16 %s", img)
 	}
 	if img, _ := ImageFor(MySQL, "11"); img != "docker.io/library/mariadb:11" {
