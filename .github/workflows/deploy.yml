@@ -1,55 +1,35 @@
 name: deploy
 
-# Installs (or upgrades) paas on a server over SSH.
-# Needs the repository secret DEPLOY_PASSWORD (or DEPLOY_SSH_KEY) for the SSH user.
+# Installs (or upgrades) paas on a server over SSH as the unprivileged user `deploy`,
+# which may sudo only /usr/local/sbin/paas-deploy (see scripts/paas-deploy-setup.sh).
+#
+# Repository secrets: DEPLOY_SSH_KEY (private key), DEPLOY_KNOWN_HOSTS (pinned host key line).
+# Repository variables: PAAS_DEPLOY_HOST, PAAS_DEPLOY_PORT, PAAS_DEPLOY_USER, PAAS_DOMAIN,
+#   PAAS_DASHBOARD_DOMAIN, PAAS_HTTPS (default true), PAAS_EMAIL.
 on:
-  # Pushing to the "deploy" branch deploys with the defaults below.
   push:
     branches: [deploy]
   workflow_dispatch:
-    inputs:
-      host:
-        description: Server IP or hostname
-        required: true
-        default: 202.92.6.129
-      port:
-        description: SSH port
-        required: true
-        default: "24700"
-      user:
-        description: SSH user
-        required: true
-        default: root
-      domain:
-        description: Base domain for apps (wildcard DNS *.domain -> server)
-        required: false
-        default: ""
-      https:
-        description: Automatic HTTPS (Let's Encrypt)
-        required: false
-        default: "true"
-      email:
-        description: Email for automatic HTTPS (empty = HTTP only)
-        required: false
-        default: ""
 
 concurrency:
-  group: deploy-${{ inputs.host || 'default' }}
+  group: deploy
   cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: production
     env:
-      HOST: ${{ inputs.host || '202.92.6.129' }}
-      PORT: ${{ inputs.port || '24700' }}
-      USER_NAME: ${{ inputs.user || 'root' }}
-      DOMAIN: ${{ inputs.domain || vars.PAAS_DOMAIN || 'paas.nguyenvando.com' }}
-      DASHBOARD_DOMAIN: ${{ vars.PAAS_DASHBOARD_DOMAIN || 'paas.nguyenvando.com' }}
-      HTTPS: ${{ inputs.https || vars.PAAS_HTTPS || 'true' }}
-      SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+      HOST: ${{ vars.PAAS_DEPLOY_HOST }}
+      PORT: ${{ vars.PAAS_DEPLOY_PORT }}
+      USER_NAME: ${{ vars.PAAS_DEPLOY_USER }}
+      DOMAIN: ${{ vars.PAAS_DOMAIN }}
+      DASHBOARD_DOMAIN: ${{ vars.PAAS_DASHBOARD_DOMAIN }}
+      HTTPS: ${{ vars.PAAS_HTTPS || 'true' }}
+      EMAIL: ${{ vars.PAAS_EMAIL }}
       SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
     steps:
       - uses: actions/checkout@v4
 
@@ -59,23 +39,18 @@ jobs:
 
       - name: Prepare SSH
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass >/dev/null
+          for v in HOST PORT USER_NAME SSH_KEY KNOWN_HOSTS; do
+            [ -n "$(printenv "$v")" ] || { echo "::error::$v is not set (see the header of this workflow)"; exit 1; }
+          done
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          if [ -n "$SSH_KEY" ]; then
-            printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
-            echo "SSH_OPTS=-i $HOME/.ssh/id_deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -p $PORT" >> "$GITHUB_ENV"
-            echo "SSH_WRAP=" >> "$GITHUB_ENV"
-          elif [ -n "$SSHPASS" ]; then
-            echo "SSH_OPTS=-o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -o PubkeyAuthentication=no -p $PORT" >> "$GITHUB_ENV"
-            echo "SSH_WRAP=sshpass -e" >> "$GITHUB_ENV"
-          else
-            echo "::error::Add the repository secret DEPLOY_PASSWORD (or DEPLOY_SSH_KEY)"; exit 1
-          fi
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          echo "SSH_OPTS=-i $HOME/.ssh/id_deploy -o IdentitiesOnly=yes -o PasswordAuthentication=no -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -p $PORT" >> "$GITHUB_ENV"
 
       - name: Check server
         run: |
-          $SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" 'uname -a; cat /etc/os-release | head -2; nproc; free -m | head -2; df -h / | tail -1'
-          ARCH=$($SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" 'uname -m')
+          ssh $SSH_OPTS "$USER_NAME@$HOST" 'uname -a; head -2 /etc/os-release; nproc; free -m | head -2; df -h / | tail -1'
+          ARCH=$(ssh $SSH_OPTS "$USER_NAME@$HOST" 'uname -m')
           case "$ARCH" in x86_64|amd64) GOARCH=amd64;; aarch64|arm64) GOARCH=arm64;; *) echo "::error::unsupported arch $ARCH"; exit 1;; esac
           echo "GOARCH=$GOARCH" >> "$GITHUB_ENV"
 
@@ -88,23 +63,20 @@ jobs:
       - name: Upload
         run: |
           SCP_OPTS=$(echo "$SSH_OPTS" | sed 's/-p /-P /')
-          $SSH_WRAP scp $SCP_OPTS dist/paasd dist/paas internal/installer/install.sh "$USER_NAME@$HOST:/tmp/"
+          scp $SCP_OPTS dist/paasd dist/paas internal/installer/install.sh "$USER_NAME@$HOST:stage/"
 
       - name: Install
-        env:
-          EMAIL: ${{ inputs.email || vars.PAAS_EMAIL }}
         run: |
-          ARGS="server --binary /tmp/paasd"
+          ARGS=""
           [ -n "$DOMAIN" ] && ARGS="$ARGS --domain $DOMAIN"
           [ "$HTTPS" = true ] && ARGS="$ARGS --https"
           [ -n "$DASHBOARD_DOMAIN" ] && ARGS="$ARGS --dashboard-domain $DASHBOARD_DOMAIN"
           [ -n "$EMAIL" ] && ARGS="$ARGS --email $EMAIL"
-          $SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" "install -m 0755 /tmp/paas /usr/local/bin/paas && sh /tmp/install.sh $ARGS"
+          ssh $SSH_OPTS "$USER_NAME@$HOST" "sudo /usr/local/sbin/paas-deploy$ARGS"
 
       - name: Verify
         run: |
-          $SSH_WRAP ssh $SSH_OPTS "$USER_NAME@$HOST" '
+          ssh $SSH_OPTS "$USER_NAME@$HOST" '
             for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 2; done; echo
             systemctl --no-pager --lines=0 status paasd containerd buildkit | grep -E "●|Active:"
-            journalctl -u paasd --no-pager -n 25
-            . /etc/paas/paasd.env; echo "Dashboard: $PAAS_PUBLIC_URL  (or http://$(hostname -I | awk "{print \$1}"):8080)"'
+            journalctl -u paasd --no-pager -n 25'

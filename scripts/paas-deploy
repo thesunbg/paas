@@ -1,0 +1,44 @@
+#!/bin/sh
+# Installed as /usr/local/sbin/paas-deploy (root:root 0755); the CI user `deploy` may sudo only this.
+# Reads paasd, paas and install.sh from the fixed stage dir, copies them somewhere root-owned and
+# runs the installer. No path or URL comes from the caller, only validated flags.
+#
+# Known limit: root runs the binary the deploy user uploaded, so the deploy key is still
+# root-equivalent. Remove this note once the binary is verified against an independent source.
+set -eu
+
+STAGE=/home/deploy/stage
+
+DOMAIN=""; DASH=""; EMAIL=""; HTTPS=0
+die() { echo "paas-deploy: $*" >&2; exit 2; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --domain) [ $# -ge 2 ] || die "--domain needs a value"; DOMAIN="$2"; shift 2;;
+    --dashboard-domain) [ $# -ge 2 ] || die "--dashboard-domain needs a value"; DASH="$2"; shift 2;;
+    --email) [ $# -ge 2 ] || die "--email needs a value"; EMAIL="$2"; shift 2;;
+    --https) HTTPS=1; shift;;
+    *) die "unknown option $1";;
+  esac
+done
+
+host_re='^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$'
+check() { printf '%s\n' "$2" | grep -Eq "$3" || die "invalid $1"; }
+[ -z "$DOMAIN" ] || check domain "$DOMAIN" "$host_re"
+[ -z "$DASH" ] || check dashboard-domain "$DASH" "$host_re"
+[ -z "$EMAIL" ] || check email "$EMAIL" '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$'
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+for f in paasd paas install.sh; do
+  [ -f "$STAGE/$f" ] && [ ! -L "$STAGE/$f" ] || die "$STAGE/$f missing or not a regular file"
+  cp "$STAGE/$f" "$WORK/$f"
+done
+chmod 0755 "$WORK/paasd" "$WORK/paas"
+
+install -m 0755 "$WORK/paas" /usr/local/bin/paas
+set -- server --binary "$WORK/paasd"
+[ -z "$DOMAIN" ] || set -- "$@" --domain "$DOMAIN"
+[ "$HTTPS" = 0 ] || set -- "$@" --https
+[ -z "$DASH" ] || set -- "$@" --dashboard-domain "$DASH"
+[ -z "$EMAIL" ] || set -- "$@" --email "$EMAIL"
+sh "$WORK/install.sh" "$@"
