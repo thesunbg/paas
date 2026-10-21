@@ -230,7 +230,7 @@
             {#if addOpen}
               <div class="menu-backdrop" role="presentation" onclick={() => (addOpen = false)}></div>
               <div class="menu" role="menu">
-                <button role="menuitem" onclick={() => ((addOpen = false), (tplOpen = true))}><Icon name="grid" /><span><b>Template</b><br /><span class="faint small">WordPress, n8n, Nextcloud, Grafana and 35 more</span></span></button>
+                <button role="menuitem" onclick={() => ((addOpen = false), (tplOpen = true))}><Icon name="grid" /><span><b>Template</b><br /><span class="faint small">WordPress, n8n, Elasticsearch, OpenClaw and 55 more</span></span></button>
                 <button role="menuitem" onclick={() => ((addOpen = false), (composeOpen = true))}><Icon name="upload" /><span><b>docker-compose file</b><br /><span class="faint small">Paste or upload a compose file</span></span></button>
               </div>
             {/if}
