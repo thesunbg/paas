@@ -85,6 +85,7 @@ const (
 	CmdDetect      = "detect"
 	CmdArchive     = "archive" // tar.gz a directory under the data dir (volume backups, static sites)
 	CmdExtract     = "extract" // unpack such an archive into a directory
+	CmdTermOpen    = "termopen" // interactive shell in a container (see TermOpenRequest)
 	// CmdRefreshImage pulls an image even when it is already on the node (agents without it do
 	// not answer: the caller sees no responders and must not go on).
 	CmdRefreshImage = "refreshimage"
@@ -411,6 +412,42 @@ type ExtractRequest struct {
 	File    string `json:"file"`
 	Dir     string `json:"dir"`
 	Replace bool   `json:"replace,omitempty"`
+}
+
+// TermOpenRequest starts an interactive process with a terminal in a running
+// container. Once open, the session's bytes travel on plain NATS subjects:
+// keystrokes on TermInSubject (agent side), output on TermOutSubject (node
+// side), and TermCtl messages on TermCtlSubject. The agent ends a session that
+// receives nothing (not even a ping) for TermIdleTimeout.
+type TermOpenRequest struct {
+	SessionID   string   `json:"session_id"`
+	ContainerID string   `json:"container_id"`
+	Cmd         []string `json:"cmd,omitempty"` // default: bash if the image has it, else sh
+	Cols        int      `json:"cols"`
+	Rows        int      `json:"rows"`
+}
+
+// TermCtl is a control message: a resize, a keep-alive ping or a close (to the
+// agent), or the exit of the process (from the agent, on TermOutSubject's
+// sibling TermExitSubject).
+type TermCtl struct {
+	Cols  int    `json:"cols,omitempty"`
+	Rows  int    `json:"rows,omitempty"`
+	Ping  bool   `json:"ping,omitempty"`
+	Close bool   `json:"close,omitempty"`
+	Exit  *int   `json:"exit,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+const TermIdleTimeout = 90 * time.Second
+
+func TermInSubject(nodeID, session string) string  { return AgentSubject(nodeID, "term."+session+".in") }
+func TermCtlSubject(nodeID, session string) string { return AgentSubject(nodeID, "term."+session+".ctl") }
+func TermOutSubject(nodeID, session string) string {
+	return fmt.Sprintf("paas.node.%s.term.%s.out", nodeID, session)
+}
+func TermExitSubject(nodeID, session string) string {
+	return fmt.Sprintf("paas.node.%s.term.%s.exit", nodeID, session)
 }
 
 // PITRPrepareRequest lays out a PostgreSQL data directory for point-in-time

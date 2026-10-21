@@ -89,6 +89,7 @@ Create body:
 | GET | `/services/{id}/logs?tail=300` | `[{instance, lines: []}]` runtime logs |
 | GET | `/services/{id}/logs/stream` | Server-Sent Events, `event: log` |
 | POST | `/services/{id}/exec` | `{command}` → `{exit_code, stdout, stderr}` |
+| GET | `/services/{id}/terminal?instance=&cols=&rows=` | WebSocket: interactive shell with a terminal in a running instance (developer). Binary frames are keystrokes/output, text frames JSON `{cols, rows}` (resize) or `{exit}`/`{error}`. Same-origin only; audited as `service.terminal` |
 
 Service `status`: `created`, `deploying`, `running`, `sleeping`, `stopped`, `failed`.
 

@@ -4,6 +4,7 @@ go 1.26.6
 
 require (
 	github.com/caddyserver/certmagic v0.25.6
+	github.com/coder/websocket v1.8.13
 	github.com/containerd/cgroups/v3 v3.1.3
 	github.com/containerd/containerd/api v1.12.0
 	github.com/containerd/containerd/v2 v2.4.1

@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"bufio"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -110,6 +112,7 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/services/{id}/logs", s.handleServiceLogs)
 	h("GET /api/v1/services/{id}/logs/stream", s.handleServiceLogStream)
 	h("POST /api/v1/services/{id}/exec", s.handleExec)
+	h("GET /api/v1/services/{id}/terminal", s.handleTerminal)
 	h("POST /api/v1/services/{id}/run", s.handleRunJob)
 	h("GET /api/v1/services/{id}/runs", s.handleListRuns)
 	h("GET /api/v1/services/{id}/metrics", s.handleServiceMetrics)
@@ -199,6 +202,18 @@ func (r *statusRecorder) Flush() {
 		f.Flush()
 	}
 }
+
+// Hijack lets WebSockets (the terminal) take over the connection.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("hijacking not supported")
+	}
+	r.status = http.StatusSwitchingProtocols
+	return h.Hijack()
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -153,6 +153,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}},
 		{proto.CmdArchive, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleArchive) }},
 		{proto.CmdExtract, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleExtract) }},
+		{proto.CmdTermOpen, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleTermOpen) }},
 		{proto.CmdBuild, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleBuild) }},
 		{proto.CmdPush, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handlePush) }},
 		{proto.CmdJob, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleJob) }},
