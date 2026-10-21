@@ -83,6 +83,8 @@ const (
 	CmdJob         = "job"
 	CmdTransfer    = "transfer"
 	CmdDetect      = "detect"
+	CmdArchive     = "archive" // tar.gz a directory under the data dir (volume backups, static sites)
+	CmdExtract     = "extract" // unpack such an archive into a directory
 	// CmdRefreshImage pulls an image even when it is already on the node (agents without it do
 	// not answer: the caller sees no responders and must not go on).
 	CmdRefreshImage = "refreshimage"
@@ -388,6 +390,27 @@ type DetectReply struct {
 	Env     []EnvHint `json:"env,omitempty"`
 	EnvFile string    `json:"env_file,omitempty"`
 	Error   string    `json:"error,omitempty"`
+}
+
+// ArchiveRequest packs Dir into File (both relative to the agent data dir).
+// With PauseContainer set, that container is frozen while the archive is made,
+// so the copy of its volumes is consistent.
+type ArchiveRequest struct {
+	Dir            string `json:"dir"`
+	File           string `json:"file"`
+	PauseContainer string `json:"pause_container,omitempty"`
+}
+
+type ArchiveReply struct {
+	Size  int64  `json:"size"`
+	Error string `json:"error,omitempty"`
+}
+
+// ExtractRequest unpacks File into Dir, which must be empty or missing unless Replace is set.
+type ExtractRequest struct {
+	File    string `json:"file"`
+	Dir     string `json:"dir"`
+	Replace bool   `json:"replace,omitempty"`
 }
 
 // PITRPrepareRequest lays out a PostgreSQL data directory for point-in-time

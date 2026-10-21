@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -126,6 +127,16 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "cordon the node and stop its agent before removing it")
 		return
 	}
+	// Removing a node unpins what lived on it: the next start would be on
+	// another node with empty volumes. Refuse while there is any, unless the
+	// administrator recovered them first or accepts losing their data.
+	if stuck := s.stuckOnNode(r.Context(), n.ID); len(stuck) > 0 && r.URL.Query().Get("force") != "true" {
+		writeJSON(w, 409, map[string]any{
+			"error": fmt.Sprintf("%d service(s) or database(s) keep their data on this node; recover them on another node first, or delete with force=true to start them empty", len(stuck)),
+			"stuck": stuck,
+		})
+		return
+	}
 	nkey, _ := s.store.NodeNkey(r.Context(), n.ID)
 	if err := s.store.DeleteNode(r.Context(), n.ID); err != nil {
 		writeError(w, 500, err.Error())
@@ -194,4 +205,80 @@ func (s *Server) moveInstance(ctx context.Context, serviceID string, in store.In
 	}
 	s.stopInstance(ctx, &in, 15)
 	s.publishAll(ctx)
+}
+
+// stuckItem is something whose data lives only on a node.
+type stuckItem struct {
+	Kind      string `json:"kind"` // service | database | shared-database
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Project   string `json:"project,omitempty"`
+	ProjectID string `json:"project_id,omitempty"`
+	Backup    string `json:"backup,omitempty"` // newest off-site backup it can be recovered from
+}
+
+// stuckOnNode lists the services with volumes and the database servers pinned to a node.
+func (s *Server) stuckOnNode(ctx context.Context, nodeID string) []stuckItem {
+	out := []stuckItem{}
+	svcs, err := s.store.AllServices(ctx)
+	if err != nil {
+		return out
+	}
+	projects := map[string]string{}
+	projName := func(id string) string {
+		if n, ok := projects[id]; ok {
+			return n
+		}
+		if p, err := s.store.ProjectByID(ctx, id); err == nil {
+			projects[id] = p.Name
+		}
+		return projects[id]
+	}
+	dbs, _ := s.store.AllDatabases(ctx)
+	for i := range svcs {
+		svc := &svcs[i]
+		node := s.serviceNode(ctx, svc)
+		if node == nil || *node != nodeID || len(svc.Spec.Volumes) == 0 {
+			continue
+		}
+		if svc.Type == model.TypeDatabase {
+			for j := range dbs {
+				db := &dbs[j]
+				if db.ServerServiceID == nil || *db.ServerServiceID != svc.ID {
+					continue
+				}
+				it := stuckItem{Kind: "database", ID: db.ID, Name: db.Name, Project: projName(db.ProjectID), ProjectID: db.ProjectID}
+				if db.Mode == "shared" {
+					it.Kind = "shared-database"
+				}
+				if b := s.latestOffsiteDump(ctx, db.ID); b != nil {
+					it.Backup = b.CreatedAt.UTC().Format(time.RFC3339)
+				}
+				out = append(out, it)
+			}
+			continue
+		}
+		if svc.Spec.Role != "" || svc.ProjectID == s.systemProjectID {
+			continue // platform services (registry, studio) are recreated on demand
+		}
+		it := stuckItem{Kind: "service", ID: svc.ID, Name: svc.Name, Project: projName(svc.ProjectID), ProjectID: svc.ProjectID}
+		if bs, err := s.store.VolumeBackups(ctx, svc.ID, 10); err == nil {
+			for _, b := range bs {
+				if b.Status == "completed" && b.S3Key != "" {
+					it.Backup = b.CreatedAt.UTC().Format(time.RFC3339)
+					break
+				}
+			}
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// GET /api/v1/nodes/{id}/stuck
+func (s *Server) handleNodeStuck(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	writeJSON(w, 200, s.stuckOnNode(r.Context(), r.PathValue("id")))
 }

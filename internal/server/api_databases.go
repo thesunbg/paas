@@ -102,6 +102,9 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			out["server"] = map[string]any{"service_id": srv.ID, "status": srv.Status, "memory_limit_mb": srv.Spec.Resources.MemoryLimitMB}
+			if nid := s.serviceNode(r.Context(), srv); nid != nil {
+				out["server"].(map[string]any)["node_online"] = s.nodeOnline(r.Context(), nid)
+			}
 			if in, err := s.firstInstance(r.Context(), srv.ID); err == nil {
 				out["server"].(map[string]any)["memory_usage_mb"] = in.MemoryUsageMB
 			}

@@ -11,6 +11,7 @@
   import CronField from '../../components/CronField.svelte';
   import AutoscaleFields from '../../components/AutoscaleFields.svelte';
   import { parseCron } from '../../lib/cron';
+  import VolumeBackups from '../../components/VolumeBackups.svelte';
 
   let { detail, reload, canEdit }: { detail: ServiceDetail; reload: () => Promise<void>; canEdit: boolean } = $props();
 
@@ -56,6 +57,7 @@
   let idleMinutes = $state(s0.spec.sleep.idle_minutes ?? 15);
   let runtimeClass = $state(s0.spec.runtime_class || 'standard');
   let volumes = $state<Volume[]>((s0.spec.volumes ?? []).map((v) => ({ ...v })));
+  let volBackupHours = $state(s0.spec.volume_backup_hours ?? 0);
   let spa = $state(s0.spec.spa ?? false);
   // A single-element command runs through /bin/sh -c (internal/runtime withCommand).
   const cmdString = (c: string[] | undefined) =>
@@ -179,6 +181,7 @@
     if (!isStatic && runtimeClass !== (s.spec.runtime_class || 'standard')) p.runtime_class = runtimeClass;
     const vols = volumes.filter((v) => v.name.trim() || v.path.trim()).map((v) => ({ name: v.name.trim(), path: v.path.trim() }));
     if (!isStatic && !same(vols, s.spec.volumes ?? [])) p.volumes = vols;
+    if (!isStatic && volBackupHours !== (s.spec.volume_backup_hours ?? 0)) p.volume_backup_hours = volBackupHours;
     if (isStatic && spa !== (s.spec.spa ?? false)) p.spa = spa;
     if (!isStatic && command.trim() !== cmdString(s.spec.command)) p.command = command.trim() ? [command.trim()] : [];
     return p;
@@ -399,6 +402,19 @@
             {/each}
             <div><button type="button" class="sm" onclick={() => volumes.push({ name: '', path: '' })}><Icon name="plus" size={12} />Add volume</button></div>
             <p class="hint">Persistent node-local storage. Services with volumes run a single replica.</p>
+            {#if volumes.some((v) => v.name.trim())}
+              <label class="field" style="max-width:480px;margin-top:8px">
+                <span>Volume backups</span>
+                <select bind:value={volBackupHours} style="max-width:260px">
+                  <option value={6}>Every 6 hours</option>
+                  <option value={12}>Every 12 hours</option>
+                  <option value={0}>Daily</option>
+                  <option value={168}>Weekly</option>
+                  <option value={-1}>Off</option>
+                </select>
+                <span class="hint">Copied to off-site storage (the last 7 are kept), so the service can be recovered on another node if its node is lost.</span>
+              </label>
+            {/if}
           </div>
         </div>
       </fieldset>
@@ -447,6 +463,9 @@
           <p class="hint">Pushes to <code>{s0.source.branch || 'main'}</code>{s0.source.root_dir ? ` touching ${s0.source.root_dir}/` : ''} deploy automatically{detail.service.source.auto_deploy ? '' : ' (auto-deploy is currently off)'}.</p>
         </div>
       </div>
+    {/if}
+    {#if !isStatic && (s0.spec.volumes ?? []).length > 0}
+      <VolumeBackups serviceId={s0.id} {canEdit} />
     {/if}
     <div class="card">
       <div class="card-head"><h3>Identifiers</h3></div>

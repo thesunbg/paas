@@ -129,6 +129,41 @@
     act('unlink', () => api.unlinkDatabase(id, sid), `Unlinked ${serviceName(sid)}`);
   }
 
+  async function recover(allowEmpty: boolean) {
+    const shared = db?.mode === 'shared';
+    if (!(await confirmDialog({
+      title: 'Recover on another node',
+      message: shared
+        ? 'The shared server is recreated on another node and every database it held is restored from its newest off-site backup. Changes after those backups are lost.'
+        : 'A new server is created on another node and the newest off-site backup restored into it. Changes after that backup are lost. Linked services restart with the new address.',
+      confirmLabel: 'Recover',
+      danger: true,
+    }))) return;
+    busy = 'recover';
+    try {
+      await api.recoverDatabase(id, allowEmpty);
+      toast.success('Recovery started');
+      await load();
+    } catch (e) {
+      const msg = errorMessage(e);
+      if (!allowEmpty && /allow_empty|no off-site backup|no backup/i.test(msg)) {
+        busy = '';
+        if (await confirmDialog({ title: 'No backup to recover from', message: msg + '\n\nStart it empty instead? Its apps can connect again, but the data is gone.', confirmLabel: 'Start empty', danger: true })) {
+          busy = 'recover';
+          try {
+            await api.recoverDatabase(id, true);
+            toast.success('Recovery started');
+            await load();
+          } catch (e2) {
+            toast.error(errorMessage(e2));
+          }
+        }
+      } else toast.error(msg);
+    } finally {
+      busy = '';
+    }
+  }
+
   async function restore(b: Backup) {
     const ok = await confirmDialog({
       title: 'Restore backup',
@@ -366,11 +401,37 @@
       <div class="card-head">
         <h3>Backups</h3>
         {#if isDev}
-          <button class="sm" onclick={() => act('backup', () => api.backupNow(id), 'Backup completed')} disabled={!!busy || db.status !== 'ready'}>
-            {#if busy === 'backup'}<span class="spinner"></span>{/if}Backup now
-          </button>
+          <div class="row">
+            <button class="sm" onclick={() => act('verify', () => api.verifyBackup(id), 'Restore check passed')} disabled={!!busy || db.status !== 'ready' || !detail.backup_health?.last_success} title="Restore the newest backup into a scratch database, then drop it">
+              {#if busy === 'verify'}<span class="spinner"></span>{/if}Verify
+            </button>
+            <button class="sm" onclick={() => act('backup', () => api.backupNow(id), 'Backup completed')} disabled={!!busy || db.status !== 'ready'}>
+              {#if busy === 'backup'}<span class="spinner"></span>{/if}Backup now
+            </button>
+          </div>
         {/if}
       </div>
+      {#if detail.server?.node_online === false}
+        <div class="card-body stack" style="border-bottom:1px solid var(--border)">
+          <p><span class="badge red">node offline</span> The node holding this database's data is offline. If it is not coming back, recover the database on another node from its newest off-site backup.</p>
+          {#if isAdmin}
+            <div class="row">
+              <button class="sm danger" onclick={() => recover(false)} disabled={!!busy}>{#if busy === 'recover'}<span class="spinner"></span>{/if}Recover on another node</button>
+            </div>
+          {/if}
+        </div>
+      {/if}
+      {#if detail.backup_health}
+        {@const h = detail.backup_health}
+        <div class="card-body small" style="padding-bottom:0">
+          <span class="badge {h.state === 'ok' ? 'green' : h.state === 'off' ? '' : h.state === 'none' ? 'yellow' : 'red'}">{h.state === 'ok' ? 'healthy' : h.state === 'none' ? 'no backup' : h.state}</span>
+          {#if h.offsite}<span class="badge blue">off-site</span>{/if}
+          {#if h.message}<span class="muted">{h.message}</span>{/if}
+          {#if h.last_verified}
+            <span class="muted" title={absTime(h.last_verified)}>· restore check {relTime(h.last_verified)}: {h.verify_ok ? 'passed' : 'failed'}{h.verify_note ? ` (${h.verify_note})` : ''}</span>
+          {/if}
+        </div>
+      {/if}
       {#if backups === null}
         <div class="card-body"><Loading /></div>
       {:else if backups.filter((x) => x.kind !== 'base').length === 0}

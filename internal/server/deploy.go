@@ -170,6 +170,7 @@ func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
 			s.failDeployment(ctx, d, svc, err)
 			return
 		}
+		go s.archiveStatic(context.WithoutCancel(ctx), svc.ID, d)
 		// A service that switched to static no longer needs containers.
 		for _, in := range s.instancesOf(ctx, svc.ID) {
 			s.stopInstance(ctx, &in, 5)
@@ -627,8 +628,26 @@ func (s *Server) deleteService(ctx context.Context, svc *store.Service) error {
 	if err := s.store.DeleteService(ctx, svc.ID); err != nil {
 		return err
 	}
+	go s.deleteOffsitePrefixes(svc.ID, "volumes", "static")
 	s.publishAll(ctx)
 	return nil
+}
+
+// deleteOffsitePrefixes removes a deleted service's volume backups and static copies off-site.
+func (s *Server) deleteOffsitePrefixes(serviceID string, kinds ...string) {
+	c := s.storage()
+	if !c.Enabled() {
+		return
+	}
+	for _, k := range kinds {
+		objs, err := c.List(c.Key(k, serviceID) + "/")
+		if err != nil {
+			continue
+		}
+		for _, o := range objs {
+			_ = c.Delete(o.Key)
+		}
+	}
 }
 
 func (s *Server) broadcastRemoveFiles(ctx context.Context, paths []string) {

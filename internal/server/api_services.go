@@ -45,6 +45,8 @@ type serviceInput struct {
 	Autoscale     *model.Autoscale     `json:"autoscale"`
 	Schedule      *string              `json:"schedule"`
 	JobTimeoutSec *int                 `json:"job_timeout_sec"`
+	// VolumeBackupHours: 0 = every 24 h, negative = never (see model.ServiceSpec).
+	VolumeBackupHours *int `json:"volume_backup_hours"`
 }
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -152,6 +154,12 @@ func (s *Server) applyInput(svc *store.Service, in *serviceInput) error {
 	}
 	if in.JobTimeoutSec != nil {
 		spec.JobTimeoutSec = *in.JobTimeoutSec
+	}
+	if in.VolumeBackupHours != nil {
+		if h := *in.VolumeBackupHours; h > 24*30 {
+			return errors.New("volume backups: at most every 720 hours")
+		}
+		spec.VolumeBackupHours = *in.VolumeBackupHours
 	}
 	if svc.Type == model.TypeStatic {
 		spec.Replicas = 0

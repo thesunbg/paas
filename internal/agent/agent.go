@@ -130,9 +130,9 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.buildBlocked = err.Error()
 		}
 	}
-	if a.builder != nil {
-		go a.serveStaticOrigin(ctx)
-	}
+	// Every node serves its static copies: build nodes their builds, others the
+	// copies restored from off-site storage when a build node is lost.
+	go a.serveStaticOrigin(ctx)
 	a.rt.OnChange = func() { a.heartbeat(context.Background()) }
 	a.rt.Recover(ctx)
 
@@ -151,6 +151,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		{proto.CmdPITRPrepare, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
 			return bus.Handle(nc, s, a.handlePITRPrepare)
 		}},
+		{proto.CmdArchive, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleArchive) }},
+		{proto.CmdExtract, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleExtract) }},
 		{proto.CmdBuild, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleBuild) }},
 		{proto.CmdPush, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handlePush) }},
 		{proto.CmdJob, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleJob) }},

@@ -80,6 +80,7 @@ type Server struct {
 	// masterKey seals backups of the platform's own state (state_backup.go).
 	masterKey     []byte
 	bwatch        backupWatch
+	volBackupMu   sync.Mutex
 	stateBackupMu sync.Mutex
 
 	traffic *traffic

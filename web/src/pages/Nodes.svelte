@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, errorMessage, type ClusterNode, type JoinToken, type NodesResponse } from '../lib/api';
+  import { api, errorMessage, type ClusterNode, type JoinToken, type NodesResponse, type StuckItem } from '../lib/api';
+  import { href } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
   import { mb, cpu, gb, relTime, absTime, pct } from '../lib/format';
   import { poll } from '../lib/poll';
@@ -12,7 +13,7 @@
   import Status from '../components/Status.svelte';
   import CopyButton from '../components/CopyButton.svelte';
   import Modal from '../components/Modal.svelte';
-    import Sparkline from '../components/Sparkline.svelte';
+  import Sparkline from '../components/Sparkline.svelte';
   import type { NodeMetricPoint } from '../lib/api';
 
   let data = $state<NodesResponse | null>(null);
@@ -85,17 +86,53 @@
     }
   }
 
+  let stuckNode = $state<ClusterNode | null>(null);
+  let stuck = $state<StuckItem[]>([]);
+  let stuckOpen = $state(false);
+
   async function remove(n: ClusterNode) {
+    let items: StuckItem[] = [];
+    try {
+      items = (await api.nodeStuck(n.id)) ?? [];
+    } catch (e) {
+      return void toast.error(errorMessage(e));
+    }
+    if (items.length > 0) {
+      stuckNode = n;
+      stuck = items;
+      stuckOpen = true;
+      return;
+    }
     const ok = await confirmDialog({ title: 'Remove node', message: `Remove ${n.name} from the cluster? Its agent must already be stopped.`, confirmLabel: 'Remove', danger: true, requireText: n.name });
     if (!ok) return;
+    await doRemove(n, false);
+  }
+
+  async function forceRemove() {
+    const n = stuckNode;
+    if (!n) return;
+    stuckOpen = false;
+    const ok = await confirmDialog({
+      title: 'Remove node anyway',
+      message: `The ${stuck.length} item(s) listed keep their data on ${n.name}. Removing it starts them elsewhere with EMPTY data. Recover them first unless that data is truly gone.`,
+      confirmLabel: 'Remove anyway',
+      danger: true,
+      requireText: n.name,
+    });
+    if (ok) await doRemove(n, true);
+  }
+
+  async function doRemove(n: ClusterNode, force: boolean) {
     try {
-      await api.deleteNode(n.id);
+      await api.deleteNode(n.id, force);
       toast.success(`${n.name} removed`);
       await load();
     } catch (e) {
       toast.error(errorMessage(e));
     }
   }
+
+  const stuckLabel: Record<StuckItem['kind'], string> = { service: 'Service volumes', database: 'Database', 'shared-database': 'Database on a shared server' };
 
   function edit(n: ClusterNode) {
     editing = n;
@@ -300,6 +337,31 @@
     {/if}
   {/if}
 </div>
+
+<Modal bind:open={stuckOpen} title="Data still on {stuckNode?.name ?? 'this node'}" width={560}>
+  <div class="stack small">
+    <p>These keep their data on this node. Recover each one on another node first (from its newest off-site backup), then remove the node.</p>
+    <table>
+      <thead><tr><th>What</th><th>Project</th><th>Newest off-site backup</th></tr></thead>
+      <tbody>
+        {#each stuck as it (it.kind + it.id)}
+          <tr>
+            <td>
+              <a href={href(it.kind === 'service' ? `/services/${it.id}/settings` : `/databases/${it.id}`)} onclick={() => (stuckOpen = false)}>{it.name}</a>
+              <div class="faint">{stuckLabel[it.kind]}</div>
+            </td>
+            <td>{it.project ?? ''}</td>
+            <td>{#if it.backup}<span title={absTime(it.backup)}>{relTime(it.backup)}</span>{:else}<span class="badge red">none</span>{/if}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+  {#snippet footer()}
+    <button type="button" onclick={() => (stuckOpen = false)}>Cancel</button>
+    <button type="button" class="danger" onclick={forceRemove}>Remove anyway…</button>
+  {/snippet}
+</Modal>
 
 <Modal bind:open={editOpen} title="Edit {editing?.name ?? 'node'}" width={460}>
   <form id="node-edit" class="stack" onsubmit={saveEdit}>

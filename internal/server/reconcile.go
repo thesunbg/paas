@@ -419,6 +419,10 @@ func (s *Server) maintenanceLoop(ctx context.Context) {
 		if tick%10 == 2 {
 			s.backupWatchTick(ctx)
 		}
+		s.volumeBackupTick(ctx)
+		if tick%3 == 0 {
+			s.staticFailoverTick(ctx)
+		}
 		s.volumeGCTick(ctx)
 		go s.pitrTick(ctx)
 		if tick%30 == 1 {

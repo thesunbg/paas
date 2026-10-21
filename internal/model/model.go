@@ -119,6 +119,9 @@ type ServiceSpec struct {
 	// start first, and it restarts after they are redeployed: programs such as
 	// nginx resolve their upstreams once at startup and would keep a stale IP.
 	DependsOn []string `json:"depends_on,omitempty"`
+	// VolumeBackupHours is how often the volumes are backed up off-site
+	// (0: every 24 h when off-site storage is configured, negative: never).
+	VolumeBackupHours int `json:"volume_backup_hours,omitempty"`
 	// Role marks services the platform runs for a project ("studio": the DB
 	// studio). They are hidden from service lists and limits.
 	Role          string    `json:"role,omitempty"`

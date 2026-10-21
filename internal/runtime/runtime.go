@@ -1161,3 +1161,31 @@ func withNoFileLimit(_ context.Context, _ oci.Client, _ *containers.Container, s
 	s.Process.Rlimits = append(kept, specs.POSIXRlimit{Type: "RLIMIT_NOFILE", Hard: n, Soft: n})
 	return nil
 }
+
+// Pause freezes a container's processes (cgroup freezer), for a consistent
+// copy of its volumes; Resume thaws it. Both are no-ops for unknown containers.
+func (r *Runtime) Pause(ctx context.Context, id string) error {
+	ctx = r.ctx(ctx)
+	ctr, err := r.client.LoadContainer(ctx, id)
+	if err != nil {
+		return err
+	}
+	task, err := ctr.Task(ctx, nil)
+	if err != nil {
+		return err
+	}
+	return task.Pause(ctx)
+}
+
+func (r *Runtime) Resume(ctx context.Context, id string) error {
+	ctx = r.ctx(ctx)
+	ctr, err := r.client.LoadContainer(ctx, id)
+	if err != nil {
+		return err
+	}
+	task, err := ctr.Task(ctx, nil)
+	if err != nil {
+		return err
+	}
+	return task.Resume(ctx)
+}

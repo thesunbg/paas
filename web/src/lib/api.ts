@@ -144,6 +144,7 @@ export interface ServiceSpec {
   health_check: HealthCheck;
   sleep: SleepPolicy;
   volumes?: Volume[];
+  volume_backup_hours?: number; // 0 = every 24 h, negative = off
   command?: string[];
   image?: string;
   spa?: boolean;
@@ -328,6 +329,7 @@ export interface ServiceInput {
   health_check?: HealthCheck;
   runtime_class?: string;
   volumes?: Volume[];
+  volume_backup_hours?: number;
   command?: string[];
   spa?: boolean;
   env?: Record<string, string>;
@@ -433,6 +435,7 @@ export interface DatabaseServer {
   status: string;
   memory_limit_mb: number;
   memory_usage_mb?: number;
+  node_online?: boolean; // absent when the server has no node yet
 }
 
 export interface DatabaseDetail {
@@ -447,6 +450,84 @@ export interface DatabaseDetail {
   external?: ExternalAccess;
   server?: DatabaseServer;
   links: DatabaseLink[];
+  backup_health?: BackupHealth;
+}
+
+export interface BackupHealth {
+  state: 'ok' | 'stale' | 'failing' | 'none' | 'off';
+  last_success?: string;
+  last_verified?: string;
+  verify_ok?: boolean;
+  verify_note?: string;
+  offsite: boolean;
+  message?: string;
+}
+
+export interface StorageSettings {
+  enabled: boolean;
+  from_env: boolean;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  access_key: string;
+  has_secret: boolean;
+  prefix: string;
+  virtual_host: boolean;
+}
+
+export interface StorageInput {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  access_key: string;
+  secret_key: string;
+  prefix: string;
+  virtual_host: boolean;
+}
+
+export interface StateBackupRun {
+  at: string;
+  name?: string;
+  size?: number;
+  offsite: boolean;
+  error?: string;
+  duration?: string;
+}
+
+export interface StateBackups {
+  last: StateBackupRun | null;
+  backups: { name: string; local: boolean; offsite: boolean }[] | null;
+  offsite_error: string;
+  every: string;
+}
+
+export interface VolumeBackup {
+  id: string;
+  service_id: string;
+  node_id: string | null;
+  status: string;
+  s3_key: string;
+  size_bytes: number;
+  error: string;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface VolumeBackups {
+  backups: VolumeBackup[] | null;
+  offsite: boolean;
+  every_hours: number;
+  enabled: boolean;
+  node_online: boolean;
+}
+
+export interface StuckItem {
+  kind: 'service' | 'database' | 'shared-database';
+  id: string;
+  name: string;
+  project: string;
+  project_id: string;
+  backup?: string; // newest off-site backup it can be recovered from
 }
 
 export interface CreateDatabaseInput {
@@ -965,6 +1046,17 @@ export const api = {
   unlinkDatabase: (id: string, service: string) => del(`/databases/${e(id)}/links/${e(service)}`),
   backups: (id: string) => get<Backup[] | null>(`/databases/${e(id)}/backups`),
   backupNow: (id: string) => post<Backup>(`/databases/${e(id)}/backups`),
+  verifyBackup: (id: string) => post<Backup>(`/databases/${e(id)}/backups/verify`),
+  recoverDatabase: (id: string, allowEmpty: boolean) => post<{ status: string }>(`/databases/${e(id)}/recover`, { allow_empty: allowEmpty }),
+  volumeBackups: (id: string) => get<VolumeBackups>(`/services/${e(id)}/volume-backups`),
+  volumeBackupNow: (id: string) => post<VolumeBackup>(`/services/${e(id)}/volume-backups`),
+  recoverService: (id: string, allowEmpty: boolean, backupId?: string) =>
+    post<{ node: string; backup: VolumeBackup | null }>(`/services/${e(id)}/recover`, { allow_empty: allowEmpty, backup_id: backupId }),
+  storage: () => get<StorageSettings>('/admin/storage'),
+  putStorage: (input: StorageInput) => put<StorageSettings>('/admin/storage', input),
+  stateBackups: () => get<StateBackups>('/admin/state-backups'),
+  stateBackupNow: () => post<StateBackupRun>('/admin/state-backups'),
+  stateBackupURL: (name: string) => `${BASE}/admin/state-backups/${e(name)}`,
   restoreBackup: (id: string, backup: string) => post<{ status: string }>(`/databases/${e(id)}/backups/${e(backup)}/restore`),
   upgradeDatabase: (id: string, size?: string) => post<{ status: string }>(`/databases/${e(id)}/upgrade`, size ? { size } : {}),
   /** One-way major upgrade: stops the linked services until it is done (confirm_downtime). */
@@ -994,7 +1086,8 @@ export const api = {
   // Cluster
   nodes: () => get<NodesResponse>('/nodes'),
   updateNode: (id: string, input: NodeUpdate) => patch<ClusterNode>(`/nodes/${e(id)}`, input),
-  deleteNode: (id: string) => del(`/nodes/${e(id)}`),
+  deleteNode: (id: string, force = false) => del(`/nodes/${e(id)}${force ? '?force=true' : ''}`),
+  nodeStuck: (id: string) => get<StuckItem[] | null>(`/nodes/${e(id)}/stuck`),
   nodeMetrics: (id: string) => get<NodeMetricPoint[] | null>(`/nodes/${e(id)}/metrics`),
   createJoinToken: (roles: string[]) => post<JoinToken>('/cluster/join-tokens', { roles }),
   sizes: () => get<SizesResponse>('/sizes'),
