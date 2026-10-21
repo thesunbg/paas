@@ -330,6 +330,9 @@ func (r *Runtime) Run(ctx context.Context, req proto.RunRequest) (string, error)
 		return ip, nil
 	}
 	if err := r.waitHealthy(ctx, id, ip, req.Port, req.HealthCheck); err != nil {
+		if k, v := loopbackBind(req.Env); k != "" {
+			err = fmt.Errorf("%w\nThe environment sets %s=%s: the app only listens inside its container. Set %s=0.0.0.0 (Environment tab) or remove it", err, k, v, k)
+		}
 		tail, _ := r.Logs(id, 30)
 		_ = r.Remove(ctx, id, 0)
 		return "", fmt.Errorf("%w\n--- last log lines ---\n%s", err, strings.Join(tail, "\n"))
@@ -1188,4 +1191,16 @@ func (r *Runtime) Resume(ctx context.Context, id string) error {
 		return err
 	}
 	return task.Resume(ctx)
+}
+
+// loopbackBind finds a listen-address variable pointing at loopback, the usual reason a
+// health check never connects (HOST=127.0.0.1 copied from a developer's .env).
+func loopbackBind(env map[string]string) (string, string) {
+	for _, k := range []string{"HOST", "BIND", "BIND_ADDR", "BIND_ADDRESS", "BIND_HOST", "LISTEN_ADDR", "LISTEN_ADDRESS", "LISTEN_HOST", "SERVER_HOST", "APP_HOST", "HTTP_HOST"} {
+		switch v := strings.TrimSpace(env[k]); v {
+		case "127.0.0.1", "localhost", "::1", "[::1]":
+			return k, v
+		}
+	}
+	return "", ""
 }

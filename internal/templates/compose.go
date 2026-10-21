@@ -714,6 +714,9 @@ type EnvInput struct {
 // kept, app secrets generated, credentials of other services (API keys,
 // OAuth clients) and placeholders must be filled in, empty ones may be,
 // database URLs call for a database and localhost URLs for the public URL.
+// bindVar names an app's listen address (HOST=127.0.0.1, BIND_ADDRESS=localhost…).
+var bindVar = regexp.MustCompile(`^(HOST|BIND|BIND_ADDR|BIND_ADDRESS|BIND_HOST|LISTEN|LISTEN_ADDR|LISTEN_ADDRESS|LISTEN_HOST|SERVER_HOST|APP_HOST|HTTP_HOST|ADDRESS|HOSTNAME)$`)
+
 func ExampleEnv(content string) []EnvHint {
 	var out []EnvHint
 	for _, e := range parseDotenv(content) {
@@ -736,6 +739,10 @@ func ExampleEnv(content string) []EnvHint {
 			}
 		}
 		switch {
+		case bindVar.MatchString(e.key) && localHost(v):
+			// A listen address copied from a developer's .env: on loopback the app is
+			// unreachable from the edge and fails its health check.
+			h.Kind, h.Value = "value", "0.0.0.0"
 		case selfSecret.MatchString(e.key):
 			b := make([]byte, 24)
 			_, _ = rand.Read(b)

@@ -278,3 +278,15 @@ func TestParseDotenv(t *testing.T) {
 		}
 	}
 }
+
+func TestExampleEnvListenAddress(t *testing.T) {
+	got := map[string]EnvHint{}
+	for _, h := range ExampleEnv("HOST=127.0.0.1\nBIND_ADDRESS=localhost\nDB_HOST=localhost\nHOST2=127.0.0.1\nLISTEN_HOST=10.0.0.5\n") {
+		got[h.Key] = h
+	}
+	for k, want := range map[string]string{"HOST": "0.0.0.0", "BIND_ADDRESS": "0.0.0.0", "DB_HOST": "localhost", "HOST2": "127.0.0.1", "LISTEN_HOST": "10.0.0.5"} {
+		if got[k].Value != want {
+			t.Errorf("%s = %q, want %q", k, got[k].Value, want)
+		}
+	}
+}
