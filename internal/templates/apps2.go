@@ -69,7 +69,7 @@ var apps2 = []Template{
 	// AI agents and models
 	{
 		ID: "openclaw", Title: "OpenClaw", Category: "AI", Website: "https://openclaw.ai",
-		Description: "Personal AI assistant gateway with a web Control UI. Sign in with the gateway token (OPENCLAW_GATEWAY_TOKEN in Environment); add model providers and channels from the UI or the Console (node dist/index.js …).",
+		Description: "Personal AI assistant gateway with a web Control UI. Sign in with the gateway token (OPENCLAW_GATEWAY_TOKEN in Environment), then approve the browser from the Console: node dist/index.js devices list, then devices approve <id>.",
 		Services: []Service{{
 			Name: "openclaw", Image: "ghcr.io/openclaw/openclaw:latest", Type: "web", Port: 18789, Size: "large",
 			// The gateway refuses to start without gateway.mode, and the Control UI only accepts
