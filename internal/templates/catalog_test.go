@@ -9,7 +9,9 @@ import (
 	"github.com/thesunbg/paas/internal/resources"
 )
 
-var refRe = regexp.MustCompile(`\$\{([a-z0-9_.-]+)\}`)
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+var refRe = regexp.MustCompile(`\$\{([a-z0-9_.:-]+)\}`)
 
 // Every template must install as written: known engines and sizes, fully qualified
 // images, and placeholders that point at something the template creates.
@@ -36,6 +38,12 @@ func TestCatalog(t *testing.T) {
 			dbs[d.Name] = true
 		}
 		for _, s := range tpl.Services {
+			if s.Build != nil {
+				if tpl.Repo == "" {
+					t.Errorf("%s/%s: built from source but the template has no repo", tpl.ID, s.Name)
+				}
+				continue
+			}
 			if strings.Count(strings.SplitN(s.Image, "/", 2)[0], ".") == 0 || !strings.Contains(s.Image, ":") {
 				t.Errorf("%s/%s: image %q must name its registry and tag", tpl.ID, s.Name, s.Image)
 			}
@@ -47,10 +55,13 @@ func TestCatalog(t *testing.T) {
 			keys := map[string]bool{}
 			for k, v := range s.Env {
 				keys[k] = true
+				if !envName.MatchString(k) {
+					t.Errorf("%s/%s: %s is not a valid variable name (the Environment tab could not edit it)", tpl.ID, s.Name, k)
+				}
 				for _, m := range refRe.FindAllStringSubmatch(v, -1) {
 					ref := m[1]
 					switch {
-					case ref == "url" || ref == "host" || ref == "random":
+					case ref == "url" || ref == "host" || ref == "random" || regexp.MustCompile(`^random:[0-9]+$`).MatchString(ref):
 					case strings.HasPrefix(ref, "db."):
 						p := strings.Split(ref, ".")
 						if len(p) != 3 || !dbs[p[1]] {

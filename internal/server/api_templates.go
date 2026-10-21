@@ -77,6 +77,9 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 		svcs[i] = ts
 	}
 	opts := templateOpts{Domain: in.Domain, Rename: map[string]string{}}
+	if tpl.Repo != "" {
+		opts.Repo = &model.ServiceSource{Kind: "git", Repo: tpl.Repo, Branch: firstNonEmpty(tpl.Branch, "main")}
+	}
 	if n := util.Slugify(in.Name); strings.TrimSpace(in.Name) != "" && n != tpl.Services[0].Name {
 		main := tpl.Services[0].Name
 		opts.Rename[main] = n

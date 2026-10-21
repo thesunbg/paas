@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/thesunbg/paas/internal/model"
@@ -48,16 +49,21 @@ type Database struct {
 }
 
 type Template struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Category    string     `json:"category"`
-	Website     string     `json:"website,omitempty"`
-	Services    []Service  `json:"services"`
-	Databases   []Database `json:"databases,omitempty"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+	Website     string `json:"website,omitempty"`
+	// Repo is a public git repository the services with a Build section are built
+	// from (apps without a published image).
+	Repo      string     `json:"repo,omitempty"`
+	Branch    string     `json:"branch,omitempty"`
+	Services  []Service  `json:"services"`
+	Databases []Database `json:"databases,omitempty"`
 }
 
-// Env values may reference ${db.<name>.host|port|user|password|name|url}, ${url}, ${host} and ${random}.
+// Env values may reference ${db.<name>.host|port|user|password|name|url}, ${url}, ${host},
+// ${random} (48 hex characters) and ${random:N} (N hex characters, for keys of a fixed length).
 var All = []Template{
 	{
 		ID: "wordpress", Title: "WordPress", Category: "CMS",
@@ -142,6 +148,12 @@ var All = []Template{
 	},
 }
 
+func randomHex(n int) string {
+	b := make([]byte, (n+1)/2)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)[:n]
+}
+
 func ByID(id string) (*Template, bool) {
 	for i := range All {
 		if All[i].ID == id {
@@ -157,7 +169,7 @@ type DBValues struct {
 	Host, Port, User, Password, Name, URL string
 }
 
-var placeholder = regexp.MustCompile(`\$\{([a-z0-9_.-]+)\}`)
+var placeholder = regexp.MustCompile(`\$\{([a-z0-9_.:-]+)\}`)
 
 // Expand substitutes placeholders in a template value.
 func Expand(v string, dbs map[string]DBValues, publicURL, host string) string {
@@ -175,9 +187,13 @@ func ExpandWith(v string, dbs map[string]DBValues, services map[string]string, p
 		case "host":
 			return host
 		case "random":
-			b := make([]byte, 24)
-			_, _ = rand.Read(b)
-			return hex.EncodeToString(b)
+			return randomHex(48)
+		}
+		if n, ok := strings.CutPrefix(key, "random:"); ok {
+			if l, err := strconv.Atoi(n); err == nil && l > 0 && l <= 128 {
+				return randomHex(l)
+			}
+			return m
 		}
 		if strings.HasPrefix(key, "svc.") {
 			parts := strings.Split(key, ".")
