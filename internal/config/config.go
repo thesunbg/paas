@@ -13,6 +13,7 @@ type Server struct {
 	DatabaseURL     string // PAAS_DATABASE_URL
 	HTTPAddr        string // PAAS_HTTP_ADDR, API + dashboard
 	NATSAddr        string // PAAS_NATS_ADDR, listener for agents and proxies
+	NATSAdvertise   string // PAAS_NATS_ADVERTISE, host:port nodes dial for it (default: public URL host + NATSAddr port)
 	NATSLegacy      bool   // PAAS_NATS_LEGACY_TOKEN=1: accept the shared cluster token as a full-permission NATS credential (cutover only)
 	DataDir         string // PAAS_DATA_DIR
 	MasterKey       string // PAAS_MASTER_KEY (hex, optional; otherwise <data>/master.key)
@@ -124,6 +125,7 @@ func LoadServer() Server {
 		DatabaseURL:     env("PAAS_DATABASE_URL", "postgres://paas:paas@127.0.0.1:5432/paas?sslmode=disable"),
 		HTTPAddr:        env("PAAS_HTTP_ADDR", ":8080"),
 		NATSAddr:        env("PAAS_NATS_ADDR", "0.0.0.0:4222"),
+		NATSAdvertise:   env("PAAS_NATS_ADVERTISE", ""),
 		NATSLegacy:      envBool("PAAS_NATS_LEGACY_TOKEN", false),
 		DataDir:         data,
 		MasterKey:       env("PAAS_MASTER_KEY", ""),

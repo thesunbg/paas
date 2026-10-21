@@ -133,7 +133,7 @@ func New(ctx context.Context, cfg config.Server) (*Server, error) {
 		return nil, err
 	}
 	s.ns, err = bus.StartServer(cfg.NATSAddr, s.auth, s.ca.ServerTLS(), filepath.Join(cfg.DataDir, "nats"),
-		bus.ClusterOptions{Name: cfg.ServerName, Listen: cfg.ClusterAddr, Routes: cfg.ClusterRoutes, Secret: s.ClusterToken, TLS: s.ca.RouteTLS()})
+		bus.ClusterOptions{Name: cfg.ServerName, Listen: cfg.ClusterAddr, Routes: cfg.ClusterRoutes, Secret: s.ClusterToken, TLS: s.ca.RouteTLS(), Advertise: natsAdvertise(&cfg)})
 	if err != nil {
 		return nil, fmt.Errorf("start nats: %w", err)
 	}

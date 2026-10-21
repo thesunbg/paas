@@ -10,9 +10,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -197,5 +200,64 @@ func connectStandalone(ctx context.Context, cfg *config.Agent) (*nats.Conn, erro
 		return nil, fmt.Errorf("no node identity in %s: set PAAS_JOIN_URL and PAAS_JOIN_TOKEN to enroll", cfg.IdentityDir)
 	}
 	cfg.NodeID = id.NodeID
-	return id.Connect("agent-" + cfg.NodeName)
+	nc, err := id.Connect("agent-" + cfg.NodeName)
+	if err == nil {
+		id.remember(nc, cfg.IdentityDir)
+	}
+	return nc, err
+}
+
+// remember keeps node.json's nats_url in step with the control planes the NATS cluster
+// advertises, so an agent that restarts while the control plane it enrolled with is down
+// still reaches another one. Only the agent writes it (the proxy shares the directory).
+func (id *Identity) remember(nc *nats.Conn, dir string) {
+	var mu sync.Mutex
+	save := func(c *nats.Conn) {
+		mu.Lock()
+		defer mu.Unlock()
+		urls := natsURLs(id.NATSURL, c.Servers())
+		if urls == id.NATSURL {
+			return
+		}
+		nf, _ := json.Marshal(nodeFile{NodeID: id.NodeID, NATSURL: urls})
+		if err := writeFile0600(filepath.Join(dir, "node.json"), nf); err != nil {
+			slog.Warn("store control-plane addresses", "err", err)
+			return
+		}
+		id.NATSURL = urls
+		slog.Info("control-plane addresses updated", "nats_url", urls)
+	}
+	nc.SetDiscoveredServersHandler(save)
+	save(nc)
+}
+
+// natsURLs merges the stored comma-separated URL list with the client's server pool into a
+// sorted tls:// list. The stored entries are kept: the one the node enrolled with is the
+// operator's address and must survive the cluster forgetting it.
+func natsURLs(stored string, pool []string) string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return
+		}
+		v := "tls://" + u.Host
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for _, r := range strings.Split(stored, ",") {
+		add(r)
+	}
+	for _, r := range pool {
+		add(r)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }

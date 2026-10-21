@@ -29,6 +29,9 @@ type ClusterOptions struct {
 	Secret string   // shared route password (the cluster token)
 	// TLS secures routes. Nil keeps routes in plaintext (tests only).
 	TLS *tls.Config
+	// Advertise is the host:port agents reach this server's client listener on. The
+	// cluster gossips it to every connected agent, which keeps it as a fallback.
+	Advertise string
 }
 
 // StartServer runs an embedded NATS server listening on addr. Clients are
@@ -74,6 +77,7 @@ func StartServer(addr string, auth *Auth, tlsCfg *tls.Config, storeDir string, c
 		}
 		opts.ServerName = c.Name
 		opts.Cluster = server.ClusterOpts{Name: "paas", Host: ch, Port: port, Username: "paas", Password: c.Secret, TLSConfig: c.TLS}
+		opts.ClientAdvertise = c.Advertise
 		if c.TLS != nil {
 			opts.Cluster.TLSTimeout = 2
 		}

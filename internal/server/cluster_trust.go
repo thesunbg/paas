@@ -18,6 +18,7 @@ import (
 	"github.com/nats-io/nkeys"
 
 	"github.com/thesunbg/paas/internal/bus"
+	"github.com/thesunbg/paas/internal/config"
 	"github.com/thesunbg/paas/internal/network"
 	"github.com/thesunbg/paas/internal/pki"
 	"github.com/thesunbg/paas/internal/proto"
@@ -194,12 +195,21 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		_ = bus.Publish(s.nc, proto.SubjCPKick, kickMsg{Nkey: oldNkey})
 	}
 	slog.Info("node enrolled", "name", n.Name, "id", n.ID, "roles", n.Roles, "rejoin", oldNkey != "")
-	_, port, _ := net.SplitHostPort(s.cfg.NATSAddr)
-	host := strings.TrimPrefix(strings.TrimPrefix(s.cfg.PublicURL, "https://"), "http://")
-	host = strings.SplitN(strings.SplitN(host, "/", 2)[0], ":", 2)[0]
 	writeJSON(w, 200, map[string]string{
 		"node_id":  n.ID,
-		"nats_url": fmt.Sprintf("tls://%s:%s", host, port),
+		"nats_url": "tls://" + natsAdvertise(&s.cfg),
 		"ca_pem":   s.caPEM,
 	})
+}
+
+// natsAdvertise is the host:port nodes dial for this control plane's NATS listener:
+// PAAS_NATS_ADVERTISE, else the public URL's host with the listener's port.
+func natsAdvertise(cfg *config.Server) string {
+	if cfg.NATSAdvertise != "" {
+		return cfg.NATSAdvertise
+	}
+	_, port, _ := net.SplitHostPort(cfg.NATSAddr)
+	host := strings.TrimPrefix(strings.TrimPrefix(cfg.PublicURL, "https://"), "http://")
+	host = strings.SplitN(strings.SplitN(host, "/", 2)[0], ":", 2)[0]
+	return net.JoinHostPort(host, port)
 }

@@ -79,6 +79,8 @@ Create body:
 | POST | `/services/{id}/restart` | rolls the current artifact again |
 | POST | `/services/{id}/stop`, `/start` | |
 | POST | `/services/{id}/scale` | `{replicas}` |
+| GET/POST | `/services/{id}/volume-backups` | off-site archives of the service's volumes (`volume_backup_hours` in the spec: 0 = daily, negative = off); POST backs up now |
+| POST | `/services/{id}/recover` | `{backup_id?, allow_empty}` admin, only while the service's node is offline: moves it to another node with its volumes from a backup (default the newest) |
 | GET | `/services/{id}/deployments` | latest 50 |
 | GET/PUT | `/services/{id}/env` | GET → `{vars, linked}`. PUT `{vars: {K: V}, replace?: bool, restart?: bool}` |
 | DELETE | `/services/{id}/env/{key}` | |
@@ -117,6 +119,8 @@ MySQL 8.4 authenticates with `caching_sha2_password` (`mysql_native_password` is
 | DELETE | `/databases/{id}/links/{serviceId}` | |
 | GET/POST | `/databases/{id}/backups` | POST runs a backup now |
 | POST | `/databases/{id}/backups/{backupId}/restore` | |
+| POST | `/databases/{id}/backups/verify` | restores the newest backup into a scratch database, checks it, drops it (also runs weekly by itself) |
+| POST | `/databases/{id}/recover` | `{allow_empty}` admin, only while the server's node is offline: a new server on another node from the newest off-site dump. Shared servers: platform admin, recreates the server and restores every database on it. 202 |
 | POST | `/databases/{id}/upgrade` | `{size?}` shared → dedicated |
 | POST | `/databases/{id}/version` | `{version, confirm_downtime}` → 202, status `upgrading`. One-way major upgrade, see below |
 | POST | `/databases/{id}/update-minor` | `{confirm_shared?}` → 202, status `upgrading`. See below |
@@ -159,7 +163,8 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 |---|---|---|
 | GET | `/nodes` | `{nodes: [node + legacy (still on the shared cluster token), committed_memory_mb, capacity_memory_mb, instances, used_by_apps_mb, overcommit_ratio], sleeping_services}` |
 | PATCH | `/nodes/{id}` | `{status: online|cordoned, overcommit_memory, overcommit_cpu, reserved_mb, labels}` |
-| DELETE | `/nodes/{id}` | offline/cordoned nodes only |
+| DELETE | `/nodes/{id}` | offline/cordoned nodes only. 409 with `stuck` when services or databases still keep data there; `?force=true` removes it anyway (they restart empty) |
+| GET | `/nodes/{id}/stuck` | `[{kind: service|database|shared-database, id, name, project, backup}]` data that lives only on this node, with its newest off-site backup |
 | POST | `/cluster/join-tokens` | `{roles: [worker,build,edge]}` (default `worker`) -> `{token, expires_at, command}`. Single-use token. 409 when `PAAS_PUBLIC_URL` is not https |
 | POST | `/cluster/enroll` | no login, the join token is the credential. `{token, name, nkey}` -> node identity, bus URL and CA. Called by the agent |
 | GET | `/sizes` | instance size presets |
@@ -183,7 +188,7 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 | POST | `/api/v1/databases/{id}/users/{user}/password` | rotate |
 | GET/POST | `/api/v1/databases/{id}/pitr` | `{enabled, retention_days}` WAL archiving + daily base backups (dedicated PostgreSQL) |
 | POST | `/api/v1/databases/{id}/pitr/restore` | `{target_time?, name?}` restore into a new database |
-| GET/POST | `/api/v1/databases/{id}/ha` | `{enabled}` hot standby on another node, automatic failover ~30 s after the primary's node stops responding |
+| GET/POST | `/api/v1/databases/{id}/ha` | `{enabled}` hot standby on another node, automatic failover ~45–60 s after the primary's node stops responding |
 | POST | `/api/v1/databases/{id}/ha/switchover` | planned switchover to the standby |
 
 ## Accounts (administrators)
@@ -208,6 +213,9 @@ and unlink with `DELETE /api/v1/me/github`.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/admin/settings` | `{allow_signup, limits}` |
+| GET/PUT | `/api/v1/admin/storage` | off-site S3 storage `{endpoint, region, bucket, access_key, secret_key, prefix, virtual_host}`; PUT tests it first, an empty endpoint turns it off. `PAAS_S3_*` env wins (`from_env`) |
+| GET/POST | `/api/v1/admin/state-backups` | platform state (control-plane database) backups: list `{last, backups, offsite_error, every}` / back up now |
+| GET | `/api/v1/admin/state-backups/{name}` | download a sealed backup (restore with `paasd restore-state --file`) |
 | PUT | `/api/v1/admin/settings` | `{allow_signup?, limits?: {max_projects, max_services, max_databases, max_memory_mb, max_replicas, max_signups_per_ip_per_day}}` (0 = unlimited) |
 
 With sign-up on, anyone can register at `/#/signup` and gets a personal team. Limits apply to every

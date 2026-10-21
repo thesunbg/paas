@@ -108,6 +108,8 @@ PAAS_NATS_ROUTES=nats://cp2:6222,nats://cp3:6222
 
 Nodes get the bus URL and the cluster CA when they enroll; point the dashboard hostname at every control plane, and the NATS client learns the other servers from the cluster. Bus and routes use TLS from a CA the control planes create and share through the database. Every control plane serves the API and the bus. One elected leader (a PostgreSQL advisory lock) runs the deploy queue, reconciler, cron, autoscaler and maintenance. When the leader dies, another one takes over within seconds, and running apps are never affected.
 
+The installer sets up an extra control plane with `server --database-url … --master-key-file … --server-name cp2 --routes nats://cp1:6222`. Backups, restoring the platform state and recovering from a lost node are in [docs/DR.md](docs/DR.md).
+
 ## Configuration
 
 `paasd` is configured through environment variables (`/etc/paas/paasd.env`):
@@ -130,7 +132,7 @@ Nodes get the bus URL and the cluster CA when they enroll; point the dashboard h
 | `PAAS_IMAGE_RETENTION` | `3` | deployments kept per service for rollback |
 | `PAAS_S3_ENDPOINT`, `PAAS_S3_BUCKET`, `PAAS_S3_ACCESS_KEY`, `PAAS_S3_SECRET_KEY`, `PAAS_S3_REGION`, `PAAS_S3_PREFIX` | | off-site database backups |
 | `PAAS_EVICT_PSI` / `PAAS_EVICT_MIN_FREE_MB` | `40` / `256` | memory-pressure eviction thresholds |
-| `PAAS_SERVER_NAME`, `PAAS_NATS_CLUSTER_ADDR`, `PAAS_NATS_ROUTES`, `PAAS_MASTER_KEY`, `PAAS_CLUSTER_TOKEN` | | high availability (see above) |
+| `PAAS_SERVER_NAME`, `PAAS_NATS_CLUSTER_ADDR`, `PAAS_NATS_ROUTES`, `PAAS_NATS_ADVERTISE`, `PAAS_MASTER_KEY`, `PAAS_CLUSTER_TOKEN` | | high availability (see above) |
 
 ## Development
 

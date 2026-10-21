@@ -4,6 +4,11 @@
 #   Control plane + first node (all-in-one):
 #     curl -fsSL https://raw.githubusercontent.com/thesunbg/paas/main/internal/installer/install.sh | sudo sh -s -- server --domain apps.example.com --email you@example.com
 #
+#   Another control plane (high availability; same PostgreSQL and master key as the first):
+#     curl -fsSL https://<control-plane>/install.sh | sudo sh -s -- server --domain apps.example.com --email you@example.com \
+#       --database-url postgres://paas:...@db.internal:5432/paas --master-key-file ./master.key \
+#       --server-name cp2 --routes nats://cp1.internal:6222
+#
 #   Join another node to an existing cluster:
 #     curl -fsSL https://<control-plane>/install.sh | sudo sh -s -- join --url https://<control-plane> --token <join-token> --roles worker
 #
@@ -18,10 +23,15 @@
 #   --binary URL|PATH    paasd binary to install (default: $URL/download/paasd in join, else latest GitHub release)
 #   --mirror HOST        Docker Hub pull-through mirror (e.g. mirror.gcr.io)
 #   --no-zram            do not configure compressed swap in RAM
+#   --database-url URL   use this PostgreSQL instead of installing one locally (server)
+#   --master-key-file F  copy of /var/lib/paas/master.key from the first control plane (server)
+#   --server-name NAME   unique name of this control plane (server; default: hostname)
+#   --routes URLS        nats://host:6222 of the other control planes, comma separated (server)
 set -eu
 
 MODE="${1:-server}"; [ $# -gt 0 ] && shift
 DOMAIN=""; DASH=""; EMAIL=""; HTTPS=0; ROLES=""; URL=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
+DBURL=""; KEYFILE=""; SNAME=""; ROUTES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN="$2"; shift 2;;
@@ -34,6 +44,10 @@ while [ $# -gt 0 ]; do
     --binary) BINARY="$2"; shift 2;;
     --mirror) MIRROR="$2"; shift 2;;
     --no-zram) ZRAM=0; shift;;
+    --database-url) DBURL="$2"; shift 2;;
+    --master-key-file) KEYFILE="$2"; shift 2;;
+    --server-name) SNAME="$2"; shift 2;;
+    --routes) ROUTES="$2"; shift 2;;
     *) echo "unknown option $1" >&2; exit 2;;
   esac
 done
@@ -66,6 +80,13 @@ if [ "$MODE" = join ]; then
   [ -n "$ROLES" ] || ROLES=worker
 else
   [ -n "$ROLES" ] || ROLES=worker,build
+  if [ -n "$ROUTES" ]; then
+    # Another control plane: it must share the database and the master key, or it cannot
+    # read the secrets the first one wrote.
+    [ -n "$DBURL" ] || die "--routes needs --database-url (the PostgreSQL all control planes share)"
+    [ -n "$KEYFILE" ] || die "--routes needs --master-key-file (a copy of /var/lib/paas/master.key from the first control plane)"
+  fi
+  [ -z "$KEYFILE" ] || [ -f "$KEYFILE" ] || die "--master-key-file $KEYFILE does not exist"
 fi
 
 fetch() { curl -fsSL --retry 3 -o "$2" "$1"; }
@@ -75,10 +96,13 @@ install_packages() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     apt-get install -y -qq curl ca-certificates git nftables iptables tar >/dev/null
-    if [ "$MODE" = server ]; then apt-get install -y -qq postgresql >/dev/null; fi
+    # pg_dump/pg_restore are needed for state backups even with an external database.
+    if [ "$MODE" = server ] && [ -n "$DBURL" ]; then apt-get install -y -qq postgresql-client >/dev/null
+    elif [ "$MODE" = server ]; then apt-get install -y -qq postgresql >/dev/null; fi
   elif command -v dnf >/dev/null; then
     dnf install -y -q curl ca-certificates git nftables iptables tar
-    if [ "$MODE" = server ]; then dnf install -y -q postgresql-server; postgresql-setup --initdb || true; systemctl enable --now postgresql; fi
+    if [ "$MODE" = server ] && [ -n "$DBURL" ]; then dnf install -y -q postgresql
+    elif [ "$MODE" = server ]; then dnf install -y -q postgresql-server; postgresql-setup --initdb || true; systemctl enable --now postgresql; fi
   else
     die "unsupported distribution (need apt or dnf)"
   fi
@@ -259,6 +283,11 @@ PAAS_ROLES=${ROLES}
 PAAS_PROXY_HTTP_ADDR=:80
 PAAS_PROXY_HTTPS_ADDR=:443
 EOF
+    [ -z "$SNAME" ] || echo "PAAS_SERVER_NAME=${SNAME}" >> /etc/paas/paasd.env
+    if [ -n "$ROUTES" ]; then
+      echo "PAAS_NATS_CLUSTER_ADDR=0.0.0.0:6222" >> /etc/paas/paasd.env
+      echo "PAAS_NATS_ROUTES=${ROUTES}" >> /etc/paas/paasd.env
+    fi
     ARGS=all
   else
     rm -rf /var/lib/paas/identity # stale identity of a deleted node: enroll fresh
@@ -274,7 +303,7 @@ EOF
   chmod 600 /etc/paas/paasd.env
   AFTER="containerd.service"
   case ",$ROLES," in *,build,*) AFTER="$AFTER buildkit.service";; esac
-  if [ "$MODE" = server ]; then AFTER="$AFTER postgresql.service"; fi
+  if [ "$MODE" = server ] && [ -z "$DBURL" ]; then AFTER="$AFTER postgresql.service"; fi
   cat > /etc/systemd/system/paasd.service <<EOF
 [Unit]
 Description=paas (${ARGS})
@@ -321,7 +350,16 @@ install_packages
 install_runtime
 tune_kernel
 install_paasd
-if [ "$MODE" = server ]; then setup_postgres; fi
+if [ "$MODE" = server ]; then
+  if [ -n "$DBURL" ]; then
+    log "using the PostgreSQL at --database-url"
+    echo "PAAS_DATABASE_URL=${DBURL}" > /etc/paas/db.env
+    chmod 600 /etc/paas/db.env
+  else
+    setup_postgres
+  fi
+  [ -z "$KEYFILE" ] || install -m 0600 "$KEYFILE" /var/lib/paas/master.key
+fi
 write_units
 systemctl daemon-reload
 systemctl enable --now containerd >/dev/null
