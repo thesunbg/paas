@@ -52,6 +52,7 @@ type Template struct {
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	Category    string     `json:"category"`
+	Website     string     `json:"website,omitempty"`
 	Services    []Service  `json:"services"`
 	Databases   []Database `json:"databases,omitempty"`
 }

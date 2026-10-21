@@ -41,6 +41,8 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Domain string `json:"domain"`
+		// Env holds the values of the template's inputs, by service.
+		Env map[string]map[string]string `json:"env"`
 	}
 	_ = decode(r, &in)
 	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
@@ -50,8 +52,29 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Copy the services: the catalogue is shared, the values are this install's.
+	svcs := make([]templates.Service, len(tpl.Services))
+	for i, ts := range tpl.Services {
+		env := make(map[string]string, len(ts.Env))
+		for k, v := range ts.Env {
+			env[k] = v
+		}
+		for _, input := range ts.Inputs {
+			v := strings.TrimSpace(in.Env[ts.Name][input.Key])
+			if v == "" {
+				if input.Required {
+					writeError(w, 400, fmt.Sprintf("%s: %s is required", ts.Name, input.Key))
+					return
+				}
+				continue
+			}
+			env[input.Key] = v
+		}
+		ts.Env = env
+		svcs[i] = ts
+	}
 	ctx := context.WithoutCancel(r.Context())
-	created, dbs, err := s.installPlan(ctx, p, tpl.Services, tpl.Databases, templateOpts{Domain: in.Domain})
+	created, dbs, err := s.installPlan(ctx, p, svcs, tpl.Databases, templateOpts{Domain: in.Domain})
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return

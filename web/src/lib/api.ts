@@ -695,6 +695,7 @@ export interface TemplateService {
   command?: string[];
   size?: string;
   health_path?: string;
+  inputs?: EnvInput[];
 }
 
 export interface Template {
@@ -702,6 +703,7 @@ export interface Template {
   title: string;
   description: string;
   category: string;
+  website?: string;
   services: TemplateService[];
   databases?: { name: string; engine: string; mode?: string }[];
 }
@@ -1002,8 +1004,8 @@ export const api = {
   createService: (project: string, input: ServiceInput) => post<CreateServiceResponse>(`/projects/${e(project)}/services`, input),
   createDatabase: (project: string, input: CreateDatabaseInput) => post<Database>(`/projects/${e(project)}/databases`, input),
   templates: () => get<Template[] | null>('/templates'),
-  installTemplate: (project: string, template: string, domain?: string) =>
-    post<InstallResponse>(`/projects/${e(project)}/templates/${e(template)}`, domain ? { domain } : {}),
+  installTemplate: (project: string, template: string, domain?: string, env?: Record<string, Record<string, string>>) =>
+    post<InstallResponse>(`/projects/${e(project)}/templates/${e(template)}`, { ...(domain ? { domain } : {}), ...(env ? { env } : {}) }),
   importCompose: (project: string, compose: string) => post<InstallResponse>(`/projects/${e(project)}/compose`, { compose }),
   importRepo: (project: string, input: ImportRepoInput) => post<InstallResponse>(`/projects/${e(project)}/import-repo`, input),
 

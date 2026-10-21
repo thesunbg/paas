@@ -95,6 +95,18 @@ func (s *Server) handleHeartbeat(m *nats.Msg, hb *proto.Heartbeat) {
 		}
 		wasRunning := in.Status == model.InstRunning
 		_ = s.store.ApplyContainerStatus(ctx, hb.NodeID, c)
+		if in.Status == model.InstStarting && time.Since(in.CreatedAt) > startingLostAfter {
+			// The start request that would settle it was cut short (agent or control plane
+			// restarted mid-start), so no reply will ever come. Settle it from what the node
+			// sees: running stays, anything else fails and the reconciler replaces it.
+			st := model.InstFailed
+			if c.Running {
+				st = model.InstRunning
+			}
+			slog.Warn("settling an instance stuck in starting", "container", in.ContainerID, "status", st)
+			_ = s.store.SetInstanceStatus(ctx, in.ID, st)
+			changed = true
+		}
 		if c.ImageDigest != "" && c.ImageDigest != in.ImageDigest {
 			s.pinFirstDigest(ctx, in, c.ImageDigest)
 		}
@@ -106,7 +118,13 @@ func (s *Server) handleHeartbeat(m *nats.Msg, hb *proto.Heartbeat) {
 		}
 	}
 	for _, in := range known {
-		if !reported[in.ContainerID] && in.Status == model.InstRunning && time.Since(in.UpdatedAt) > 30*time.Second {
+		if reported[in.ContainerID] {
+			continue
+		}
+		// A running instance the node stopped reporting is gone, and so is a starting one it has
+		// not reported for longer than any image pull plus health check.
+		if in.Status == model.InstRunning && time.Since(in.UpdatedAt) > 30*time.Second ||
+			in.Status == model.InstStarting && time.Since(in.UpdatedAt) > startingLostAfter {
 			_ = s.store.SetInstanceStatus(ctx, in.ID, model.InstLost)
 			changed = true
 		}
@@ -115,6 +133,9 @@ func (s *Server) handleHeartbeat(m *nats.Msg, hb *proto.Heartbeat) {
 		s.publishAll(ctx)
 	}
 }
+
+// startingLostAfter is how long an instance may stay "starting" without its node reporting it.
+const startingLostAfter = 20 * time.Minute
 
 // onEvicted handles an instance the agent stopped under memory pressure.
 func (s *Server) onEvicted(nodeID string, in store.Instance) {

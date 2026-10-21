@@ -19,9 +19,13 @@ func TestExpand(t *testing.T) {
 		t.Fatal(got)
 	}
 	for _, tpl := range All {
+		own := map[string]DBValues{}
+		for _, d := range tpl.Databases {
+			own[d.Name] = DBValues{}
+		}
 		for _, s := range tpl.Services {
 			for k, v := range s.Env {
-				out := Expand(v, map[string]DBValues{"wordpress": {}, "n8n": {}, "umami": {}, "gitea": {}, "metabase": {}}, "u", "h")
+				out := Expand(v, own, "u", "h")
 				if placeholder.MatchString(out) {
 					t.Errorf("%s/%s: unresolved placeholder in %s=%s", tpl.ID, s.Name, k, out)
 				}
