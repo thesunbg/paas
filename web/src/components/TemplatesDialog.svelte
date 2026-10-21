@@ -14,6 +14,7 @@
   let domain = $state('');
   let category = $state('All');
   let query = $state('');
+  let name = $state('');
   // Values of the picked template's inputs, by service then variable.
   let values = $state<Record<string, Record<string, string>>>({});
   let busy = $state(false);
@@ -36,6 +37,7 @@
 
   function pick(t: Template) {
     picked = t;
+    name = t.services[0]?.name ?? '';
     values = Object.fromEntries(t.services.map((s) => [s.name, Object.fromEntries((s.inputs ?? []).map((i) => [i.key, '']))]));
   }
 
@@ -54,7 +56,7 @@
     busy = true;
     error = '';
     try {
-      const r = await api.installTemplate(projectId, picked.id, domain.trim() || undefined, inputs.length ? values : undefined);
+      const r = await api.installTemplate(projectId, picked.id, domain.trim() || undefined, inputs.length ? values : undefined, name.trim() || undefined);
       const ns = r.services?.length ?? 0;
       const nd = r.databases?.length ?? 0;
       toast.success(`${picked.title}: ${ns} service${ns === 1 ? '' : 's'}${nd ? ` and ${nd} database${nd === 1 ? '' : 's'}` : ''} created — deploying`);
@@ -119,6 +121,11 @@
           </tbody>
         </table>
       </div>
+      <label class="field">
+        <span>Name</span>
+        <input class="mono" bind:value={name} spellcheck="false" />
+        <span class="hint">Of the service{picked.databases?.length ? ' and its database' : ''}. If it is already taken in this project, -2, -3… is added.</span>
+      </label>
       {#each inputs as i (i.svc + i.key)}
         <label class="field">
           <span>{i.key}{#if !i.required} <span class="faint">(optional)</span>{/if}{#if picked.services.length > 1} <span class="faint">· {i.svc}</span>{/if}</span>

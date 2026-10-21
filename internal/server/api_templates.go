@@ -43,6 +43,9 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 		Domain string `json:"domain"`
 		// Env holds the values of the template's inputs, by service.
 		Env map[string]map[string]string `json:"env"`
+		// Name replaces the template's main name (its first service, and the databases
+		// named like it); "" keeps it. Names already taken get a -2, -3… suffix.
+		Name string `json:"name"`
 	}
 	_ = decode(r, &in)
 	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
@@ -73,8 +76,22 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 		ts.Env = env
 		svcs[i] = ts
 	}
+	opts := templateOpts{Domain: in.Domain, Rename: map[string]string{}}
+	if n := util.Slugify(in.Name); strings.TrimSpace(in.Name) != "" && n != tpl.Services[0].Name {
+		main := tpl.Services[0].Name
+		opts.Rename[main] = n
+		for _, d := range tpl.Databases {
+			if d.Name == main {
+				opts.Rename[d.Name] = n
+			}
+		}
+	}
+	if err := s.freeNames(r.Context(), p, svcs, tpl.Databases, &opts); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
 	ctx := context.WithoutCancel(r.Context())
-	created, dbs, err := s.installPlan(ctx, p, svcs, tpl.Databases, templateOpts{Domain: in.Domain})
+	created, dbs, err := s.installPlan(ctx, p, svcs, tpl.Databases, opts)
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -225,6 +242,46 @@ type templateOpts struct {
 	Domain      string               // custom domain of the first public service
 	Repo        *model.ServiceSource // repository of services with a build section
 	GitTokenEnc string
+}
+
+// freeNames renames the plan's services and databases whose name is already taken in the
+// project to the first free name-2, name-3…, so installing a template twice just works.
+func (s *Server) freeNames(ctx context.Context, p *store.Project, svcs []templates.Service, tdbs []templates.Database, opts *templateOpts) error {
+	existing, err := s.store.ServicesForProject(ctx, p.ID)
+	if err != nil {
+		return err
+	}
+	taken := map[string]bool{}
+	for _, e := range existing {
+		taken[e.Slug] = true
+	}
+	dbs, err := s.store.DatabasesForProject(ctx, p.ID)
+	if err != nil {
+		return err
+	}
+	for _, d := range dbs {
+		taken["db:"+d.Name] = true
+	}
+	free := func(prefix, plan string) {
+		base := util.Slugify(opts.name(plan))
+		name := base
+		for i := 2; taken[prefix+name]; i++ {
+			name = fmt.Sprintf("%s-%d", base, i)
+		}
+		taken[prefix+name] = true
+		if name != plan {
+			opts.Rename[plan] = name
+		}
+	}
+	for _, ts := range svcs {
+		free("", ts.Name)
+	}
+	for _, d := range tdbs {
+		if opts.Existing[d.Name] == "" {
+			free("db:", d.Name)
+		}
+	}
+	return nil
 }
 
 // installPlan creates databases and then services, rejecting name clashes up front.

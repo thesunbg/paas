@@ -1004,8 +1004,8 @@ export const api = {
   createService: (project: string, input: ServiceInput) => post<CreateServiceResponse>(`/projects/${e(project)}/services`, input),
   createDatabase: (project: string, input: CreateDatabaseInput) => post<Database>(`/projects/${e(project)}/databases`, input),
   templates: () => get<Template[] | null>('/templates'),
-  installTemplate: (project: string, template: string, domain?: string, env?: Record<string, Record<string, string>>) =>
-    post<InstallResponse>(`/projects/${e(project)}/templates/${e(template)}`, { ...(domain ? { domain } : {}), ...(env ? { env } : {}) }),
+  installTemplate: (project: string, template: string, domain?: string, env?: Record<string, Record<string, string>>, name?: string) =>
+    post<InstallResponse>(`/projects/${e(project)}/templates/${e(template)}`, { ...(domain ? { domain } : {}), ...(env ? { env } : {}), ...(name ? { name } : {}) }),
   importCompose: (project: string, compose: string) => post<InstallResponse>(`/projects/${e(project)}/compose`, { compose }),
   importRepo: (project: string, input: ImportRepoInput) => post<InstallResponse>(`/projects/${e(project)}/import-repo`, input),
 
