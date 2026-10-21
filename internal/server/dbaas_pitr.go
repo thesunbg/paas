@@ -59,7 +59,7 @@ func pitrRetention(db *store.Database) int {
 // takeBaseBackup streams pg_basebackup into a file on the server's node, uploads
 // it to S3 and deletes the local file.
 func (s *Server) takeBaseBackup(ctx context.Context, db *store.Database) (*store.Backup, error) {
-	if !s.s3.Enabled() {
+	if !s.storage().Enabled() {
 		return nil, errPITRNeedsS3
 	}
 	c, srv, err := s.dbCreds(ctx, db)
@@ -86,7 +86,7 @@ func (s *Server) takeBaseBackup(ctx context.Context, db *store.Database) (*store
 	if err == nil && rep.ExitCode != 0 {
 		err = fmt.Errorf("pg_basebackup: exit code %d: %s", rep.ExitCode, strings.TrimSpace(rep.Stderr))
 	}
-	key := s.s3.Key("pitr", db.ID, "base", filepath.Base(path))
+	key := s.storage().Key("pitr", db.ID, "base", filepath.Base(path))
 	if err == nil {
 		err = s.uploadLarge(ctx, in.NodeID, key, path, rep.StdoutBytes)
 	}
@@ -106,7 +106,7 @@ func (s *Server) takeBaseBackup(ctx context.Context, db *store.Database) (*store
 // deleteBase removes a base backup everywhere (S3, and the local file of one taken before S3 was required).
 func (s *Server) deleteBase(ctx context.Context, b *store.Backup) error {
 	if b.S3Key != "" {
-		if err := s.s3.Delete(b.S3Key); err != nil {
+		if err := s.storage().Delete(b.S3Key); err != nil {
 			return err
 		}
 	} else if b.NodeID != nil {
@@ -115,7 +115,9 @@ func (s *Server) deleteBase(ctx context.Context, b *store.Backup) error {
 	return s.store.DeleteBackup(ctx, b.ID)
 }
 
-func (s *Server) walPrefix(db *store.Database) string { return s.s3.Key("pitr", db.ID, "wal") + "/" }
+func (s *Server) walPrefix(db *store.Database) string {
+	return s.storage().Key("pitr", db.ID, "wal") + "/"
+}
 
 // prunePITR drops base backups beyond the retention (always keeping the newest)
 // and the WAL in S3 older than the oldest kept base backup minus walMargin.
@@ -138,7 +140,7 @@ func (s *Server) prunePITR(ctx context.Context, db *store.Database) {
 			oldestKept = *b // still in S3: keep the WAL it needs
 		}
 	}
-	objs, err := s.s3.List(s.walPrefix(db))
+	objs, err := s.storage().List(s.walPrefix(db))
 	if err != nil {
 		slog.Warn("prune wal archive", "db", db.Name, "err", err)
 		return
@@ -146,7 +148,7 @@ func (s *Server) prunePITR(ctx context.Context, db *store.Database) {
 	before := oldestKept.CreatedAt.Add(-walMargin)
 	for _, o := range objs {
 		if !strings.HasSuffix(o.Key, ".history") && o.LastModified.Before(before) {
-			if err := s.s3.Delete(o.Key); err != nil {
+			if err := s.storage().Delete(o.Key); err != nil {
 				slog.Warn("prune wal archive", "db", db.Name, "err", err)
 				return
 			}
@@ -185,7 +187,7 @@ func (s *Server) walShipLoop(ctx context.Context) {
 }
 
 func (s *Server) walShipTick(ctx context.Context) {
-	if !s.s3.Enabled() {
+	if !s.storage().Enabled() {
 		return
 	}
 	dbs, err := s.store.AllDatabases(ctx)
@@ -240,7 +242,7 @@ func (s *Server) shipSpool(ctx context.Context, db *store.Database, serviceID st
 			continue
 		}
 		file := filepath.Join("volumes", serviceID, "wal", "archive", name)
-		if err := s.transfer(ctx, in.NodeID, http.MethodPut, s.s3.Key("pitr", db.ID, "wal", name), file); err != nil {
+		if err := s.transfer(ctx, in.NodeID, http.MethodPut, s.storage().Key("pitr", db.ID, "wal", name), file); err != nil {
 			slog.Warn("ship wal", "db", db.Name, "file", name, "err", err)
 			failed = true
 			break
@@ -272,7 +274,7 @@ func (s *Server) pitrTick(ctx context.Context) {
 		if !db.Options.PITR || !pitrCapable(db) || db.Status != "ready" {
 			continue
 		}
-		if !s.s3.Enabled() { // nothing is taken or deleted until S3 is back
+		if !s.storage().Enabled() { // nothing is taken or deleted until S3 is back
 			s.pitrStatus(ctx, db, pitrNoS3)
 			continue
 		}
@@ -327,7 +329,7 @@ func (s *Server) handleSetPITR(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "retention_days must be between 1 and 35")
 		return
 	}
-	if in.Enabled && !s.s3.Enabled() {
+	if in.Enabled && !s.storage().Enabled() {
 		writeError(w, 400, "point-in-time recovery cần object storage (S3)")
 		return
 	}
@@ -372,10 +374,10 @@ func (s *Server) handleSetPITR(w http.ResponseWriter, r *http.Request) {
 			for i := range bases {
 				_ = s.deleteBase(ctx, &bases[i])
 			}
-			if s.s3.Enabled() { // the WAL of a database without PITR is useless
-				if objs, err := s.s3.List(s.walPrefix(db)); err == nil {
+			if s.storage().Enabled() { // the WAL of a database without PITR is useless
+				if objs, err := s.storage().List(s.walPrefix(db)); err == nil {
 					for _, o := range objs {
-						_ = s.s3.Delete(o.Key)
+						_ = s.storage().Delete(o.Key)
 					}
 				}
 			}
@@ -395,7 +397,7 @@ func (s *Server) handlePITRRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "point-in-time recovery is not enabled for this database")
 		return
 	}
-	if !s.s3.Enabled() {
+	if !s.storage().Enabled() {
 		writeError(w, 400, errPITRNeedsS3.Error())
 		return
 	}
@@ -527,12 +529,12 @@ func (s *Server) restorePITR(ctx context.Context, src, db *store.Database, base 
 	if err := s.transfer(ctx, node, http.MethodGet, base.S3Key, req.BaseBackup); err != nil {
 		return fmt.Errorf("download base backup: %w", err)
 	}
-	objs, err := s.s3.List(s.walPrefix(src))
+	objs, err := s.storage().List(s.walPrefix(src))
 	if err != nil {
 		return fmt.Errorf("list WAL: %w", err)
 	}
 	for _, name := range neededWAL(objs, base.CreatedAt) {
-		if err := s.transfer(ctx, node, http.MethodGet, s.s3.Key("pitr", src.ID, "wal", name), filepath.Join(req.WALSource, name)); err != nil {
+		if err := s.transfer(ctx, node, http.MethodGet, s.storage().Key("pitr", src.ID, "wal", name), filepath.Join(req.WALSource, name)); err != nil {
 			return fmt.Errorf("download WAL %s: %w", name, err)
 		}
 	}

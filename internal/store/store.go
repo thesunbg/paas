@@ -133,6 +133,11 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	return err
 }
 
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.q(ctx).Exec(ctx, `DELETE FROM settings WHERE key=$1`, key)
+	return err
+}
+
 func (s *Store) Audit(ctx context.Context, userID, teamID *string, action, target string) {
 	_, _ = s.q(ctx).Exec(ctx, `INSERT INTO audit_logs (user_id, team_id, action, target) VALUES ($1,$2,$3,$4)`, userID, teamID, action, target)
 }

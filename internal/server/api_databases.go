@@ -66,7 +66,7 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setETag(w, db.OptionsVersion)
-	out := map[string]any{"database": db, "version": db.Version}
+	out := map[string]any{"database": db, "version": db.Version, "backup_health": s.backupHealth(r.Context(), db)}
 	if v, err := databases.Lookup(db.Engine, db.Version); err == nil {
 		out["version_status"] = databases.Status(v, time.Now())
 		if !v.EOL.IsZero() {

@@ -397,6 +397,7 @@ func (s *Server) deleteDatabase(ctx context.Context, db *store.Database) error {
 			_ = s.requestAgent(ctx, *b.NodeID, proto.CmdRemoveFiles, proto.RemoveFilesRequest{Paths: []string{b.Path}}, &proto.GenericReply{}, time.Minute)
 		}
 	}
+	s.deleteOffsiteBackups(db.ID)
 	return s.store.DeleteDatabase(ctx, db.ID)
 }
 
@@ -473,9 +474,9 @@ func (s *Server) backupDatabase(ctx context.Context, db *store.Database) (*store
 	_ = s.store.FinishBackup(ctx, b.ID, "completed", "", rep.StdoutBytes)
 	_ = s.store.TouchDatabaseBackup(ctx, db.ID)
 	b.Status, b.SizeBytes = "completed", rep.StdoutBytes
-	if s.s3.Enabled() {
-		key := s.s3.Key(db.ID, filepath.Base(path))
-		if err := s.transfer(ctx, in.NodeID, http.MethodPut, key, path); err != nil {
+	if s.storage().Enabled() {
+		key := s.storage().Key(db.ID, filepath.Base(path))
+		if err := s.uploadLarge(ctx, in.NodeID, key, path, rep.StdoutBytes); err != nil {
 			slog.Warn("off-site backup upload failed", "db", db.Name, "err", err)
 			_ = s.store.FinishBackup(ctx, b.ID, "completed", "local only: S3 upload failed: "+err.Error(), rep.StdoutBytes)
 		} else {
@@ -489,8 +490,8 @@ func (s *Server) backupDatabase(ctx context.Context, db *store.Database) (*store
 			if o.NodeID != nil {
 				_ = s.requestAgent(ctx, *o.NodeID, proto.CmdRemoveFiles, proto.RemoveFilesRequest{Paths: []string{o.Path}}, &proto.GenericReply{}, time.Minute)
 			}
-			if o.S3Key != "" && s.s3.Enabled() {
-				_ = s.s3.Delete(o.S3Key)
+			if o.S3Key != "" && s.storage().Enabled() {
+				_ = s.storage().Delete(o.S3Key)
 			}
 			_ = s.store.DeleteBackup(ctx, o.ID)
 		}
@@ -513,7 +514,7 @@ func (s *Server) restoreBackup(ctx context.Context, db *store.Database, b *store
 		return err
 	}
 	if b.NodeID == nil || *b.NodeID != in.NodeID {
-		if b.S3Key == "" || !s.s3.Enabled() {
+		if b.S3Key == "" || !s.storage().Enabled() {
 			return errors.New("backup file is stored on a different node than the database server (configure S3 for off-site backups)")
 		}
 		// Fetch the off-site copy onto the database server's node.
@@ -554,7 +555,7 @@ func (s *Server) runScheduledBackups(ctx context.Context) {
 
 // transfer asks an agent to move a file to or from object storage with a presigned URL.
 func (s *Server) transfer(ctx context.Context, nodeID, method, key, path string) error {
-	u, err := s.s3.Presign(method, key, 2*time.Hour, time.Now())
+	u, err := s.storage().Presign(method, key, 2*time.Hour, time.Now())
 	if err != nil {
 		return err
 	}
@@ -585,7 +586,7 @@ func (s *Server) uploadLarge(ctx context.Context, nodeID, key, path string, size
 	if size <= multipartMin {
 		return s.transfer(ctx, nodeID, http.MethodPut, key, path)
 	}
-	id, err := s.s3.CreateMultipart(key)
+	id, err := s.storage().CreateMultipart(key)
 	if err != nil {
 		return err
 	}
@@ -594,8 +595,8 @@ func (s *Server) uploadLarge(ctx context.Context, nodeID, key, path string, size
 	const timeout = 6 * time.Hour
 	urls := make([]string, n)
 	for i := range urls {
-		if urls[i], err = s.s3.PresignPart(key, id, i+1, timeout); err != nil {
-			_ = s.s3.AbortMultipart(key, id)
+		if urls[i], err = s.storage().PresignPart(key, id, i+1, timeout); err != nil {
+			_ = s.storage().AbortMultipart(key, id)
 			return err
 		}
 	}
@@ -608,10 +609,29 @@ func (s *Server) uploadLarge(ctx context.Context, nodeID, key, path string, size
 		for i, e := range etags {
 			parts[i] = s3.Part{N: i + 1, ETag: e}
 		}
-		err = s.s3.CompleteMultipart(key, id, parts)
+		err = s.storage().CompleteMultipart(key, id, parts)
 	}
 	if err != nil {
-		_ = s.s3.AbortMultipart(key, id)
+		_ = s.storage().AbortMultipart(key, id)
 	}
 	return err
+}
+
+// deleteOffsiteBackups removes every off-site object of a deleted database:
+// dumps (<prefix>/<db>/…), and PITR base backups and WAL (<prefix>/pitr/<db>/…).
+func (s *Server) deleteOffsiteBackups(dbID string) {
+	c := s.storage()
+	if !c.Enabled() {
+		return
+	}
+	for _, prefix := range []string{c.Key(dbID) + "/", c.Key("pitr", dbID) + "/"} {
+		objs, err := c.List(prefix)
+		if err != nil {
+			slog.Warn("off-site cleanup", "db", dbID, "err", err)
+			continue
+		}
+		for _, o := range objs {
+			_ = c.Delete(o.Key)
+		}
+	}
 }

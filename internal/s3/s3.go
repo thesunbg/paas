@@ -134,6 +134,12 @@ func (c *Config) Key(parts ...string) string {
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
+// transferClient moves whole objects (Put, Get): no overall deadline, the
+// body can take long; a server that does not answer still times out.
+var transferClient = &http.Client{Transport: &http.Transport{
+	Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: time.Minute, TLSHandshakeTimeout: 15 * time.Second,
+}}
+
 // call runs a signed request against the storage and returns the body of a 2xx reply.
 func (c *Config) call(method, key string, q map[string]string, body []byte) ([]byte, error) {
 	u, err := c.presign(method, key, q, 5*time.Minute, time.Now())
@@ -255,4 +261,45 @@ func (c *Config) CompleteMultipart(key, uploadID string, parts []Part) error {
 func (c *Config) AbortMultipart(key, uploadID string) error {
 	_, err := c.call(http.MethodDelete, key, map[string]string{"uploadId": uploadID}, nil)
 	return err
+}
+
+// Put uploads an object in a single request (S3 allows up to 5 GB).
+func (c *Config) Put(key string, body io.Reader, size int64) error {
+	u, err := c.Presign(http.MethodPut, key, 30*time.Minute, time.Now())
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPut, u, body)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = size
+	resp, err := transferClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		out, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("PUT %s: HTTP %d %s", key, resp.StatusCode, bytes.TrimSpace(out))
+	}
+	return nil
+}
+
+// Get opens an object for reading; the caller closes it.
+func (c *Config) Get(key string) (io.ReadCloser, error) {
+	u, err := c.Presign(http.MethodGet, key, 30*time.Minute, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	resp, err := transferClient.Get(u)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		out, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		resp.Body.Close()
+		return nil, fmt.Errorf("GET %s: HTTP %d %s", key, resp.StatusCode, bytes.TrimSpace(out))
+	}
+	return resp.Body, nil
 }

@@ -108,7 +108,7 @@ func newFakePITRAgent(t *testing.T, s *Server, nodeID string) *fakePITRAgent {
 func TestShipSpool(t *testing.T) {
 	s := newTestServerBus(t)
 	ctx := context.Background()
-	s.s3 = &s3.Config{Endpoint: "http://s3.invalid", Bucket: "b", AccessKey: "k", SecretKey: "s"}
+	s.s3.Store(&s3.Config{Endpoint: "http://s3.invalid", Bucket: "b", AccessKey: "k", SecretKey: "s"})
 	svc := seedDeployService(t, s)
 	n, err := s.store.UpsertNodeLegacy(ctx, &proto.RegisterRequest{Name: "n", Address: "10.0.0.1", Roles: []string{"worker"}, CPUCores: 2, MemoryMB: 2048, Capabilities: map[string]string{}}, 16)
 	if err != nil {
@@ -170,7 +170,7 @@ func TestUploadLargeMultipart(t *testing.T) {
 		}
 	}))
 	defer fs.Close()
-	s.s3 = &s3.Config{Endpoint: fs.URL, Bucket: "b", AccessKey: "k", SecretKey: "s"}
+	s.s3.Store(&s3.Config{Endpoint: fs.URL, Bucket: "b", AccessKey: "k", SecretKey: "s"})
 	f := newFakePITRAgent(t, s, "node1")
 	ctx := context.Background()
 

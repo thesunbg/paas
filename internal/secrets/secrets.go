@@ -62,6 +62,23 @@ func LoadOrCreateKey(path, envKey string) ([]byte, error) {
 	return key, nil
 }
 
+// LoadKey reads an existing key (envKey first, then path); unlike
+// LoadOrCreateKey it never makes a new one.
+func LoadKey(path, envKey string) ([]byte, error) {
+	if envKey != "" {
+		return decodeKey(envKey)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	k, err := decodeKey(strings.TrimSpace(string(data)))
+	if err == nil && len(k) != 32 {
+		err = fmt.Errorf("master key must be 32 bytes, got %d", len(k))
+	}
+	return k, err
+}
+
 func decodeKey(s string) ([]byte, error) {
 	k, err := hex.DecodeString(s)
 	if err != nil {

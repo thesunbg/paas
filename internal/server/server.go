@@ -73,7 +73,14 @@ type Server struct {
 
 	clusterBase [2]int
 
-	s3 *s3.Config
+	// s3 is the off-site storage: PAAS_S3_* when set, else the dashboard's
+	// settings (see backup_storage.go). Swapped atomically on change.
+	s3    atomic.Pointer[s3.Config]
+	s3Env bool // configured by the environment: the dashboard cannot change it
+	// masterKey seals backups of the platform's own state (state_backup.go).
+	masterKey     []byte
+	bwatch        backupWatch
+	stateBackupMu sync.Mutex
 
 	traffic *traffic
 	scaleMu sync.Mutex
@@ -113,9 +120,11 @@ func New(ctx context.Context, cfg config.Server) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, store: st, box: box, locks: map[string]*sync.Mutex{}, evictedOn: map[string]time.Time{}, wake: newWakeGroup(), clusterBase: base,
-		traffic: newTraffic(), scale: map[string]*scaleState{},
-		s3: &s3.Config{Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket, AccessKey: cfg.S3.AccessKey,
-			SecretKey: cfg.S3.SecretKey, Prefix: cfg.S3.Prefix, VirtualHost: cfg.S3.VirtualHost}}
+		traffic: newTraffic(), scale: map[string]*scaleState{}}
+	s.s3.Store(&s3.Config{Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket, AccessKey: cfg.S3.AccessKey,
+		SecretKey: cfg.S3.SecretKey, Prefix: cfg.S3.Prefix, VirtualHost: cfg.S3.VirtualHost})
+	s.s3Env = s.storage().Enabled()
+	s.masterKey = key
 	if err := s.bootstrap(ctx); err != nil {
 		return nil, err
 	}
@@ -199,6 +208,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.hub.Start(); err != nil {
 		return err
 	}
+	s.loadStorageSettings(ctx)
+	go s.storageLoop(ctx)
 	go s.leaderLoop(ctx)
 	go func() {
 		t := time.NewTicker(30 * time.Second)

@@ -307,8 +307,10 @@ func ServerSpec(engine, version string, preset Preset, shared bool, c Credential
 			"--skip-name-resolve",
 		}, f.serverArgs...)
 	case Redis:
+		// DEBUG RELOAD (restore, see Restore) is allowed from inside the container only.
 		spec.Command = []string{"redis-server", "--requirepass", c.Password, "--appendonly", "yes",
-			"--maxmemory", strconv.Itoa(max(16, mem*80/100)) + "mb", "--maxmemory-policy", "noeviction"}
+			"--maxmemory", strconv.Itoa(max(16, mem*80/100)) + "mb", "--maxmemory-policy", "noeviction",
+			"--enable-debug-command", "local"}
 	case Mongo:
 		spec.Env["MONGO_INITDB_ROOT_USERNAME"] = c.Username
 		spec.Env["MONGO_INITDB_ROOT_PASSWORD"] = c.Password
@@ -405,6 +407,58 @@ func Backup(engine string, shared bool, c Credentials) (Command, string, error) 
 	return Command{}, "", fmt.Errorf("unknown engine %q", engine)
 }
 
+// Verify returns a command that reads a dump (from Backup) on stdin, restores
+// it into a scratch database named scratch on the same server, prints the
+// number of tables (collections, keys) it holds on its last line, and drops
+// the scratch database again. The live database is not touched.
+func Verify(engine string, shared bool, c Credentials, scratch string) (Command, error) {
+	switch engine {
+	case Postgres:
+		user := c.Username
+		if shared {
+			user = "postgres"
+		}
+		script := `set -u
+psql -U "$U" -d postgres -v ON_ERROR_STOP=1 -qc "DROP DATABASE IF EXISTS \"$V\"" -c "CREATE DATABASE \"$V\"" >/dev/null || exit 1
+pg_restore -U "$U" --no-owner --no-acl -d "$V" 2>/tmp/verify.err; rc=$?
+n=$(psql -U "$U" -d "$V" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')")
+psql -U "$U" -d postgres -qc "DROP DATABASE IF EXISTS \"$V\" WITH (FORCE)" >/dev/null
+if [ $rc -ne 0 ]; then tail -3 /tmp/verify.err >&2; fi
+rm -f /tmp/verify.err
+[ -n "$n" ] || exit 1
+echo "$n"`
+		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{"U=" + user, "V=" + scratch}}, nil
+	case MySQL, MariaDB:
+		f := myFamilies[engine]
+		// The dump names its database (--databases): point it at the scratch one.
+		// BQ stands for a backquote, escaped (\`) inside the shell's double quotes.
+		script := strings.ReplaceAll(`set -eu
+sed -e "s/^CREATE DATABASE \(.*\)\BQ$D\BQ/CREATE DATABASE \1\BQ$V\BQ/" -e "s/^USE \BQ$D\BQ;/USE \BQ$V\BQ;/" | $C -uroot
+n=$($C -uroot -N -e "SELECT count(*) FROM information_schema.tables WHERE table_schema='$V'")
+$C -uroot -e "DROP DATABASE IF EXISTS \BQ$V\BQ"
+echo "$n"`, "BQ", "`")
+		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{"MYSQL_PWD=" + firstNonEmpty(c.RootPass, c.Password), "C=" + f.client, "D=" + c.DBName, "V=" + scratch}}, nil
+	case Mongo:
+		script := `set -eu
+A="-u $MU -p $MP --authenticationDatabase admin"
+mongorestore --quiet --archive --gzip $A --nsInclude="$D.*" --nsFrom="$D.*" --nsTo="$V.*" --drop
+n=$(mongosh --quiet $A --eval "db.getSiblingDB('$V').getCollectionNames().length")
+mongosh --quiet $A --eval "db.getSiblingDB('$V').dropDatabase()" >/dev/null
+echo "$n"`
+		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{"MU=" + c.Username, "MP=" + c.Password, "D=" + c.DBName, "V=" + scratch}}, nil
+	case Redis:
+		// A Redis dump is the whole dataset: check the file instead of loading it.
+		script := `set -eu
+cat > /tmp/verify.rdb
+redis-check-rdb /tmp/verify.rdb >/tmp/verify.out 2>&1 || { tail -3 /tmp/verify.out >&2; rm -f /tmp/verify.*; exit 1; }
+n=$(grep -o 'keys read: [0-9]*' /tmp/verify.out | grep -o '[0-9]*$' || echo 0)
+rm -f /tmp/verify.*
+echo "${n:-0}"`
+		return Command{Cmd: []string{"sh", "-c", script}}, nil
+	}
+	return Command{}, fmt.Errorf("unknown engine %q", engine)
+}
+
 // Restore returns a command that reads a dump on stdin. foreign says the dump was taken on another
 // server (a move): the roles its ACLs name may not exist here (pg_restore would exit non-zero), and
 // a Mongo dump carries the source's admin users, which must not replace the new server's own root.
@@ -436,6 +490,23 @@ func Restore(engine string, shared bool, c Credentials, foreign bool) (Command, 
 			cmd = append(cmd, "--drop")
 		}
 		return Command{Cmd: cmd}, nil
+	case Redis:
+		// The dump replaces the dataset: load it with DEBUG RELOAD (servers created
+		// before Redis restores were supported need a restart to allow it), then
+		// rewrite the append-only file from the loaded data.
+		script := `set -e
+cli() { redis-cli --no-auth-warning -a "$REDIS_PASSWORD" "$@"; }
+cat > /data/restore.rdb
+cli CONFIG SET appendonly no >/dev/null
+cp /data/restore.rdb "$(cli CONFIG GET dir | tail -1)/$(cli CONFIG GET dbfilename | tail -1)"
+rm -f /data/restore.rdb
+if ! out=$(cli DEBUG RELOAD NOSAVE 2>&1) || [ "$out" != OK ]; then
+  cli CONFIG SET appendonly yes >/dev/null
+  echo "DEBUG RELOAD refused ($out): restart the database once, then restore again" >&2
+  exit 1
+fi
+cli CONFIG SET appendonly yes >/dev/null`
+		return Command{Cmd: []string{"sh", "-c", script}, Env: []string{"REDIS_PASSWORD=" + c.Password}}, nil
 	}
 	return Command{}, fmt.Errorf("restore is not supported for %s yet", engine)
 }

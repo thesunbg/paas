@@ -219,13 +219,17 @@ type Backup struct {
 	Pinned     bool       `json:"pinned"` // kept by retention until the database is deleted
 	CreatedAt  time.Time  `json:"created_at"`
 	FinishedAt *time.Time `json:"finished_at"`
+	// Restore check (server/backup_verify.go).
+	VerifiedAt *time.Time `json:"verified_at"`
+	VerifyOK   *bool      `json:"verify_ok"`
+	VerifyNote string     `json:"verify_note"`
 }
 
-const backupCols = `id, database_id, node_id, status, path, size_bytes, error, s3_key, kind, pinned, created_at, finished_at`
+const backupCols = `id, database_id, node_id, status, path, size_bytes, error, s3_key, kind, pinned, created_at, finished_at, verified_at, verify_ok, verify_note`
 
 func scanBackup(row pgx.Row) (*Backup, error) {
 	var b Backup
-	if err := row.Scan(&b.ID, &b.DatabaseID, &b.NodeID, &b.Status, &b.Path, &b.SizeBytes, &b.Error, &b.S3Key, &b.Kind, &b.Pinned, &b.CreatedAt, &b.FinishedAt); err != nil {
+	if err := row.Scan(&b.ID, &b.DatabaseID, &b.NodeID, &b.Status, &b.Path, &b.SizeBytes, &b.Error, &b.S3Key, &b.Kind, &b.Pinned, &b.CreatedAt, &b.FinishedAt, &b.VerifiedAt, &b.VerifyOK, &b.VerifyNote); err != nil {
 		return nil, notFound(err)
 	}
 	return &b, nil
@@ -260,7 +264,12 @@ func (s *Store) BackupsForDatabase(ctx context.Context, databaseID string) ([]Ba
 
 // OldBackups returns completed backups beyond the newest `keep` for a database.
 func (s *Store) OldBackups(ctx context.Context, databaseID string, keep int) ([]Backup, error) {
-	rows, err := s.q(ctx).Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='dump' AND status<>'running' AND NOT pinned ORDER BY created_at DESC OFFSET $2`, databaseID, keep)
+	// Only completed backups count towards keep: failures older than the oldest
+	// kept one go too, but never push a good backup out.
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='dump' AND status<>'running' AND NOT pinned
+		AND created_at < (SELECT created_at FROM backups WHERE database_id=$1 AND kind='dump' AND status='completed' AND NOT pinned
+			ORDER BY created_at DESC OFFSET $2 - 1 LIMIT 1)
+		ORDER BY created_at DESC`, databaseID, keep)
 	if err != nil {
 		return nil, err
 	}
@@ -434,4 +443,23 @@ func (s *Store) BaseBackups(ctx context.Context, databaseID string) ([]Backup, e
 		}
 		return *b, nil
 	})
+}
+
+// SetBackupVerified records the outcome of a restore check.
+func (s *Store) SetBackupVerified(ctx context.Context, id string, ok bool, note string) error {
+	_, err := s.q(ctx).Exec(ctx, `UPDATE backups SET verified_at=now(), verify_ok=$2, verify_note=$3 WHERE id=$1`, id, ok, note)
+	return err
+}
+
+// LatestBackup is the newest completed dump of a database.
+func (s *Store) LatestBackup(ctx context.Context, databaseID string) (*Backup, error) {
+	return scanBackup(s.q(ctx).QueryRow(ctx, `SELECT `+backupCols+` FROM backups WHERE database_id=$1 AND kind='dump' AND status='completed'
+		ORDER BY created_at DESC LIMIT 1`, databaseID))
+}
+
+// LastVerified is when a database's backups were last checked by a restore (nil: never).
+func (s *Store) LastVerified(ctx context.Context, databaseID string) (*time.Time, error) {
+	var t *time.Time
+	err := s.q(ctx).QueryRow(ctx, `SELECT max(verified_at) FROM backups WHERE database_id=$1`, databaseID).Scan(&t)
+	return t, err
 }

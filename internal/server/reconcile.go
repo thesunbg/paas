@@ -415,6 +415,10 @@ func (s *Server) maintenanceLoop(ctx context.Context) {
 		}
 		tick++
 		s.runScheduledBackups(ctx)
+		s.stateBackupTick(ctx)
+		if tick%10 == 2 {
+			s.backupWatchTick(ctx)
+		}
 		s.volumeGCTick(ctx)
 		go s.pitrTick(ctx)
 		if tick%30 == 1 {

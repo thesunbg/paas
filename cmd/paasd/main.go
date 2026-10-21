@@ -4,6 +4,7 @@
 //	paasd server   # control plane only
 //	paasd agent    # node agent (joins a control plane)
 //	paasd proxy    # edge proxy (joins a control plane)
+//	paasd restore-state --latest   # put a backup of the platform state back
 package main
 
 import (
@@ -50,11 +51,13 @@ func main() {
 		err = runAgent(ctx, nil)
 	case "proxy":
 		err = runProxy(ctx, nil)
+	case "restore-state":
+		err = runRestoreState(os.Args[2:])
 	case "version":
 		fmt.Println("paasd", agent.Version)
 		return
 	case "-h", "--help", "help":
-		fmt.Println("usage: paasd [all|server|agent|proxy|version]")
+		fmt.Println("usage: paasd [all|server|agent|proxy|restore-state|version]")
 		return
 	default:
 		err = fmt.Errorf("unknown command %q", mode)
