@@ -289,7 +289,17 @@ func (a *Agent) handleRun(ctx context.Context, req *proto.RunRequest) *proto.Run
 	ip, err := a.rt.Run(ctx, *req)
 	if err != nil {
 		slog.Warn("run failed", "container", req.ContainerID, "err", err)
-		return &proto.RunReply{ContainerID: req.ContainerID, Error: err.Error()}
+		msg := err.Error()
+		if strings.Contains(msg, "did not pass within") {
+			// A start that never answers is often a node out of memory: say how much was left.
+			mi := readMeminfo()
+			msg += fmt.Sprintf("\n(node memory when it gave up: %d MB available of %d MB", mi["MemAvailable"]/1024, mi["MemTotal"]/1024)
+			if psi := psiMemorySome10(); psi > 0 {
+				msg += fmt.Sprintf(", memory pressure %.0f%%", psi)
+			}
+			msg += ")"
+		}
+		return &proto.RunReply{ContainerID: req.ContainerID, Error: msg}
 	}
 	return &proto.RunReply{ContainerID: req.ContainerID, IP: ip}
 }

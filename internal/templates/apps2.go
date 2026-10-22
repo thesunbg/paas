@@ -11,9 +11,9 @@ var apps2 = []Template{
 		ID: "elasticsearch", Title: "Elasticsearch", Category: "Search", Website: "https://www.elastic.co/elasticsearch",
 		Description: "Search and analytics engine (single node, security on). Private: services of the project reach it at http://elasticsearch:9200 as user elastic.",
 		Services: []Service{{
-			Name: "elasticsearch", Image: "docker.io/library/elasticsearch:9.1.5", Type: "web", Port: 9200, Size: "large", HealthTimeout: 600, Private: true,
+			Name: "elasticsearch", Image: "docker.io/library/elasticsearch:9.1.5", Type: "web", Port: 9200, Size: "medium", HealthTimeout: 600, Private: true,
 			Env: map[string]string{
-				"ES_SETTING_DISCOVERY_TYPE": "single-node", "ES_JAVA_OPTS": "-Xms1g -Xmx1g", "ES_SETTING_XPACK_SECURITY_ENABLED": "true",
+				"ES_SETTING_DISCOVERY_TYPE": "single-node", "ES_JAVA_OPTS": "-Xms512m -Xmx512m", "ES_SETTING_XPACK_SECURITY_ENABLED": "true",
 				"ES_SETTING_XPACK_SECURITY_HTTP_SSL_ENABLED": "false", "ES_SETTING_XPACK_SECURITY_TRANSPORT_SSL_ENABLED": "false",
 			},
 			Inputs:  []EnvInput{secretInput("ELASTIC_PASSWORD", "Password of the elastic superuser")},
@@ -24,10 +24,10 @@ var apps2 = []Template{
 		ID: "opensearch", Title: "OpenSearch", Category: "Search", Website: "https://opensearch.org",
 		Description: "Open source fork of Elasticsearch (single node). Private, without the security plugin: only services of the project reach it, at http://opensearch:9200.",
 		Services: []Service{{
-			Name: "opensearch", Image: "docker.io/opensearchproject/opensearch:3", Type: "web", Port: 9200, Size: "large", HealthTimeout: 600, Private: true,
+			Name: "opensearch", Image: "docker.io/opensearchproject/opensearch:3", Type: "web", Port: 9200, Size: "medium", HealthTimeout: 600, Private: true,
 			// discovery.type cannot be an environment variable here (no dots in names): pass it as a setting.
 			Command: []string{"./opensearch-docker-entrypoint.sh", "opensearch", "-Ediscovery.type=single-node"},
-			Env:     map[string]string{"OPENSEARCH_JAVA_OPTS": "-Xms1g -Xmx1g", "DISABLE_SECURITY_PLUGIN": "true", "DISABLE_INSTALL_DEMO_CONFIG": "true"},
+			Env:     map[string]string{"OPENSEARCH_JAVA_OPTS": "-Xms512m -Xmx512m", "DISABLE_SECURITY_PLUGIN": "true", "DISABLE_INSTALL_DEMO_CONFIG": "true"},
 			Volumes: []model.Volume{vol("data", "/usr/share/opensearch/data")},
 		}},
 	},

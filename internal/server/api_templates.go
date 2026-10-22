@@ -266,23 +266,41 @@ func (s *Server) freeNames(ctx context.Context, p *store.Project, svcs []templat
 	for _, d := range dbs {
 		taken["db:"+d.Name] = true
 	}
-	free := func(prefix, plan string) {
+	// A dedicated database runs as a service of the same name in the project (its
+	// host is <name>.<project>.internal), so its name must be free as both.
+	free := func(plan string, keys ...func(string) string) {
 		base := util.Slugify(opts.name(plan))
 		name := base
-		for i := 2; taken[prefix+name]; i++ {
+		clash := func(n string) bool {
+			for _, k := range keys {
+				if taken[k(n)] {
+					return true
+				}
+			}
+			return false
+		}
+		for i := 2; clash(name); i++ {
 			name = fmt.Sprintf("%s-%d", base, i)
 		}
-		taken[prefix+name] = true
+		for _, k := range keys {
+			taken[k(name)] = true
+		}
 		if name != plan {
 			opts.Rename[plan] = name
 		}
 	}
+	svcKey := func(n string) string { return n }
+	dbKey := func(n string) string { return "db:" + n }
 	for _, ts := range svcs {
-		free("", ts.Name)
+		free(ts.Name, svcKey)
 	}
 	for _, d := range tdbs {
-		if opts.Existing[d.Name] == "" {
-			free("db:", d.Name)
+		switch {
+		case opts.Existing[d.Name] != "":
+		case d.Mode == "dedicated":
+			free(d.Name, dbKey, svcKey)
+		default:
+			free(d.Name, dbKey)
 		}
 	}
 	return nil
