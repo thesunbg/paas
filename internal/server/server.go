@@ -81,6 +81,7 @@ type Server struct {
 	masterKey     []byte
 	bwatch        backupWatch
 	volBackupMu   sync.Mutex
+	netLast       map[string]netCounters // last network counters per instance / node (metricsLoop only)
 	stateBackupMu sync.Mutex
 
 	traffic *traffic

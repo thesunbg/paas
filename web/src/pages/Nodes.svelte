@@ -3,7 +3,7 @@
   import { api, errorMessage, type ClusterNode, type JoinToken, type NodesResponse, type StuckItem } from '../lib/api';
   import { href } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
-  import { mb, cpu, gb, relTime, absTime, pct } from '../lib/format';
+  import { mb, cpu, gb, relTime, absTime, pct, bytes, rate } from '../lib/format';
   import { poll } from '../lib/poll';
   import { toast } from '../lib/toast.svelte';
   import { confirmDialog } from '../lib/confirm.svelte';
@@ -245,6 +245,7 @@
                 <th class="right">Used by apps</th>
                 <th class="right">Overcommit</th>
                 <th class="right">Instances</th>
+                <th>Network <span class="faint">· 24h</span></th>
                 <th>Disk</th>
                 <th class="right">Actions</th>
               </tr>
@@ -308,6 +309,18 @@
                     <div class="faint small">max {n.overcommit_cpu}× cpu</div>
                   </td>
                   <td class="right">{n.instances}</td>
+                  <td class="nowrap">
+                    <div class="small" title="Physical interfaces, now">↓ {rate(n.usage.net_rx_bps ?? 0)} · ↑ {rate(n.usage.net_tx_bps ?? 0)}</div>
+                    {#if n.traffic}
+                      <div class="faint small" title="Received / sent{n.traffic.since ? ` since ${n.traffic.since}` : ' in the last 30 days'} (UTC days)">30 d: ↓ {bytes(n.traffic.rx_30d)} ↑ {bytes(n.traffic.tx_30d)}</div>
+                    {/if}
+                    {#if metrics[n.id]}
+                      {@const m = metrics[n.id]}
+                      <div class="trend" title="Traffic (in + out) per minute, last 24 h">
+                        <Sparkline values={m.map((p) => ((p.net_rx_bytes ?? 0) + (p.net_tx_bytes ?? 0)) / 60)} times={m.map((p) => Date.parse(p.ts))} label="{n.name} network, 24 h" width={96} format={(v) => rate(v)} />
+                      </div>
+                    {/if}
+                  </td>
                   <td class="nowrap">
                     <div class="small">{gb(n.usage.disk_used_gb)} / {gb(n.usage.disk_total_gb)}</div>
                     <span class="bar {level(diskR)}" style="width:80px;min-width:80px"><span style="width:{Math.min(100, diskR * 100)}%"></span></span>

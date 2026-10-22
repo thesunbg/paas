@@ -564,6 +564,8 @@ export interface NodeUsage {
   psi_memory_some10: number;
   disk_used_gb: number;
   disk_total_gb: number;
+  net_rx_bps?: number; // physical interfaces, since the previous heartbeat
+  net_tx_bps?: number;
 }
 
 export interface ClusterNode {
@@ -590,6 +592,7 @@ export interface ClusterNode {
   instances: number;
   used_by_apps_mb: number;
   overcommit_ratio: number;
+  traffic?: TrafficSummary;
 }
 
 export interface NodesResponse {
@@ -670,12 +673,25 @@ export interface MetricPoint {
   cpu_millis: number;
   requests: number;
   errors_5xx: number;
+  net_rx_bytes: number; // received during the minute
+  net_tx_bytes: number; // sent during the minute
+}
+
+export interface TrafficSummary {
+  daily: { day: string; rx_bytes: number; tx_bytes: number }[]; // last 30 days (UTC), oldest first
+  rx_30d: number;
+  tx_30d: number;
+  rx_today: number;
+  tx_today: number;
+  since?: string; // first day with data, when less than 30
+  tz: string;
 }
 
 export interface ServiceMetrics {
   points: MetricPoint[] | null;
   rps_5m: number;
   errors_5m: number;
+  traffic?: TrafficSummary;
 }
 
 export interface NodeMetricPoint {
@@ -683,6 +699,8 @@ export interface NodeMetricPoint {
   cpu_percent: number;
   memory_used_mb: number;
   memory_committed_mb: number;
+  net_rx_bytes: number;
+  net_tx_bytes: number;
 }
 
 export interface TemplateService {

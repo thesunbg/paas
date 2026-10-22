@@ -27,13 +27,14 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	instances, _ := s.store.AllInstances(r.Context())
 	type nodeOut struct {
 		store.Node
-		CommittedMemoryMB int     `json:"committed_memory_mb"`
-		CommittedCPU      int     `json:"committed_cpu_millis"`
-		CapacityMemoryMB  int     `json:"capacity_memory_mb"`
-		CapacityCPU       int     `json:"capacity_cpu_millis"`
-		Instances         int     `json:"instances"`
-		UsedByAppsMB      int     `json:"used_by_apps_mb"`
-		OvercommitRatio   float64 `json:"overcommit_ratio"`
+		CommittedMemoryMB int            `json:"committed_memory_mb"`
+		CommittedCPU      int            `json:"committed_cpu_millis"`
+		CapacityMemoryMB  int            `json:"capacity_memory_mb"`
+		CapacityCPU       int            `json:"capacity_cpu_millis"`
+		Instances         int            `json:"instances"`
+		UsedByAppsMB      int            `json:"used_by_apps_mb"`
+		OvercommitRatio   float64        `json:"overcommit_ratio"`
+		Traffic           trafficSummary `json:"traffic"`
 	}
 	sleeping := 0
 	services, _ := s.store.AllServices(r.Context())
@@ -45,7 +46,8 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	out := []nodeOut{}
 	for _, n := range nodes {
 		memCap, cpuCap := scheduler.Capacity(&n, model.QoSBurstable)
-		no := nodeOut{Node: n, CommittedMemoryMB: committed[n.ID][0], CommittedCPU: committed[n.ID][1], CapacityMemoryMB: memCap, CapacityCPU: cpuCap}
+		no := nodeOut{Node: n, CommittedMemoryMB: committed[n.ID][0], CommittedCPU: committed[n.ID][1], CapacityMemoryMB: memCap, CapacityCPU: cpuCap,
+			Traffic: s.trafficSummary(r.Context(), "node_traffic_daily", "node_id", n.ID)}
 		for _, in := range instances {
 			if in.NodeID == n.ID && in.Status == model.InstRunning {
 				no.Instances++

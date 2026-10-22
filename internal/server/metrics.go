@@ -97,9 +97,12 @@ func (s *Server) metricsLoop(ctx context.Context) {
 
 func (s *Server) recordMetrics(ctx context.Context, services []store.Service, byService map[string][]store.Instance) {
 	now := time.Now().UTC().Truncate(time.Minute)
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	seen := map[string]bool{}
 	for _, svc := range services {
 		ins := byService[svc.ID]
 		req, errs := s.traffic.window(svc.ID, time.Minute)
+		net := s.instanceTraffic(ins, seen)
 		if len(ins) == 0 && req == 0 {
 			continue
 		}
@@ -108,8 +111,9 @@ func (s *Server) recordMetrics(ctx context.Context, services []store.Service, by
 			mem += in.MemoryUsageMB
 			cpu += in.CPUUsageMillis
 		}
-		_, _ = s.store.Q(ctx).Exec(ctx, `INSERT INTO service_metrics (service_id, ts, instances, memory_mb, cpu_millis, requests, errors_5xx)
-			VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, svc.ID, now, len(ins), mem, cpu, req, errs)
+		_, _ = s.store.Q(ctx).Exec(ctx, `INSERT INTO service_metrics (service_id, ts, instances, memory_mb, cpu_millis, requests, errors_5xx, net_rx_bytes, net_tx_bytes)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`, svc.ID, now, len(ins), mem, cpu, req, errs, net.rx, net.tx)
+		s.addDailyTraffic(ctx, "service_traffic_daily", "service_id", svc.ID, day, net)
 	}
 	committed, _ := s.store.NodeCommitted(ctx)
 	if nodes, err := s.store.Nodes(ctx); err == nil {
@@ -117,12 +121,21 @@ func (s *Server) recordMetrics(ctx context.Context, services []store.Service, by
 			if n.Status == "offline" {
 				continue
 			}
-			_, _ = s.store.Q(ctx).Exec(ctx, `INSERT INTO node_metrics (node_id, ts, cpu_percent, memory_used_mb, memory_committed_mb)
-				VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, n.ID, now, n.Usage.CPUPercent, n.Usage.MemoryUsedMB, committed[n.ID][0])
+			key := "node:" + n.ID
+			seen[key] = true
+			net := s.netDelta(key, netCounters{int64(n.Usage.NetRxBytes), int64(n.Usage.NetTxBytes)}, false)
+			_, _ = s.store.Q(ctx).Exec(ctx, `INSERT INTO node_metrics (node_id, ts, cpu_percent, memory_used_mb, memory_committed_mb, net_rx_bytes, net_tx_bytes)
+				VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, n.ID, now, n.Usage.CPUPercent, n.Usage.MemoryUsedMB, committed[n.ID][0], net.rx, net.tx)
+			s.addDailyTraffic(ctx, "node_traffic_daily", "node_id", n.ID, day, net)
 		}
 	}
+	s.forgetNet(seen)
 	_, _ = s.store.Q(ctx).Exec(ctx, `DELETE FROM service_metrics WHERE ts < now() - interval '48 hours'`)
 	_, _ = s.store.Q(ctx).Exec(ctx, `DELETE FROM node_metrics WHERE ts < now() - interval '48 hours'`)
+	if now.Minute() == 0 {
+		_, _ = s.store.Q(ctx).Exec(ctx, `DELETE FROM service_traffic_daily WHERE day < (now() at time zone 'utc')::date - $1::int`, trafficDailyKeep)
+		_, _ = s.store.Q(ctx).Exec(ctx, `DELETE FROM node_traffic_daily WHERE day < (now() at time zone 'utc')::date - $1::int`, trafficDailyKeep)
+	}
 }
 
 // desiredReplicas computes the autoscaling target from CPU and request-rate ratios.
@@ -208,6 +221,8 @@ type metricPoint struct {
 	CPUMillis int       `json:"cpu_millis"`
 	Requests  int       `json:"requests"`
 	Errors5xx int       `json:"errors_5xx"`
+	NetRx     int64     `json:"net_rx_bytes"` // received during the minute
+	NetTx     int64     `json:"net_tx_bytes"` // sent during the minute
 }
 
 func (s *Server) handleServiceMetrics(w http.ResponseWriter, r *http.Request) {
@@ -219,7 +234,7 @@ func (s *Server) handleServiceMetrics(w http.ResponseWriter, r *http.Request) {
 	if hours <= 0 || hours > 48 {
 		hours = 6
 	}
-	rows, err := s.store.Q(r.Context()).Query(r.Context(), `SELECT ts, instances, memory_mb, cpu_millis, requests, errors_5xx FROM service_metrics
+	rows, err := s.store.Q(r.Context()).Query(r.Context(), `SELECT ts, instances, memory_mb, cpu_millis, requests, errors_5xx, net_rx_bytes, net_tx_bytes FROM service_metrics
 		WHERE service_id=$1 AND ts > now() - make_interval(hours => $2) ORDER BY ts`, svc.ID, hours)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -229,19 +244,20 @@ func (s *Server) handleServiceMetrics(w http.ResponseWriter, r *http.Request) {
 	points := []metricPoint{}
 	for rows.Next() {
 		var p metricPoint
-		if err := rows.Scan(&p.TS, &p.Instances, &p.MemoryMB, &p.CPUMillis, &p.Requests, &p.Errors5xx); err == nil {
+		if err := rows.Scan(&p.TS, &p.Instances, &p.MemoryMB, &p.CPUMillis, &p.Requests, &p.Errors5xx, &p.NetRx, &p.NetTx); err == nil {
 			points = append(points, p)
 		}
 	}
 	req, errs := s.traffic.window(svc.ID, 5*time.Minute)
-	writeJSON(w, 200, map[string]any{"points": points, "rps_5m": float64(req) / 300, "errors_5m": errs})
+	writeJSON(w, 200, map[string]any{"points": points, "rps_5m": float64(req) / 300, "errors_5m": errs,
+		"traffic": s.trafficSummary(r.Context(), "service_traffic_daily", "service_id", svc.ID)})
 }
 
 func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	rows, err := s.store.Q(r.Context()).Query(r.Context(), `SELECT ts, cpu_percent, memory_used_mb, memory_committed_mb FROM node_metrics
+	rows, err := s.store.Q(r.Context()).Query(r.Context(), `SELECT ts, cpu_percent, memory_used_mb, memory_committed_mb, net_rx_bytes, net_tx_bytes FROM node_metrics
 		WHERE node_id=$1 AND ts > now() - interval '24 hours' ORDER BY ts`, r.PathValue("id"))
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -253,11 +269,13 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 		CPU       float64   `json:"cpu_percent"`
 		Used      int       `json:"memory_used_mb"`
 		Committed int       `json:"memory_committed_mb"`
+		NetRx     int64     `json:"net_rx_bytes"`
+		NetTx     int64     `json:"net_tx_bytes"`
 	}
 	out := []point{}
 	for rows.Next() {
 		var p point
-		if err := rows.Scan(&p.TS, &p.CPU, &p.Used, &p.Committed); err == nil {
+		if err := rows.Scan(&p.TS, &p.CPU, &p.Used, &p.Committed, &p.NetRx, &p.NetTx); err == nil {
 			out = append(out, p)
 		}
 	}

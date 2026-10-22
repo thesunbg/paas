@@ -124,6 +124,8 @@ func (r *Runtime) collectMetrics(ctx context.Context, id string) {
 			cpuNs = s.CPU.UsageUsec * 1000
 		}
 	}
+	// /proc/<pid>/net/dev shows the counters of the process's network namespace.
+	netRx, netTx, netOK := ReadNetDev(fmt.Sprintf("/proc/%d/net/dev", task.Pid()), nil)
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -132,6 +134,9 @@ func (r *Runtime) collectMetrics(ctx context.Context, id string) {
 		return
 	}
 	m.memMB = int(memBytes >> 20)
+	if netOK {
+		m.netRx, m.netTx = netRx, netTx
+	}
 	if !m.lastCPUAt.IsZero() && cpuNs >= m.lastCPU {
 		elapsed := now.Sub(m.lastCPUAt).Nanoseconds()
 		if elapsed > 0 {

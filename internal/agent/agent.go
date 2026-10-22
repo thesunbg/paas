@@ -58,6 +58,8 @@ type Agent struct {
 
 	cpuMu       sync.Mutex
 	lastCPU     [2]uint64
+	lastNet     [2]uint64 // physical NIC rx, tx at lastNetAt
+	lastNetAt   time.Time
 	lastEvictAt time.Time
 }
 

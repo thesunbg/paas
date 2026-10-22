@@ -108,3 +108,9 @@ export function shortId(id: string | null | undefined, n = 8): string {
 export function plural(n: number, word: string, pluralWord = word + 's'): string {
   return `${n} ${n === 1 ? word : pluralWord}`;
 }
+
+/** A rate in bytes per second, e.g. "1.2 MB/s". */
+export function rate(bytesPerSec: number | null | undefined): string {
+  if (bytesPerSec == null || !Number.isFinite(bytesPerSec)) return '—';
+  return `${bytes(Math.round(bytesPerSec))}/s`;
+}

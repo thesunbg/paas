@@ -6,8 +6,10 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/thesunbg/paas/internal/proto"
+	rt "github.com/thesunbg/paas/internal/runtime"
 )
 
 func readMeminfo() map[string]int {
@@ -87,6 +89,18 @@ func (a *Agent) usage() proto.NodeUsage {
 	}
 	a.lastCPU = [2]uint64{idle, total}
 	a.cpuMu.Unlock()
+	if rx, tx, ok := rt.ReadNetDev("/proc/net/dev", physicalNIC); ok {
+		u.NetRxBytes, u.NetTxBytes = rx, tx
+		now := time.Now()
+		a.cpuMu.Lock()
+		if !a.lastNetAt.IsZero() && rx >= a.lastNet[0] && tx >= a.lastNet[1] {
+			if dt := now.Sub(a.lastNetAt).Seconds(); dt > 0 {
+				u.NetRxBps, u.NetTxBps = float64(rx-a.lastNet[0])/dt, float64(tx-a.lastNet[1])/dt
+			}
+		}
+		a.lastNet, a.lastNetAt = [2]uint64{rx, tx}, now
+		a.cpuMu.Unlock()
+	}
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(a.cfg.DataDir, &st); err == nil {
 		total := float64(st.Blocks) * float64(st.Bsize)
@@ -95,4 +109,11 @@ func (a *Agent) usage() proto.NodeUsage {
 		u.DiskUsedGB = (total - free) / (1 << 30)
 	}
 	return u
+}
+
+// physicalNIC keeps the interfaces backed by a device (eth0, ens3…), leaving out
+// the bridges, veths and WireGuard links whose traffic is already counted on them.
+func physicalNIC(iface string) bool {
+	_, err := os.Stat("/sys/class/net/" + iface + "/device")
+	return err == nil
 }

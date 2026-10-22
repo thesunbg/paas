@@ -80,22 +80,23 @@ func (r *Runtime) changed() {
 }
 
 type managed struct {
-	Req         proto.RunRequest `json:"req"`
-	ImageDigest string           `json:"image_digest,omitempty"` // platform manifest digest of the image it was created from
-	IP          string           `json:"ip"`
-	NetNS       string           `json:"netns"`
-	Restarts    int              `json:"restarts"`
-	Stopped     bool             `json:"stopped"`
-	Evicted     bool             `json:"evicted"`
-	Fenced      bool             `json:"fenced,omitempty"` // stopped by the agent's lease fence; only an unfence ack starts it again
-	ExitCode    int              `json:"exit_code"`
-	lastCPU     uint64
-	lastCPUAt   time.Time
-	cpuMillis   int
-	memMB       int
-	running     bool
-	cancel      context.CancelFunc
-	exited      chan struct{} // closed when a run-once container exits
+	Req          proto.RunRequest `json:"req"`
+	ImageDigest  string           `json:"image_digest,omitempty"` // platform manifest digest of the image it was created from
+	IP           string           `json:"ip"`
+	NetNS        string           `json:"netns"`
+	Restarts     int              `json:"restarts"`
+	Stopped      bool             `json:"stopped"`
+	Evicted      bool             `json:"evicted"`
+	Fenced       bool             `json:"fenced,omitempty"` // stopped by the agent's lease fence; only an unfence ack starts it again
+	ExitCode     int              `json:"exit_code"`
+	lastCPU      uint64
+	lastCPUAt    time.Time
+	cpuMillis    int
+	memMB        int
+	netRx, netTx uint64 // bytes through its network namespace since it started
+	running      bool
+	cancel       context.CancelFunc
+	exited       chan struct{} // closed when a run-once container exits
 }
 
 func New(ctx context.Context, sock, ns, dataDir, ociRuntime string, nm *network.Manager) (*Runtime, error) {
@@ -942,6 +943,7 @@ func (r *Runtime) Statuses(ctx context.Context) []proto.ContainerStatus {
 			ContainerID: id, InstanceID: m.Req.InstanceID, ServiceID: m.Req.ServiceID,
 			Running: m.running || m.Stopped, ExitCode: m.ExitCode, Restarts: m.Restarts, IP: m.IP,
 			MemoryMB: m.memMB, CPUMillis: m.cpuMillis, Evicted: m.Evicted, ImageDigest: m.ImageDigest,
+			NetRxBytes: m.netRx, NetTxBytes: m.netTx,
 		})
 		r.mu.Unlock()
 	}

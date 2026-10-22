@@ -129,6 +129,12 @@ type NodeUsage struct {
 	PSIMemorySome10   float64 `json:"psi_memory_some10"`
 	DiskUsedGB        float64 `json:"disk_used_gb"`
 	DiskTotalGB       float64 `json:"disk_total_gb"`
+	// Traffic on the physical network interfaces: counters since boot, and the
+	// rate since the previous heartbeat (bytes per second).
+	NetRxBytes uint64  `json:"net_rx_bytes,omitempty"`
+	NetTxBytes uint64  `json:"net_tx_bytes,omitempty"`
+	NetRxBps   float64 `json:"net_rx_bps,omitempty"`
+	NetTxBps   float64 `json:"net_tx_bps,omitempty"`
 }
 
 type ContainerStatus struct {
@@ -146,6 +152,9 @@ type ContainerStatus struct {
 	// ImageDigest is the digest of the platform manifest (linux/<arch>) of the image the container
 	// runs, not of the multi-arch index. Empty from agents that do not report it.
 	ImageDigest string `json:"image_digest,omitempty"`
+	// Bytes received and sent by the container since it started (its network namespace).
+	NetRxBytes uint64 `json:"net_rx_bytes,omitempty"`
+	NetTxBytes uint64 `json:"net_tx_bytes,omitempty"`
 }
 
 type Heartbeat struct {

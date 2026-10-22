@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, errorMessage, type ServiceDetail, type ServiceMetrics } from '../../lib/api';
-  import { mb, cpu } from '../../lib/format';
+  import { mb, cpu, bytes, rate } from '../../lib/format';
   import { poll } from '../../lib/poll';
   import Chart, { type Pt } from '../../components/Chart.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
@@ -57,6 +57,14 @@
   const reqs = $derived(series((p) => p.requests));
   const errs = $derived(series((p) => p.errors_5xx));
   const inst = $derived(series((p) => p.instances));
+  // Per-minute byte counts, drawn as an average rate over the minute.
+  const netIn = $derived(series((p) => (p.net_rx_bytes ?? 0) / 60));
+  const netOut = $derived(series((p) => (p.net_tx_bytes ?? 0) / 60));
+  const netTotals = $derived({
+    rx: pts.reduce((a, p) => a + (p.net_rx_bytes ?? 0), 0),
+    tx: pts.reduce((a, p) => a + (p.net_tx_bytes ?? 0), 0),
+  });
+  const tr = $derived(data?.traffic);
   const limit = $derived(detail.service.spec.resources.memory_limit_mb);
   const totals = $derived({
     req: pts.reduce((a, p) => a + p.requests, 0),
@@ -90,8 +98,38 @@
       <Chart title="CPU (sum of instances)" points={cpuS} format={(v) => cpu(Math.round(v))} />
       <Chart title="Requests per minute" points={reqs} kind="bars" format={n0} minTop={2} />
       <Chart title="5xx errors per minute" points={errs} kind="bars" color="var(--red)" format={n0} minTop={2} summary={totals.err ? `${totals.err} in ${hours}h` : 'none'} />
+      <Chart title="Network in (received)" points={netIn} format={rate} summary={`${bytes(netTotals.rx)} in ${hours}h`} />
+      <Chart title="Network out (sent)" points={netOut} format={rate} color="var(--purple, #8b5cf6)" summary={`${bytes(netTotals.tx)} in ${hours}h`} />
       <Chart title="Running instances" points={inst} format={(v) => String(Math.round(v))} minTop={2} />
     </div>
+    {#if tr}
+      <div class="card traffic">
+        <div class="card-head">
+          <h3>Bandwidth</h3>
+          <span class="faint small">{tr.since ? `since ${tr.since}` : 'last 30 days'} · days in {tr.tz}</span>
+        </div>
+        <div class="card-body stack">
+          <div class="row small" style="gap:24px">
+            <span>Today: <b class="num">↓ {bytes(tr.rx_today)}</b> <b class="num">↑ {bytes(tr.tx_today)}</b></span>
+            <span>30 days: <b class="num">↓ {bytes(tr.rx_30d)}</b> <b class="num">↑ {bytes(tr.tx_30d)}</b> · total <b class="num">{bytes(tr.rx_30d + tr.tx_30d)}</b></span>
+          </div>
+          {#if tr.daily.length}
+            {@const top = Math.max(1, ...tr.daily.map((d) => d.rx_bytes + d.tx_bytes))}
+            <div class="days" role="img" aria-label="Traffic per day">
+              {#each tr.daily as d (d.day)}
+                <div class="day" title="{d.day}: ↓ {bytes(d.rx_bytes)} ↑ {bytes(d.tx_bytes)}">
+                  <span class="tx" style:height="{(d.tx_bytes / top) * 100}%"></span>
+                  <span class="rx" style:height="{(d.rx_bytes / top) * 100}%"></span>
+                </div>
+              {/each}
+            </div>
+            <p class="hint">Per day: <span class="key rx"></span> received <span class="key tx"></span> sent. All traffic of the containers, including calls to databases and other services of the project.</p>
+          {:else}
+            <p class="hint">No traffic recorded yet.</p>
+          {/if}
+        </div>
+      </div>
+    {/if}
     <p class="hint">One point per minute, recorded by the control plane. Hover or use the arrow keys on a chart to read values.</p>
   {/if}
 </div>
@@ -120,6 +158,35 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
+  }
+  .days {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 90px;
+  }
+  .day {
+    flex: 1;
+    display: flex;
+    flex-direction: column-reverse;
+    height: 100%;
+    min-width: 4px;
+  }
+  .day .rx,
+  .key.rx {
+    background: var(--accent);
+  }
+  .day .tx,
+  .key.tx {
+    background: var(--purple, #8b5cf6);
+  }
+  .key {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-left: 6px;
   }
   @media (max-width: 820px) {
     .charts {
