@@ -52,7 +52,7 @@ var apps = []Template{
 		ID: "stirling-pdf", Title: "Stirling PDF", Category: "Productivity", Website: "https://stirlingpdf.com",
 		Description: "Merge, split, convert, sign and OCR PDF files, all on your own server.",
 		Services: []Service{{
-			Name: "stirling-pdf", Image: "docker.io/stirlingtools/stirling-pdf:latest", Type: "web", Port: 8080, Size: "medium",
+			Name: "stirling-pdf", Image: "docker.io/stirlingtools/stirling-pdf:latest", Type: "web", Port: 8080, Size: "medium", HealthTimeout: 420,
 			Volumes: []model.Volume{vol("configs", "/configs")},
 		}},
 	},
@@ -197,7 +197,7 @@ var apps = []Template{
 		Description: "Identity and access management: single sign-on, OIDC and SAML.",
 		Databases:   []Database{{Name: "keycloak", Engine: "postgres"}},
 		Services: []Service{{
-			Name: "keycloak", Image: "quay.io/keycloak/keycloak:26.4", Type: "web", Port: 8080, Size: "medium",
+			Name: "keycloak", Image: "quay.io/keycloak/keycloak:26.4", Type: "web", Port: 8080, Size: "medium", HealthTimeout: 600,
 			Command: []string{"/opt/keycloak/bin/kc.sh", "start"},
 			Env: map[string]string{
 				"KC_DB": "postgres", "KC_DB_URL": "jdbc:postgresql://${db.keycloak.host}:${db.keycloak.port}/${db.keycloak.name}",
@@ -301,7 +301,7 @@ var apps = []Template{
 		Description: "Team chat and collaboration (Slack alternative). The first account created becomes the admin.",
 		Databases:   []Database{{Name: "mattermost", Engine: "postgres"}},
 		Services: []Service{{
-			Name: "mattermost", Image: "docker.io/mattermost/mattermost-team-edition:latest", Type: "web", Port: 8065, Size: "medium",
+			Name: "mattermost", Image: "docker.io/mattermost/mattermost-team-edition:latest", Type: "web", Port: 8065, Size: "medium", HealthTimeout: 420,
 			Env: map[string]string{
 				"MM_SQLSETTINGS_DRIVERNAME": "postgres", "MM_SQLSETTINGS_DATASOURCE": "${db.mattermost.url}&connect_timeout=10",
 				"MM_SERVICESETTINGS_SITEURL": "${url}",
@@ -366,7 +366,7 @@ var apps = []Template{
 		ID: "jellyfin", Title: "Jellyfin", Category: "Media", Website: "https://jellyfin.org",
 		Description: "Media server for movies, shows and music. Upload media into its media volume.",
 		Services: []Service{{
-			Name: "jellyfin", Image: "docker.io/jellyfin/jellyfin:latest", Type: "web", Port: 8096, Size: "medium",
+			Name: "jellyfin", Image: "docker.io/jellyfin/jellyfin:latest", Type: "web", Port: 8096, Size: "medium", HealthTimeout: 300,
 			Env:     map[string]string{"JELLYFIN_PublishedServerUrl": "${url}"},
 			Volumes: []model.Volume{vol("config", "/config"), vol("cache", "/cache"), vol("media", "/media")},
 			Health:  "/health",
@@ -386,7 +386,7 @@ var apps = []Template{
 		Description: "File sync and share, calendar, contacts and office apps, with PostgreSQL.",
 		Databases:   []Database{{Name: "nextcloud", Engine: "postgres"}},
 		Services: []Service{{
-			Name: "nextcloud", Image: "docker.io/library/nextcloud:apache", Type: "web", Port: 80, Size: "medium",
+			Name: "nextcloud", Image: "docker.io/library/nextcloud:apache", Type: "web", Port: 80, Size: "medium", HealthTimeout: 420,
 			Env: map[string]string{
 				"POSTGRES_HOST": "${db.nextcloud.host}:${db.nextcloud.port}", "POSTGRES_DB": "${db.nextcloud.name}",
 				"POSTGRES_USER": "${db.nextcloud.user}", "POSTGRES_PASSWORD": "${db.nextcloud.password}",

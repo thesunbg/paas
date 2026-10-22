@@ -71,7 +71,7 @@ func (s *Server) provisionPrisma(ctx context.Context, svc *store.Service, d *sto
 			s.hub.Log(d.ID, "==> prisma: could not create the database: "+err.Error()+" (set "+envName+" yourself)")
 			return
 		}
-		s.waitDatabasesReady(ctx, []string{db.ID}, 10*time.Minute)
+		_ = s.waitDatabasesReady(ctx, []string{db.ID}, 10*time.Minute)
 		if fresh, err := s.store.DatabaseByID(ctx, db.ID); err == nil && fresh.Status == "ready" {
 			s.hub.Log(d.ID, fmt.Sprintf("==> prisma: database %s ready and linked as %s", fresh.Name, envName))
 		} else {

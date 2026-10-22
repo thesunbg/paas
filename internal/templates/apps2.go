@@ -11,7 +11,7 @@ var apps2 = []Template{
 		ID: "elasticsearch", Title: "Elasticsearch", Category: "Search", Website: "https://www.elastic.co/elasticsearch",
 		Description: "Search and analytics engine (single node, security on). Private: services of the project reach it at http://elasticsearch:9200 as user elastic.",
 		Services: []Service{{
-			Name: "elasticsearch", Image: "docker.io/library/elasticsearch:9.1.5", Type: "web", Port: 9200, Size: "large", Private: true,
+			Name: "elasticsearch", Image: "docker.io/library/elasticsearch:9.1.5", Type: "web", Port: 9200, Size: "large", HealthTimeout: 600, Private: true,
 			Env: map[string]string{
 				"ES_SETTING_DISCOVERY_TYPE": "single-node", "ES_JAVA_OPTS": "-Xms1g -Xmx1g", "ES_SETTING_XPACK_SECURITY_ENABLED": "true",
 				"ES_SETTING_XPACK_SECURITY_HTTP_SSL_ENABLED": "false", "ES_SETTING_XPACK_SECURITY_TRANSPORT_SSL_ENABLED": "false",
@@ -24,7 +24,7 @@ var apps2 = []Template{
 		ID: "opensearch", Title: "OpenSearch", Category: "Search", Website: "https://opensearch.org",
 		Description: "Open source fork of Elasticsearch (single node). Private, without the security plugin: only services of the project reach it, at http://opensearch:9200.",
 		Services: []Service{{
-			Name: "opensearch", Image: "docker.io/opensearchproject/opensearch:3", Type: "web", Port: 9200, Size: "large", Private: true,
+			Name: "opensearch", Image: "docker.io/opensearchproject/opensearch:3", Type: "web", Port: 9200, Size: "large", HealthTimeout: 600, Private: true,
 			// discovery.type cannot be an environment variable here (no dots in names): pass it as a setting.
 			Command: []string{"./opensearch-docker-entrypoint.sh", "opensearch", "-Ediscovery.type=single-node"},
 			Env:     map[string]string{"OPENSEARCH_JAVA_OPTS": "-Xms1g -Xmx1g", "DISABLE_SECURITY_PLUGIN": "true", "DISABLE_INSTALL_DEMO_CONFIG": "true"},
@@ -71,7 +71,7 @@ var apps2 = []Template{
 		ID: "openclaw", Title: "OpenClaw", Category: "AI", Website: "https://openclaw.ai",
 		Description: "Personal AI assistant gateway with a web Control UI. Sign in with the gateway token (OPENCLAW_GATEWAY_TOKEN in Environment), then approve the browser from the Console: node dist/index.js devices list, then devices approve <id>.",
 		Services: []Service{{
-			Name: "openclaw", Image: "ghcr.io/openclaw/openclaw:latest", Type: "web", Port: 18789, Size: "large",
+			Name: "openclaw", Image: "ghcr.io/openclaw/openclaw:latest", Type: "web", Port: 18789, Size: "large", HealthTimeout: 420,
 			// The gateway refuses to start without gateway.mode, and the Control UI only accepts
 			// its own public origin; both are set on every start, the rest of the config is kept.
 			Command: []string{`node dist/index.js config set --batch-json "[{\"path\":\"gateway.mode\",\"value\":\"local\"},{\"path\":\"gateway.bind\",\"value\":\"lan\"},{\"path\":\"gateway.auth.mode\",\"value\":\"token\"},{\"path\":\"gateway.trustedProxies\",\"value\":[\"10.0.0.0/8\"]},{\"path\":\"gateway.controlUi.allowedOrigins\",\"value\":[\"$OPENCLAW_PUBLIC_URL\"]}]" && exec node dist/index.js gateway --bind lan --port 18789`},
@@ -130,7 +130,7 @@ var apps2 = []Template{
 		Description: "No-code automation with hundreds of integrations (Zapier alternative).",
 		Databases:   []Database{{Name: "activepieces", Engine: "postgres"}, {Name: "redis", Engine: "redis", Mode: "dedicated"}},
 		Services: []Service{{
-			Name: "activepieces", Image: "docker.io/activepieces/activepieces:latest", Type: "web", Port: 80, Size: "medium",
+			Name: "activepieces", Image: "docker.io/activepieces/activepieces:latest", Type: "web", Port: 80, Size: "medium", HealthTimeout: 420,
 			Env: map[string]string{
 				"AP_ENGINE_EXECUTABLE_PATH": "dist/packages/engine/main.js", "AP_ENVIRONMENT": "prod", "AP_FRONTEND_URL": "${url}",
 				"AP_ENCRYPTION_KEY": "${random:32}", "AP_JWT_SECRET": "${random}", "AP_EXECUTION_MODE": "UNSANDBOXED",
@@ -204,7 +204,7 @@ var apps2 = []Template{
 		ID: "baserow", Title: "Baserow", Category: "Databases", Website: "https://baserow.io",
 		Description: "No-code database and app builder (Airtable alternative), all in one container.",
 		Services: []Service{{
-			Name: "baserow", Image: "docker.io/baserow/baserow:latest", Type: "web", Port: 80, Size: "large",
+			Name: "baserow", Image: "docker.io/baserow/baserow:latest", Type: "web", Port: 80, Size: "large", HealthTimeout: 600,
 			Env:     map[string]string{"BASEROW_PUBLIC_URL": "${url}"},
 			Volumes: []model.Volume{vol("data", "/baserow/data")},
 		}},

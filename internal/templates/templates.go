@@ -22,6 +22,9 @@ type Service struct {
 	Command []string          `json:"command,omitempty"`
 	Size    string            `json:"size,omitempty"`
 	Health  string            `json:"health_path,omitempty"`
+	// HealthTimeout is how long the first start may take (seconds; default 180).
+	// JVM apps that set themselves up on first boot need more on small servers.
+	HealthTimeout int `json:"health_timeout,omitempty"`
 	// Build is set for services built from the imported repository.
 	Build *Build `json:"build,omitempty"`
 	// Private services get no public domain; other services reach them by name.

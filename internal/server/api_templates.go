@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"slices"
@@ -406,10 +407,14 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 		for _, d := range ts.DependsOn {
 			spec.DependsOn = append(spec.DependsOn, util.Slugify(opts.name(d)))
 		}
+		hcTimeout := 180
+		if ts.HealthTimeout > hcTimeout {
+			hcTimeout = ts.HealthTimeout
+		}
 		if ts.Health != "" {
-			spec.HealthCheck = model.HealthCheck{Type: "http", Path: ts.Health, TimeoutSec: 180}
+			spec.HealthCheck = model.HealthCheck{Type: "http", Path: ts.Health, TimeoutSec: hcTimeout}
 		} else {
-			spec.HealthCheck = model.HealthCheck{TimeoutSec: 180}
+			spec.HealthCheck = model.HealthCheck{TimeoutSec: hcTimeout}
 		}
 		size, ok := resources.SizeByName(firstNonEmpty(ts.Size, "small"))
 		if !ok {
@@ -459,7 +464,12 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 			// Deploy once the databases accept connections and the services it
 			// depends on run (their names must resolve when it starts).
 			ctx := context.Background()
-			s.waitDatabasesReady(ctx, waitDBs, 10*time.Minute)
+			if err := s.waitDatabasesReady(ctx, waitDBs, 10*time.Minute); err != nil {
+				// Starting it anyway would only fail later with a misleading
+				// "password authentication failed": say what is wrong instead.
+				s.failUndeployed(ctx, svcCopy, err.Error()+"; fix the database (Databases), then deploy this service")
+				return
+			}
 			s.waitServicesUp(ctx, p.ID, svcCopy.Spec.DependsOn, 20*time.Minute)
 			_, _ = s.QueueDeployment(ctx, svcCopy, "template", "", "", nil)
 		}()
@@ -467,17 +477,36 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 	return out, nil
 }
 
-func (s *Server) waitDatabasesReady(ctx context.Context, ids []string, timeout time.Duration) {
+// waitDatabasesReady waits for the databases to be provisioned. It reports one
+// that failed (or is still not ready at the deadline).
+func (s *Server) waitDatabasesReady(ctx context.Context, ids []string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for _, id := range ids {
-		for time.Now().Before(deadline) {
+		for {
 			db, err := s.store.DatabaseByID(ctx, id)
-			if err != nil || db.Status == "ready" || db.Status == "failed" {
+			if err != nil || db.Status == "ready" {
 				break
+			}
+			if db.Status == "failed" {
+				return fmt.Errorf("database %s could not be created: %s", db.Name, db.Error)
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("database %s is still %s", db.Name, db.Status)
 			}
 			time.Sleep(2 * time.Second)
 		}
 	}
+	return nil
+}
+
+// failUndeployed records why a new service was not deployed, as a failed deployment.
+func (s *Server) failUndeployed(ctx context.Context, svc *store.Service, msg string) {
+	d, err := s.store.CreateDeployment(ctx, &store.Deployment{ServiceID: svc.ID, Status: "queued", Trigger: "template"})
+	if err == nil {
+		_ = s.store.SetDeploymentStatus(ctx, d.ID, "failed", msg)
+	}
+	_ = s.store.SetServiceStatus(ctx, svc.ID, model.StatusFailed)
+	slog.Warn("template service not deployed", "service", svc.Slug, "reason", msg)
 }
 
 // inspectRepo clones a repository on a build node and analyzes it.
