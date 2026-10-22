@@ -425,8 +425,9 @@ func (s *Server) startInstance(ctx context.Context, svc *store.Service, proj *st
 	}
 	var rep proto.RunReply
 	err = s.requestAgent(ctx, node.ID, proto.CmdRun, req, &rep, 11*time.Minute)
-	for attempt := 1; attempt <= 3 && errors.Is(err, nats.ErrNoResponders); attempt++ {
-		// The agent may be reconnecting after a control-plane failover.
+	for attempt := 1; attempt <= 7 && errors.Is(err, nats.ErrNoResponders); attempt++ {
+		// The agent may be reconnecting after a control-plane failover, or starting up
+		// after an upgrade (it subscribes once it has recovered its containers): about 30 s.
 		time.Sleep(time.Duration(attempt) * time.Second)
 		err = s.requestAgent(ctx, node.ID, proto.CmdRun, req, &rep, 11*time.Minute)
 	}
