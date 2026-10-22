@@ -257,8 +257,8 @@ receives pushes and pull requests through the app webhook (no per-repository web
 |---|---|---|
 | POST | `/services/{id}/run` | start a cron job now → job run (202) |
 | GET | `/services/{id}/runs` | `[{id, status: running|succeeded|failed, exit_code, output, trigger: schedule|manual, started_at, finished_at}]` |
-| GET | `/services/{id}/metrics?hours=6` | `{points: [{ts, instances, memory_mb, cpu_millis, requests, errors_5xx}], rps_5m, errors_5m}` (one point per minute) |
-| GET | `/nodes/{id}/metrics` | `[{ts, cpu_percent, memory_used_mb, memory_committed_mb}]` (24 h) |
+| GET | `/services/{id}/metrics?hours=6` | `{points: [{ts, instances, memory_mb, cpu_millis, requests, errors_5xx, net_rx_bytes, net_tx_bytes}], rps_5m, errors_5m, traffic}` (one point per minute; `net_*` = bytes received/sent by the containers during that minute). `traffic`: `{daily: [{day, rx_bytes, tx_bytes}], rx_30d, tx_30d, rx_today, tx_today, since?, tz}` (UTC days, kept 90 days) |
+| GET | `/nodes/{id}/metrics` | `[{ts, cpu_percent, memory_used_mb, memory_committed_mb, net_rx_bytes, net_tx_bytes}]` (24 h; traffic of the physical interfaces). `GET /nodes` also carries `usage.net_rx_bps`/`net_tx_bps` (now) and `traffic` (as above) per node |
 
 ### Templates and Docker Compose
 | Method | Path | Notes |

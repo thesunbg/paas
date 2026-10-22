@@ -167,6 +167,7 @@
   }
   .day {
     flex: 1;
+    max-width: 28px;
     display: flex;
     flex-direction: column-reverse;
     height: 100%;

@@ -34,7 +34,7 @@
   let width = $state(400);
   let hover = $state<number | null>(null);
 
-  const padL = 44;
+  const padL = 58;
   const padR = 8;
   const padT = 8;
   const padB = 20;
