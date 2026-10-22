@@ -726,6 +726,53 @@ export interface Template {
   databases?: { name: string; engine: string; mode?: string }[];
 }
 
+export interface BatchEstimate {
+  per_copy_request_mb: number;
+  per_copy_limit_mb: number;
+  need_request_mb: number;
+  need_limit_mb: number;
+  free_schedulable_mb: number;
+  free_memory_mb: number;
+  fits: boolean;
+  warning?: string;
+}
+
+export interface BatchItem {
+  index: number;
+  label: string;
+  email?: string;
+  password?: string;
+  project_id: string | null;
+  service_id: string | null;
+  status: string;
+  url?: string;
+  error?: string;
+}
+
+export interface Batch {
+  id: string;
+  name: string;
+  template: string;
+  mode: 'instances' | 'accounts';
+  project_id: string | null;
+  status: 'creating' | 'ready' | 'deleting';
+  created_at: string;
+  items?: BatchItem[];
+  counts: Record<string, number>;
+}
+
+export interface BatchInput {
+  name: string;
+  template: string;
+  mode: 'instances' | 'accounts';
+  count?: number;
+  learners?: { name: string; email: string }[];
+  team_id?: string;
+  prefix?: string;
+  env?: Record<string, Record<string, string>>;
+  force?: boolean;
+}
+
 export interface InstallResponse {
   services: Service[] | null;
   databases?: Database[] | null;
@@ -1022,6 +1069,12 @@ export const api = {
   createService: (project: string, input: ServiceInput) => post<CreateServiceResponse>(`/projects/${e(project)}/services`, input),
   createDatabase: (project: string, input: CreateDatabaseInput) => post<Database>(`/projects/${e(project)}/databases`, input),
   templates: () => get<Template[] | null>('/templates'),
+  batches: () => get<Batch[]>('/batches'),
+  batch: (id: string) => get<Batch>(`/batches/${e(id)}`),
+  batchEstimate: (template: string, count: number) => get<BatchEstimate>(`/batches/estimate?template=${e(template)}&count=${count}`),
+  createBatch: (input: BatchInput) => post<{ id: string; items: number; estimate: BatchEstimate }>('/batches', input),
+  deleteBatch: (id: string) => del(`/batches/${e(id)}`),
+  batchCSVURL: (id: string) => `${BASE}/batches/${e(id)}/csv`,
   installTemplate: (project: string, template: string, domain?: string, env?: Record<string, Record<string, string>>, name?: string) =>
     post<InstallResponse>(`/projects/${e(project)}/templates/${e(template)}`, { ...(domain ? { domain } : {}), ...(env ? { env } : {}), ...(name ? { name } : {}) }),
   importCompose: (project: string, compose: string) => post<InstallResponse>(`/projects/${e(project)}/compose`, { compose }),

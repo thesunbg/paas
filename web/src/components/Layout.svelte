@@ -20,7 +20,12 @@
   const nav = $derived(
     [
       { id: 'projects', label: 'Projects', icon: 'folder', path: '/' },
-      ...(isAdmin ? [{ id: 'nodes', label: 'Nodes', icon: 'server', path: '/nodes' }] : []),
+      ...(isAdmin
+        ? [
+            { id: 'nodes', label: 'Nodes', icon: 'server', path: '/nodes' },
+            { id: 'batches', label: 'Batches', icon: 'layers', path: '/batches' },
+          ]
+        : []),
       { id: 'settings', label: 'Settings', icon: 'settings', path: '/settings' },
     ],
   );

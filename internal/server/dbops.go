@@ -200,7 +200,9 @@ func (s *Server) provisionDatabase(ctx context.Context, dbID string) {
 			fail(err)
 			return
 		}
-		if err := s.execOnService(ctx, srv.ID, cmd, "", "", 5); err != nil {
+		// 10 attempts wait about 90 s: long enough for a shared server that is still
+		// recovering after a restart ("the database system is starting up").
+		if err := s.execOnService(ctx, srv.ID, cmd, "", "", 10); err != nil {
 			fail(fmt.Errorf("create database on shared server: %w", err))
 			return
 		}

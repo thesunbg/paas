@@ -14,6 +14,7 @@
   import ServicePage from './pages/Service.svelte';
   import DatabasePage from './pages/Database.svelte';
   import Nodes from './pages/Nodes.svelte';
+  import Batches from './pages/Batches.svelte';
   import Settings from './pages/Settings.svelte';
   import NotFound from './pages/NotFound.svelte';
   import DeploymentRedirect from './pages/DeploymentRedirect.svelte';
@@ -64,7 +65,7 @@
 
   $effect(() => {
     // Keep the document title in sync with the section.
-    const names: Record<string, string> = { projects: 'Projects', nodes: 'Nodes', settings: 'Settings', services: 'Service', databases: 'Database' };
+    const names: Record<string, string> = { projects: 'Projects', nodes: 'Nodes', batches: 'Batches', settings: 'Settings', services: 'Service', databases: 'Database' };
     document.title = phase === 'app' ? `${names[section] ?? 'Dashboard'} · PaaS` : 'Sign in · PaaS';
   });
 </script>
@@ -100,6 +101,8 @@
         <DatabasePage id={p[1]} />
       {:else if p[0] === 'nodes'}
         <Nodes />
+      {:else if p[0] === 'batches'}
+        <Batches id={p[1]} />
       {:else if p[0] === 'settings'}
         <Settings tab={p[1] ?? 'tokens'} />
       {:else}

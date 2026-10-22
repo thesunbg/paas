@@ -56,32 +56,46 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	ctx := context.WithoutCancel(r.Context())
+	created, dbs, err := s.installTemplate(ctx, p, tpl, in.Name, in.Domain, in.Env)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	u := currentUser(r)
+	s.store.Audit(ctx, &u.ID, &p.TeamID, "template.install", tpl.ID)
+	writeJSON(w, 201, map[string]any{"services": created, "databases": dbs})
+}
+
+// installTemplate installs a built-in template in a project: name replaces its main
+// name ("" keeps it; taken names get a -2, -3… suffix), env holds the values of
+// its inputs by service.
+func (s *Server) installTemplate(ctx context.Context, p *store.Project, tpl *templates.Template, name, domain string, env map[string]map[string]string) ([]*store.Service, []*store.Database, error) {
 	// Copy the services: the catalogue is shared, the values are this install's.
 	svcs := make([]templates.Service, len(tpl.Services))
 	for i, ts := range tpl.Services {
-		env := make(map[string]string, len(ts.Env))
+		vars := make(map[string]string, len(ts.Env))
 		for k, v := range ts.Env {
-			env[k] = v
+			vars[k] = v
 		}
 		for _, input := range ts.Inputs {
-			v := strings.TrimSpace(in.Env[ts.Name][input.Key])
+			v := strings.TrimSpace(env[ts.Name][input.Key])
 			if v == "" {
 				if input.Required {
-					writeError(w, 400, fmt.Sprintf("%s: %s is required", ts.Name, input.Key))
-					return
+					return nil, nil, fmt.Errorf("%s: %s is required", ts.Name, input.Key)
 				}
 				continue
 			}
-			env[input.Key] = v
+			vars[input.Key] = v
 		}
-		ts.Env = env
+		ts.Env = vars
 		svcs[i] = ts
 	}
-	opts := templateOpts{Domain: in.Domain, Rename: map[string]string{}}
+	opts := templateOpts{Domain: domain, Rename: map[string]string{}}
 	if tpl.Repo != "" {
 		opts.Repo = &model.ServiceSource{Kind: "git", Repo: tpl.Repo, Branch: firstNonEmpty(tpl.Branch, "main")}
 	}
-	if n := util.Slugify(in.Name); strings.TrimSpace(in.Name) != "" && n != tpl.Services[0].Name {
+	if n := util.Slugify(name); strings.TrimSpace(name) != "" && n != tpl.Services[0].Name {
 		main := tpl.Services[0].Name
 		opts.Rename[main] = n
 		for _, d := range tpl.Databases {
@@ -90,19 +104,10 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if err := s.freeNames(r.Context(), p, svcs, tpl.Databases, &opts); err != nil {
-		writeError(w, 500, err.Error())
-		return
+	if err := s.freeNames(ctx, p, svcs, tpl.Databases, &opts); err != nil {
+		return nil, nil, err
 	}
-	ctx := context.WithoutCancel(r.Context())
-	created, dbs, err := s.installPlan(ctx, p, svcs, tpl.Databases, opts)
-	if err != nil {
-		writeError(w, 400, err.Error())
-		return
-	}
-	u := currentUser(r)
-	s.store.Audit(ctx, &u.ID, &p.TeamID, "template.install", tpl.ID)
-	writeJSON(w, 201, map[string]any{"services": created, "databases": dbs})
+	return s.installPlan(ctx, p, svcs, tpl.Databases, opts)
 }
 
 // handleImportCompose creates services and managed databases from a pasted docker-compose.yml.

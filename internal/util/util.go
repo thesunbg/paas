@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"regexp"
 	"strings"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // RandomToken returns a URL-safe random hex string of n bytes of entropy.
@@ -39,9 +42,10 @@ func HashToken(t string) string {
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
-// Slugify converts a name into a DNS-label-safe slug (max 40 chars).
+// Slugify converts a name into a DNS-label-safe slug (max 40 chars). Accents
+// are dropped first, so "Nguyễn Văn An" becomes nguyen-van-an.
 func Slugify(s string) string {
-	s = nonSlug.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "-")
+	s = nonSlug.ReplaceAllString(foldAccents(strings.ToLower(strings.TrimSpace(s))), "-")
 	s = strings.Trim(s, "-")
 	if len(s) > 40 {
 		s = strings.Trim(s[:40], "-")
@@ -59,4 +63,20 @@ func ShortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// foldAccents removes diacritics (NFD, then drop the combining marks); đ is not
+// a combining form and is mapped by hand.
+func foldAccents(s string) string {
+	var b strings.Builder
+	for _, r := range norm.NFD.String(s) {
+		switch {
+		case unicode.Is(unicode.Mn, r):
+		case r == 'đ' || r == 'Đ':
+			b.WriteByte('d')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
