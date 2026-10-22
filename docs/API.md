@@ -214,6 +214,11 @@ and unlink with `DELETE /api/v1/me/github`.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/admin/settings` | `{allow_signup, limits}` |
+| GET | `/api/v1/batches/estimate?template=&count=` | memory N copies reserve / may use vs what the workers have free |
+| POST | `/api/v1/batches` | `{name, template, mode: instances|accounts, count (instances), learners: [{name, email}] (accounts), team_id?, project_id?, prefix?, env?, force?}` bulk install (platform admin). `instances`: N copies in one project (`<prefix>-01…`); `accounts`: one dashboard account (first password generated) + project per learner. 409 with `estimate` when capacity looks short, unless `force`. 202 |
+| GET | `/api/v1/batches`, `/api/v1/batches/{id}` | batches with per-status counts; one batch with its items `{label, email, password, status, url, project_id, service_id, error}` |
+| GET | `/api/v1/batches/{id}/csv` | hand-out list (UTF-8 CSV) |
+| DELETE | `/api/v1/batches/{id}` | deletes every copy with its databases (accounts mode: the accounts, their teams and projects too). 202 |
 | GET/PUT | `/api/v1/admin/storage` | off-site S3 storage `{endpoint, region, bucket, access_key, secret_key, prefix, virtual_host}`; PUT tests it first, an empty endpoint turns it off. `PAAS_S3_*` env wins (`from_env`) |
 | GET/POST | `/api/v1/admin/state-backups` | platform state (control-plane database) backups: list `{last, backups, offsite_error, every}` / back up now |
 | GET | `/api/v1/admin/state-backups/{name}` | download a sealed backup (restore with `paasd restore-state --file`) |
