@@ -134,7 +134,7 @@ var apps = []Template{
 		Description: "Create, fill and sign digital documents (DocuSign alternative).",
 		Databases:   []Database{{Name: "docuseal", Engine: "postgres"}},
 		Services: []Service{{
-			Name: "docuseal", Image: "docker.io/docuseal/docuseal:latest", Type: "web", Port: 3000, Size: "small",
+			Name: "docuseal", Image: "docker.io/docuseal/docuseal:latest", Type: "web", Port: 3000, Size: "medium",
 			Env:     map[string]string{"DATABASE_URL": "${db.docuseal.url}", "SECRET_KEY_BASE": "${random}${random}"},
 			Volumes: []model.Volume{vol("data", "/data")},
 		}},
@@ -169,7 +169,7 @@ var apps = []Template{
 		Description: "Headless CMS and instant REST/GraphQL API over PostgreSQL.",
 		Databases:   []Database{{Name: "directus", Engine: "postgres"}},
 		Services: []Service{{
-			Name: "directus", Image: "docker.io/directus/directus:11", Type: "web", Port: 8055, Size: "small",
+			Name: "directus", Image: "docker.io/directus/directus:11", Type: "web", Port: 8055, Size: "medium",
 			Env: map[string]string{
 				"DB_CLIENT": "pg", "DB_HOST": "${db.directus.host}", "DB_PORT": "${db.directus.port}", "DB_DATABASE": "${db.directus.name}",
 				"DB_USER": "${db.directus.user}", "DB_PASSWORD": "${db.directus.password}", "SECRET": "${random}", "PUBLIC_URL": "${url}",

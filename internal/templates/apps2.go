@@ -145,7 +145,7 @@ var apps2 = []Template{
 		Description: "Collaborative wiki and documentation (Notion/Confluence alternative).",
 		Databases:   []Database{{Name: "docmost", Engine: "postgres"}, {Name: "redis", Engine: "redis", Mode: "dedicated"}},
 		Services: []Service{{
-			Name: "docmost", Image: "docker.io/docmost/docmost:latest", Type: "web", Port: 3000, Size: "small",
+			Name: "docmost", Image: "docker.io/docmost/docmost:latest", Type: "web", Port: 3000, Size: "medium",
 			Env: map[string]string{
 				"APP_URL": "${url}", "APP_SECRET": "${random}", "DATABASE_URL": "${db.docmost.url}", "REDIS_URL": "${db.redis.url}",
 			},
@@ -194,7 +194,7 @@ var apps2 = []Template{
 		ID: "grist", Title: "Grist", Category: "Databases", Website: "https://www.getgrist.com",
 		Description: "Relational spreadsheets: a spreadsheet with the power of a database.",
 		Services: []Service{{
-			Name: "grist", Image: "docker.io/gristlabs/grist:latest", Type: "web", Port: 8484, Size: "small",
+			Name: "grist", Image: "docker.io/gristlabs/grist:latest", Type: "web", Port: 8484, Size: "medium",
 			Env:     map[string]string{"APP_HOME_URL": "${url}", "GRIST_SESSION_SECRET": "${random}", "GRIST_FORCE_LOGIN": "true"},
 			Inputs:  []EnvInput{{Key: "GRIST_DEFAULT_EMAIL", Required: true, Placeholder: "you@example.com", Hint: "Email of the owner (administrator)"}},
 			Volumes: []model.Volume{vol("data", "/persist")},

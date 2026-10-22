@@ -333,6 +333,9 @@ func (r *Runtime) Run(ctx context.Context, req proto.RunRequest) (string, error)
 		if k, v := loopbackBind(req.Env); k != "" {
 			err = fmt.Errorf("%w\nThe environment sets %s=%s: the app only listens inside its container. Set %s=0.0.0.0 (Environment tab) or remove it", err, k, v, k)
 		}
+		if n := oomKills(id); n > 0 {
+			err = fmt.Errorf("%w\nThe app ran out of memory (killed %d time(s) at its %d MB limit): give the service a larger size in Settings → Resources", err, n, req.Resources.MemoryLimitMB)
+		}
 		tail, _ := r.Logs(id, 30)
 		_ = r.Remove(ctx, id, 0)
 		return "", fmt.Errorf("%w\n--- last log lines ---\n%s", err, strings.Join(tail, "\n"))
