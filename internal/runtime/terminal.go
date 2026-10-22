@@ -109,4 +109,4 @@ func (t *Terminal) Close() {
 
 // Done is closed when the process has exited; ExitCode is valid then.
 func (t *Terminal) Done() <-chan struct{} { return t.done }
-func (t *Terminal) ExitCode() int        { return t.code }
+func (t *Terminal) ExitCode() int         { return t.code }

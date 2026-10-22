@@ -83,8 +83,8 @@ const (
 	CmdJob         = "job"
 	CmdTransfer    = "transfer"
 	CmdDetect      = "detect"
-	CmdArchive     = "archive" // tar.gz a directory under the data dir (volume backups, static sites)
-	CmdExtract     = "extract" // unpack such an archive into a directory
+	CmdArchive     = "archive"  // tar.gz a directory under the data dir (volume backups, static sites)
+	CmdExtract     = "extract"  // unpack such an archive into a directory
 	CmdTermOpen    = "termopen" // interactive shell in a container (see TermOpenRequest)
 	// CmdRefreshImage pulls an image even when it is already on the node (agents without it do
 	// not answer: the caller sees no responders and must not go on).
@@ -441,8 +441,10 @@ type TermCtl struct {
 
 const TermIdleTimeout = 90 * time.Second
 
-func TermInSubject(nodeID, session string) string  { return AgentSubject(nodeID, "term."+session+".in") }
-func TermCtlSubject(nodeID, session string) string { return AgentSubject(nodeID, "term."+session+".ctl") }
+func TermInSubject(nodeID, session string) string { return AgentSubject(nodeID, "term."+session+".in") }
+func TermCtlSubject(nodeID, session string) string {
+	return AgentSubject(nodeID, "term."+session+".ctl")
+}
 func TermOutSubject(nodeID, session string) string {
 	return fmt.Sprintf("paas.node.%s.term.%s.out", nodeID, session)
 }

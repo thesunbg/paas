@@ -94,7 +94,7 @@ var apps2 = []Template{
 		Repo:        "https://github.com/TinyAGI/tinyclaw", Branch: "main",
 		Services: []Service{{
 			Name: "tinyagi", Type: "worker", Size: "medium", Private: true,
-			Build: &Build{RootDir: ""},
+			Build: &Build{RootDir: "", Content: tinyagiDockerfile},
 			Env:   map[string]string{"TINYAGI_SKIP_UPDATE_CHECK": "1"},
 			Inputs: []EnvInput{
 				{Key: "ANTHROPIC_API_KEY", Hint: "Anthropic API key (the default agent uses Claude)"},
@@ -267,3 +267,36 @@ var apps2 = []Template{
 		}},
 	},
 }
+
+// tinyagiDockerfile builds TinyAGI at a fixed commit (cloned by the build itself, so
+// the service's own checkout only provides the build context). The repository has no
+// lockfile, so its own Dockerfile installs today's dependencies, which no longer
+// compile against it (@clack/prompts changed its types); this one installs them
+// as they were on the commit's date. Otherwise it follows the upstream Dockerfile.
+const tinyagiDockerfile = `FROM node:20-slim AS builder
+ARG TINYAGI_COMMIT=2db3a03a891b302c460f624d6c5a0523b8aa3528
+ARG DEPS_BEFORE=2026-03-31
+RUN apt-get update && apt-get install -y python3 make g++ git && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+RUN git init -q . && git remote add origin https://github.com/TinyAGI/tinyclaw.git \
+ && git fetch -q --depth 1 origin "$TINYAGI_COMMIT" && git checkout -q FETCH_HEAD
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+RUN npm install --before="$DEPS_BEFORE" --no-audit --no-fund
+RUN npm run build
+RUN npm prune --omit=dev
+
+FROM node:20-slim
+RUN apt-get update && apt-get install -y git chromium && rm -rf /var/lib/apt/lists/*
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+RUN npm install -g @anthropic-ai/claude-code @openai/codex agent-browser 2>/dev/null || true
+RUN npx playwright install chromium 2>/dev/null || true
+WORKDIR /app
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/package.json /app/tsconfig.base.json ./
+COPY --from=builder /app/.agents ./.agents
+COPY --from=builder /app/AGENTS.md /app/heartbeat.md /app/SOUL.md /app/docker-entrypoint.sh ./
+RUN mkdir -p /root/.tinyagi /root/workspace && chmod +x docker-entrypoint.sh
+ENV TINYAGI_HOME=/root/.tinyagi NODE_ENV=production TINYAGI_API_PORT=3777
+ENTRYPOINT ["./docker-entrypoint.sh"]
+`

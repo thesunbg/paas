@@ -74,6 +74,9 @@ type BuildConfig struct {
 	BuildCmd   string `json:"build_cmd,omitempty"`
 	StartCmd   string `json:"start_cmd,omitempty"`
 	OutputDir  string `json:"output_dir,omitempty"`
+	// DockerfileContent, when set, is written into the checkout and built instead
+	// of the repository's own Dockerfile (templates that must fix an upstream build).
+	DockerfileContent string `json:"dockerfile_content,omitempty"`
 }
 
 type Resources struct {

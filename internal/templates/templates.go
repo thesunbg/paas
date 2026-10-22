@@ -41,6 +41,8 @@ type Service struct {
 type Build struct {
 	RootDir    string `json:"root_dir"`
 	Dockerfile string `json:"dockerfile,omitempty"` // relative to RootDir; empty = Dockerfile
+	// Content replaces the repository's Dockerfile (an upstream that no longer builds).
+	Content string `json:"-"`
 }
 
 // Database is a managed database created by a template.

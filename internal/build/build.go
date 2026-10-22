@@ -93,6 +93,15 @@ func (b *Builder) Build(ctx context.Context, req proto.BuildRequest, log Logger)
 		}
 	}
 
+	if req.Build.DockerfileContent != "" {
+		const name = "Dockerfile.paas"
+		if err := os.WriteFile(filepath.Join(root, name), []byte(req.Build.DockerfileContent), 0o644); err != nil {
+			return proto.BuildReply{Error: err.Error()}
+		}
+		req.Dockerfile, req.Build.Builder = name, "dockerfile"
+		log("==> using the Dockerfile provided by the template")
+	}
+
 	keys := make([]string, 0, len(req.BuildEnv))
 	for k := range req.BuildEnv {
 		keys = append(keys, k)

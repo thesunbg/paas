@@ -434,7 +434,7 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 			}
 			svc.Source = *opts.Repo
 			svc.Source.RootDir, svc.Source.Dockerfile = ts.Build.RootDir, ts.Build.Dockerfile
-			svc.Build = model.BuildConfig{Builder: "dockerfile"}
+			svc.Build = model.BuildConfig{Builder: "dockerfile", DockerfileContent: ts.Build.Content}
 			svc.GitTokenEnc = opts.GitTokenEnc
 			svc.Spec.Image = ""
 		}

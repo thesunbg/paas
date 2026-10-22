@@ -1,9 +1,9 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
-	"bufio"
 	"errors"
 	"io"
 	"log/slog"
