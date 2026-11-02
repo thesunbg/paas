@@ -106,13 +106,14 @@ func (s *Server) recordMetrics(ctx context.Context, services []store.Service, by
 		if len(ins) == 0 && req == 0 {
 			continue
 		}
-		mem, cpu := 0, 0
+		mem, cpu, restarts := 0, 0, 0
 		for _, in := range ins {
 			mem += in.MemoryUsageMB
 			cpu += in.CPUUsageMillis
+			restarts += in.Restarts
 		}
-		_, _ = s.store.Q(ctx).Exec(ctx, `INSERT INTO service_metrics (service_id, ts, instances, memory_mb, cpu_millis, requests, errors_5xx, net_rx_bytes, net_tx_bytes)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`, svc.ID, now, len(ins), mem, cpu, req, errs, net.rx, net.tx)
+		_, _ = s.store.Q(ctx).Exec(ctx, `INSERT INTO service_metrics (service_id, ts, instances, memory_mb, cpu_millis, requests, errors_5xx, net_rx_bytes, net_tx_bytes, restarts)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING`, svc.ID, now, len(ins), mem, cpu, req, errs, net.rx, net.tx, restarts)
 		s.addDailyTraffic(ctx, "service_traffic_daily", "service_id", svc.ID, day, net)
 	}
 	committed, _ := s.store.NodeCommitted(ctx)

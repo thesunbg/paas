@@ -27,12 +27,12 @@ See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap, and [docs/API.md](d
 | Deploy | Git repositories (GitHub webhooks, auto-deploy, commit statuses), Docker images, Docker Compose import, one-click templates (WordPress, n8n, Uptime Kuma, Umami, Gitea, Metabase…) |
 | Build | Language detection for Node (npm/pnpm/yarn/bun, Next/Nuxt/SvelteKit/Remix/Astro/Vite/CRA/Angular/Nest/Express), Go, Python (Django/FastAPI/Flask), PHP (Laravel via FrankenPHP), Ruby (Rails), Rust, Java (Maven/Gradle), Deno and static HTML. Your own Dockerfile always wins. Build-time secrets never land in image layers |
 | Run | Web services, workers, static sites (SPA fallback, gzip, immutable asset caching), cron jobs, PR preview deployments, persistent volumes |
-| Operate | Zero-downtime rolling deploys, instant rollback, environment variables encrypted at rest, custom domains with automatic HTTPS (Let's Encrypt), live build and runtime logs, web console (exec), scaling, autoscaling (CPU / requests per second), metrics history, crash restarts and self-healing |
+| Operate | Zero-downtime rolling deploys, instant rollback, environment variables encrypted at rest, custom domains with automatic HTTPS (Let's Encrypt), live build and runtime logs, web console (exec), scaling, autoscaling (CPU / requests per second), metrics history, threshold alerts (CPU, memory, restarts, 5xx rate, instances) with "for" durations and cooldowns, HTTP(S) uptime checks with 24h / 7d uptime and TLS expiry warnings, Prometheus `/metrics` export, crash restarts and self-healing |
 | Databases | Shared or dedicated PostgreSQL / MySQL / MariaDB, plus Redis and MongoDB; linking injects `DATABASE_URL`; scheduled backups and restore; off-site copies to S3/R2/B2/MinIO; one-click upgrade from shared to dedicated |
 | Density | QoS classes (guaranteed / burstable / best-effort), per-node overcommit, sleep mode, memory-pressure eviction (PSI), language runtime tuning, right-sizing, zram, image and build-cache GC |
 | Cluster | `join` with one command, WireGuard mesh, internal DNS (`<service>.<project>.internal`), cross-node project isolation, internal image registry, cordon / drain, node health and rescheduling |
 | Security | Sessions + API tokens, TOTP two-factor auth, team RBAC (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, per-IP rate limiting at the edge |
-| Notify | Webhook, Slack, Discord and Telegram channels for deploys, crashes, node outages, failed backups and jobs |
+| Notify | Webhook, Slack, Discord and Telegram channels for deploys, crashes, node outages, failed backups and jobs, alerts firing and resolved, uptime checks down and recovered, expiring TLS certificates |
 | Interfaces | Web dashboard (embedded Svelte app), `paas` CLI, REST API |
 
 ## Install
@@ -130,6 +130,8 @@ The installer sets up an extra control plane with `server --database-url … --m
 | `PAAS_CLUSTER_BASE` | `10.100` | container address space (node *n* gets `10.(100+n).0.0/16`) |
 | `PAAS_WG_PORT` / `PAAS_MESH` | `51820` / `true` | WireGuard mesh |
 | `PAAS_IMAGE_RETENTION` | `3` | deployments kept per service for rollback |
+| `PAAS_METRICS_TOKEN` | | bearer token for the Prometheus endpoint `GET /metrics` (administrators can also use their own API token) |
+| `PAAS_UPTIME_ALLOW_PRIVATE` | `false` | let uptime checks reach private addresses (trusted networks) |
 | `PAAS_S3_ENDPOINT`, `PAAS_S3_BUCKET`, `PAAS_S3_ACCESS_KEY`, `PAAS_S3_SECRET_KEY`, `PAAS_S3_REGION`, `PAAS_S3_PREFIX` | | off-site database backups |
 | `PAAS_EVICT_PSI` / `PAAS_EVICT_MIN_FREE_MB` | `40` / `256` | memory-pressure eviction thresholds |
 | `PAAS_SERVER_NAME`, `PAAS_NATS_CLUSTER_ADDR`, `PAAS_NATS_ROUTES`, `PAAS_NATS_ADVERTISE`, `PAAS_MASTER_KEY`, `PAAS_CLUSTER_TOKEN` | | high availability (see above) |

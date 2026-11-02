@@ -795,6 +795,113 @@ export interface ChannelsResponse {
   events: string[];
 }
 
+export type AlertMetric = 'cpu_percent' | 'memory_percent' | 'restarts' | 'error_rate' | 'instances';
+export type AlertComparator = '>' | '>=' | '<' | '<=';
+
+export interface AlertState {
+  rule_id: string;
+  service_id: string;
+  service_name: string;
+  state: 'ok' | 'pending' | 'firing';
+  value: number | null;
+  pending_since: string | null;
+  firing_since: string | null;
+  resolved_at: string | null;
+  last_notified_at: string | null;
+  notified: boolean;
+  updated_at: string;
+}
+
+export interface AlertRule {
+  id: string;
+  project_id: string;
+  service_id: string | null;
+  name: string;
+  metric: AlertMetric;
+  comparator: AlertComparator;
+  threshold: number;
+  for_seconds: number;
+  cooldown_seconds: number;
+  channel_ids: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  states?: AlertState[];
+}
+
+export interface AlertsResponse {
+  rules: AlertRule[];
+  metrics: Record<AlertMetric, string>;
+  comparators: AlertComparator[];
+}
+
+export interface AlertInput {
+  name?: string;
+  service_id?: string;
+  metric?: AlertMetric;
+  comparator?: AlertComparator;
+  threshold?: number;
+  for_seconds?: number;
+  cooldown_seconds?: number;
+  channel_ids?: string[];
+  enabled?: boolean;
+}
+
+export interface UptimeStats {
+  uptime_24h: number | null;
+  uptime_7d: number | null;
+  avg_latency_ms_24h: number | null;
+  p95_latency_ms_24h: number | null;
+  checks_24h: number;
+}
+
+export interface UptimeCheck {
+  id: string;
+  project_id: string;
+  service_id: string | null;
+  name: string;
+  url: string;
+  method: 'GET' | 'HEAD' | 'POST';
+  expected_status: number;
+  keyword: string;
+  timeout_seconds: number;
+  interval_seconds: number;
+  failure_threshold: number;
+  channel_ids: string[];
+  enabled: boolean;
+  state: 'unknown' | 'up' | 'down';
+  consecutive_failures: number;
+  last_checked_at: string | null;
+  last_error: string;
+  state_changed_at: string | null;
+  cert_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+  stats?: UptimeStats;
+}
+
+export interface UptimeResult {
+  ts: string;
+  ok: boolean;
+  status_code: number;
+  latency_ms: number;
+  error?: string;
+}
+
+export interface UptimeInput {
+  name?: string;
+  service_id?: string;
+  url?: string;
+  method?: string;
+  expected_status?: number;
+  keyword?: string;
+  timeout_seconds?: number;
+  interval_seconds?: number;
+  failure_threshold?: number;
+  channel_ids?: string[];
+  enabled?: boolean;
+}
+
 export interface TwoFactorSetup {
   secret: string;
   otpauth_url: string;
@@ -1103,6 +1210,18 @@ export const api = {
   runJob: (id: string) => post<JobRun>(`/services/${e(id)}/run`),
   runs: (id: string) => get<JobRun[] | null>(`/services/${e(id)}/runs`),
   metrics: (id: string, hours: number) => get<ServiceMetrics>(`/services/${e(id)}/metrics?hours=${hours}`),
+
+  // Alerts and uptime checks
+  alerts: (project: string, service?: string) => get<AlertsResponse>(`/projects/${e(project)}/alerts${service ? '?service=' + e(service) : ''}`),
+  createAlert: (project: string, input: AlertInput) => post<AlertRule>(`/projects/${e(project)}/alerts`, input),
+  updateAlert: (id: string, input: AlertInput) => patch<AlertRule>(`/alerts/${e(id)}`, input),
+  deleteAlert: (id: string) => del(`/alerts/${e(id)}`),
+  uptimeChecks: (project: string, service?: string) =>
+    get<{ checks: UptimeCheck[] }>(`/projects/${e(project)}/uptime${service ? '?service=' + e(service) : ''}`),
+  uptimeCheck: (id: string, limit = 60) => get<{ check: UptimeCheck; results: UptimeResult[] }>(`/uptime/${e(id)}?limit=${limit}`),
+  createUptime: (project: string, input: UptimeInput) => post<UptimeCheck>(`/projects/${e(project)}/uptime`, input),
+  updateUptime: (id: string, input: UptimeInput) => patch<UptimeCheck>(`/uptime/${e(id)}`, input),
+  deleteUptime: (id: string) => del(`/uptime/${e(id)}`),
 
   // Deployments
   deployment: (id: string) => get<DeploymentDetail>(`/deployments/${e(id)}`),

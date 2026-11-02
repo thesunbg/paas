@@ -56,6 +56,11 @@
     'backup.failed': 'Backup failed',
     'job.failed': 'Cron job failed',
     autoscale: 'Autoscaling changes',
+    'alert.firing': 'Alert firing',
+    'alert.resolved': 'Alert resolved',
+    'uptime.down': 'Uptime check down',
+    'uptime.up': 'Uptime check recovered',
+    'uptime.cert': 'TLS certificate expiring',
   };
 
   async function add(e: SubmitEvent) {

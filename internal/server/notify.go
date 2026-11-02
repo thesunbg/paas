@@ -19,7 +19,8 @@ import (
 )
 
 // Notification event names.
-var notificationEvents = []string{"deploy.succeeded", "deploy.failed", "instance.crashloop", "instance.evicted", "node.offline", "backup.failed", "job.failed", "autoscale", "database.quota", "database.failover", "database.eol"}
+var notificationEvents = []string{"deploy.succeeded", "deploy.failed", "instance.crashloop", "instance.evicted", "node.offline", "backup.failed", "job.failed", "autoscale", "database.quota", "database.failover", "database.eol",
+	"alert.firing", "alert.resolved", "uptime.down", "uptime.up", "uptime.cert"}
 
 var notifyClient = &http.Client{Timeout: 10 * time.Second}
 
@@ -62,6 +63,30 @@ func (s *Server) notify(ctx context.Context, teamID, event, text string, data ma
 	}
 }
 
+// notifyVia delivers an event to the given channels of the team (an alert rule's or
+// uptime check's own choice, whatever events they subscribe to), or, when none are
+// given, to the team's channels subscribed to the event.
+func (s *Server) notifyVia(ctx context.Context, teamID string, channelIDs []string, event, text string, data map[string]any) {
+	if len(channelIDs) == 0 {
+		s.notify(ctx, teamID, event, text, data)
+		return
+	}
+	channels, err := s.store.Channels(ctx, teamID)
+	if err != nil {
+		return
+	}
+	for _, c := range channels {
+		if !slices.Contains(channelIDs, c.ID) {
+			continue
+		}
+		go func(c store.NotificationChannel) {
+			if err := s.send(c, event, text, data); err != nil {
+				slog.Warn("notification failed", "channel", c.Name, "event", event, "err", err)
+			}
+		}(c)
+	}
+}
+
 // notifyAdmins sends cluster-level events to every administrator's team.
 func (s *Server) notifyAdmins(ctx context.Context, event, text string, data map[string]any) {
 	teams, err := s.store.AdminTeamIDs(ctx)
@@ -80,10 +105,13 @@ func (s *Server) send(c store.NotificationChannel, event, text string, data map[
 	}
 	icon := "ℹ️"
 	switch {
-	case strings.HasSuffix(event, "failed") || event == "node.offline" || event == "instance.crashloop" || event == "database.failover" || event == "database.quota":
+	case strings.HasSuffix(event, "failed") || event == "node.offline" || event == "instance.crashloop" || event == "database.failover" || event == "database.quota" ||
+		event == "alert.firing" || event == "uptime.down":
 		icon = "🔴"
-	case strings.HasSuffix(event, "succeeded"):
+	case strings.HasSuffix(event, "succeeded") || event == "alert.resolved" || event == "uptime.up":
 		icon = "✅"
+	case event == "uptime.cert":
+		icon = "⚠️"
 	}
 	msg := icon + " " + text
 	var url string
@@ -172,7 +200,8 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(in.Events) == 0 {
-		in.Events = []string{"deploy.failed", "instance.crashloop", "node.offline", "backup.failed", "job.failed", "database.quota", "database.failover", "database.eol"}
+		in.Events = []string{"deploy.failed", "instance.crashloop", "node.offline", "backup.failed", "job.failed", "database.quota", "database.failover", "database.eol",
+			"alert.firing", "alert.resolved", "uptime.down", "uptime.up", "uptime.cert"}
 	}
 	for _, e := range in.Events {
 		if !slices.Contains(notificationEvents, e) {
