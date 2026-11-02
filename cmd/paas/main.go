@@ -172,6 +172,9 @@ Usage:
   paas rollback <service> [deployment-id]
   paas exec <service> -- <command>
   paas domains <service> [add|rm <hostname>]
+  paas scan <service> [--all]          Latest vulnerability scan of the service's image
+  paas scan policy [off|warn|block] [--threshold CRITICAL|HIGH|MEDIUM|LOW]
+                                       Show or set the project's scan policy (setting: team admin)
   paas db ls
   paas db create <name> --engine postgres|mysql|mariadb|redis|mongo [--mode shared|dedicated] [--size micro] [--link svc]
   paas db info <name>
@@ -234,6 +237,8 @@ func main() {
 		err = cmdExec(rest)
 	case "domains":
 		err = cmdDomains(rest)
+	case "scan":
+		err = cmdScan(rest)
 	case "db":
 		err = cmdDB(rest)
 	case "nodes":
@@ -578,7 +583,7 @@ func splitFlags(args []string) (pos, flags []string) {
 
 func boolFlag(f string) bool {
 	switch strings.TrimLeft(f, "-") {
-	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart":
+	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "all":
 		return true
 	}
 	return false

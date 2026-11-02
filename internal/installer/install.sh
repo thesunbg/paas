@@ -23,6 +23,7 @@
 #   --binary URL|PATH    paasd binary to install (default: $URL/download/paasd in join, else latest GitHub release)
 #   --mirror HOST        Docker Hub pull-through mirror (e.g. mirror.gcr.io)
 #   --no-zram            do not configure compressed swap in RAM
+#   --no-trivy           do not install Trivy (image vulnerability scanner) on build nodes
 #   --database-url URL   use this PostgreSQL instead of installing one locally (server)
 #   --master-key-file F  copy of /var/lib/paas/master.key from the first control plane (server)
 #   --server-name NAME   unique name of this control plane (server; default: hostname)
@@ -31,7 +32,7 @@ set -eu
 
 MODE="${1:-server}"; [ $# -gt 0 ] && shift
 DOMAIN=""; DASH=""; EMAIL=""; HTTPS=0; ROLES=""; URL=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
-DBURL=""; KEYFILE=""; SNAME=""; ROUTES=""
+DBURL=""; KEYFILE=""; SNAME=""; ROUTES=""; TRIVY=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN="$2"; shift 2;;
@@ -44,6 +45,7 @@ while [ $# -gt 0 ]; do
     --binary) BINARY="$2"; shift 2;;
     --mirror) MIRROR="$2"; shift 2;;
     --no-zram) ZRAM=0; shift;;
+    --no-trivy) TRIVY=0; shift;;
     --database-url) DBURL="$2"; shift 2;;
     --master-key-file) KEYFILE="$2"; shift 2;;
     --server-name) SNAME="$2"; shift 2;;
@@ -57,6 +59,10 @@ RUNC_VERSION="${RUNC_VERSION:-1.3.0}"
 CRUN_VERSION="${CRUN_VERSION:-1.24}"
 CNI_VERSION="${CNI_VERSION:-1.8.0}"
 BUILDKIT_VERSION="${BUILDKIT_VERSION:-0.25.1}"
+# Image vulnerability scanner on build nodes. Pinned; the tarball is checked against
+# TRIVY_SHA256 when set, else against the checksums file of the same release.
+TRIVY_VERSION="${TRIVY_VERSION:-0.65.0}"
+TRIVY_SHA256="${TRIVY_SHA256:-}"
 PAAS_REPO="${PAAS_REPO:-thesunbg/paas}"
 
 trap 'rc=$?; if [ $rc -ne 0 ]; then printf "\033[1;31merror:\033[0m installation failed (exit %s); rerun with sh -x to see where\n" "$rc" >&2; fi' EXIT
@@ -106,6 +112,30 @@ install_packages() {
   else
     die "unsupported distribution (need apt or dnf)"
   fi
+}
+
+# install_trivy puts the image scanner on a build node. paas-agent runs it on the
+# host against an exported image archive, offline: it only downloads its
+# vulnerability DB (cached in /var/lib/paas/trivy, refreshed at most every 12 h).
+install_trivy() {
+  if command -v trivy >/dev/null && trivy --version 2>/dev/null | grep -q "Version: ${TRIVY_VERSION}\$"; then
+    return
+  fi
+  case "$ARCH" in amd64) tarch=64bit;; arm64) tarch=ARM64;; esac
+  name="trivy_${TRIVY_VERSION}_Linux-${tarch}.tar.gz"
+  base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+  log "installing Trivy $TRIVY_VERSION (image vulnerability scanner)"
+  fetch "$base/$name" "$1/$name"
+  if [ -n "$TRIVY_SHA256" ]; then
+    want="$TRIVY_SHA256"
+  else
+    fetch "$base/trivy_${TRIVY_VERSION}_checksums.txt" "$1/trivy-checksums.txt"
+    want=$(awk -v n="$name" '$2 == n {print $1}' "$1/trivy-checksums.txt")
+  fi
+  got=$(sha256sum "$1/$name" | awk '{print $1}')
+  [ -n "$want" ] && [ "$got" = "$want" ] || die "Trivy $name: checksum mismatch (got $got, want ${want:-none}); rerun with --no-trivy to skip"
+  tar -xzf "$1/$name" -C "$1" trivy
+  install -m 0755 "$1/trivy" /usr/local/bin/trivy
 }
 
 install_runtime() {
@@ -158,6 +188,7 @@ EOF
     if [ -n "$MIRROR" ]; then
       printf '[registry."docker.io"]\n  mirrors = ["%s"]\n' "$MIRROR" >> /etc/buildkit/buildkitd.toml
     fi
+    if [ "$TRIVY" = 1 ]; then install_trivy "$tmp"; fi
     cat > /etc/systemd/system/buildkit.service <<EOF
 [Unit]
 Description=BuildKit (paas builds)

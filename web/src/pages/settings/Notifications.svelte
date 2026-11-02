@@ -16,7 +16,7 @@
   let name = $state('');
   let kind = $state<ChannelKind>('slack');
   let target = $state('');
-  let picked = $state<string[]>(['deploy.failed', 'instance.crashloop', 'node.offline', 'backup.failed', 'job.failed']);
+  let picked = $state<string[]>(['deploy.failed', 'deploy.vulnerable', 'instance.crashloop', 'node.offline', 'backup.failed', 'job.failed']);
   let formError = $state('');
 
   const team = $derived(currentTeam());
@@ -50,6 +50,7 @@
   const eventLabels: Record<string, string> = {
     'deploy.succeeded': 'Deploy succeeded',
     'deploy.failed': 'Deploy failed',
+    'deploy.vulnerable': 'Vulnerabilities found in a deployed image',
     'instance.crashloop': 'Instance crash-looping',
     'instance.evicted': 'Instance evicted',
     'node.offline': 'Node offline',

@@ -278,6 +278,48 @@ export interface Deployment {
   finished_at: string | null;
 }
 
+export type ScanSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
+export type ScanMode = 'off' | 'warn' | 'block';
+
+export interface ScanPolicy {
+  mode: ScanMode;
+  threshold: Exclude<ScanSeverity, 'UNKNOWN'>;
+}
+
+export interface ScanFinding {
+  id: string;
+  severity: ScanSeverity;
+  pkg: string;
+  installed: string;
+  fixed?: string;
+  title?: string;
+  target?: string;
+  url?: string;
+}
+
+/** Vulnerability scan of one deployment's image. */
+export interface ImageScan {
+  deployment_id: string;
+  service_id: string;
+  image: string;
+  status: 'scanned' | 'unavailable';
+  scanner: string;
+  scanner_version: string;
+  db_updated_at: string | null;
+  os: string;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unknown: number;
+  findings: ScanFinding[];
+  policy_mode: ScanMode;
+  threshold: string;
+  blocked: boolean;
+  message: string;
+  scanned_at: string;
+}
+
 export interface DatabaseLink {
   service_id: string;
   database_id: string;
@@ -1110,6 +1152,9 @@ export const api = {
   deploymentLogStreamURL: (id: string) => `${BASE}/deployments/${e(id)}/logs/stream`,
   rollback: (id: string) => post<Deployment>(`/deployments/${e(id)}/rollback`),
   cancelDeployment: (id: string) => post<{ status: string }>(`/deployments/${e(id)}/cancel`),
+  deploymentScan: (id: string) => get<ImageScan>(`/deployments/${e(id)}/scan`),
+  serviceScan: (id: string) => get<{ scan: ImageScan | null; policy: ScanPolicy }>(`/services/${e(id)}/scan`),
+  setScanPolicy: (projectId: string, p: ScanPolicy) => put<ScanPolicy>(`/projects/${e(projectId)}/scan-policy`, p),
 
   // Databases
   database: (id: string) => get<DatabaseDetail>(`/databases/${e(id)}`),

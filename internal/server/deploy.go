@@ -129,6 +129,13 @@ func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
 			s.failDeployment(ctx, d, svc, err)
 			return
 		}
+		if d.Image != "" && d.BuildNodeID != nil {
+			// The image is still only on the build node: scan it there.
+			if err := s.scanDeployment(ctx, svc, d, *d.BuildNodeID); err != nil {
+				s.failDeployment(ctx, d, svc, err)
+				return
+			}
+		}
 	default:
 		img := svc.Spec.Image
 		if img == "" {
@@ -142,6 +149,11 @@ func (s *Server) runDeployment(ctx context.Context, d *store.Deployment) {
 		d.Detected = "image"
 		s.hub.Log(d.ID, "==> using image "+d.Image)
 		_ = s.store.UpdateDeploymentBuilt(ctx, d)
+		// A build node pulls the image and scans it.
+		if err := s.scanDeployment(ctx, svc, d, ""); err != nil {
+			s.failDeployment(ctx, d, svc, err)
+			return
+		}
 	}
 	// Build ran unlocked; the service may have been stopped or deleted meanwhile.
 	unlock := s.lock(d.ServiceID)

@@ -18,6 +18,7 @@
   import Console from './service/Console.svelte';
   import Runs from './service/Runs.svelte';
   import Metrics from './service/Metrics.svelte';
+  import Security from './service/Security.svelte';
 
   let { id, tab = 'overview', sub }: { id: string; tab?: string; sub?: string } = $props();
 
@@ -52,6 +53,7 @@
       { id: 'metrics', label: 'Metrics', hide: kind === 'static' || kind === 'cron' },
       { id: 'logs', label: 'Logs', hide: kind === 'static' || kind === 'cron' },
       { id: 'env', label: 'Environment' },
+      { id: 'security', label: 'Security', hide: kind === 'static' },
       { id: 'domains', label: 'Domains', hide: kind === 'worker' || kind === 'cron' },
       { id: 'settings', label: 'Settings' },
       { id: 'console', label: 'Console', hide: !isDev || kind === 'static' || kind === 'cron' },
@@ -120,6 +122,8 @@
         <Logs serviceId={id} />
       {:else if tab === 'env'}
         <Env serviceId={id} {detail} reload={load} canEdit={isDev} />
+      {:else if tab === 'security'}
+        <Security {detail} />
       {:else if tab === 'domains'}
         <Domains {detail} reload={load} canEdit={isDev} />
       {:else if tab === 'settings'}

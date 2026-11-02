@@ -25,13 +25,13 @@ See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap, and [docs/API.md](d
 | Area | What you get |
 |---|---|
 | Deploy | Git repositories (GitHub webhooks, auto-deploy, commit statuses), Docker images, Docker Compose import, one-click templates (WordPress, n8n, Uptime Kuma, Umami, Gitea, Metabase…) |
-| Build | Language detection for Node (npm/pnpm/yarn/bun, Next/Nuxt/SvelteKit/Remix/Astro/Vite/CRA/Angular/Nest/Express), Go, Python (Django/FastAPI/Flask), PHP (Laravel via FrankenPHP), Ruby (Rails), Rust, Java (Maven/Gradle), Deno and static HTML. Your own Dockerfile always wins. Build-time secrets never land in image layers |
+| Build | Language detection for Node (npm/pnpm/yarn/bun, Next/Nuxt/SvelteKit/Remix/Astro/Vite/CRA/Angular/Nest/Express), Go, Python (Django/FastAPI/Flask), PHP (Laravel via FrankenPHP), Ruby (Rails), Rust, Java (Maven/Gradle), Deno and static HTML. Your own Dockerfile always wins. Build-time secrets never land in image layers. Built and pulled images are scanned for known vulnerabilities (Trivy) |
 | Run | Web services, workers, static sites (SPA fallback, gzip, immutable asset caching), cron jobs, PR preview deployments, persistent volumes |
 | Operate | Zero-downtime rolling deploys, instant rollback, environment variables encrypted at rest, custom domains with automatic HTTPS (Let's Encrypt), live build and runtime logs, web console (exec), scaling, autoscaling (CPU / requests per second), metrics history, crash restarts and self-healing |
 | Databases | Shared or dedicated PostgreSQL / MySQL / MariaDB, plus Redis and MongoDB; linking injects `DATABASE_URL`; scheduled backups and restore; off-site copies to S3/R2/B2/MinIO; one-click upgrade from shared to dedicated |
 | Density | QoS classes (guaranteed / burstable / best-effort), per-node overcommit, sleep mode, memory-pressure eviction (PSI), language runtime tuning, right-sizing, zram, image and build-cache GC |
 | Cluster | `join` with one command, WireGuard mesh, internal DNS (`<service>.<project>.internal`), cross-node project isolation, internal image registry, cordon / drain, node health and rescheduling |
-| Security | Sessions + API tokens, TOTP two-factor auth, team RBAC (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, per-IP rate limiting at the edge |
+| Security | Sessions + API tokens, TOTP two-factor auth, team RBAC (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, per-IP rate limiting at the edge, image vulnerability scanning with a per-project policy (off / warn / block at a severity threshold) |
 | Notify | Webhook, Slack, Discord and Telegram channels for deploys, crashes, node outages, failed backups and jobs |
 | Interfaces | Web dashboard (embedded Svelte app), `paas` CLI, REST API |
 
