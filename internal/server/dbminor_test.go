@@ -214,7 +214,10 @@ func (e *minorEnv) post(t *testing.T, who string, db *store.Database, body any) 
 	return do(t, e.h, "POST", "/api/v1/databases/"+db.ID+"/update-minor", e.tok[who], body).Code
 }
 
-// settle waits until the update job has put the database back to ready.
+// settle waits until the update job has put the database back to ready and, for a
+// major upgrade, finished the move: abortMove/finishMove set "ready" first (so linked
+// services get their DATABASE_URL), then restart those services and only then clear
+// move_state.
 func (e *minorEnv) settle(t *testing.T, db *store.Database) *store.Database {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -223,7 +226,7 @@ func (e *minorEnv) settle(t *testing.T, db *store.Database) *store.Database {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Status != "upgrading" {
+		if got.Status != "upgrading" && got.MoveState == nil {
 			return got
 		}
 		time.Sleep(100 * time.Millisecond)
