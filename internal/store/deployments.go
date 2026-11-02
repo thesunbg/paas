@@ -176,6 +176,15 @@ func (s *Store) DeploymentLogs(ctx context.Context, deploymentID string, afterID
 	})
 }
 
+// DeploymentLogTail is the last n lines of a deployment's log, oldest first.
+func (s *Store) DeploymentLogTail(ctx context.Context, deploymentID string, n int) ([]string, error) {
+	rows, err := s.q(ctx).Query(ctx, `SELECT line FROM (SELECT id, line FROM deployment_logs WHERE deployment_id=$1 ORDER BY id DESC LIMIT $2) t ORDER BY id`, deploymentID, n)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
 func (s *Store) SetDeploymentPushed(ctx context.Context, id, ref string) error {
 	_, err := s.q(ctx).Exec(ctx, `UPDATE deployments SET pushed_image=$2 WHERE id=$1`, id, ref)
 	return err

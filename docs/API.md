@@ -9,6 +9,8 @@ Authentication, any of:
 
 Errors are `{"error": "message"}` with a 4xx/5xx status.
 
+AI agents can also use the [MCP endpoint](MCP.md) at `POST /mcp` (same API tokens, same permissions).
+
 ## Auth and users
 
 | Method | Path | Body | Response |
@@ -102,6 +104,8 @@ Service `status`: `created`, `deploying`, `running`, `sleeping`, `stopped`, `fai
 | GET | `/deployments/{id}/logs/stream` | SSE: `event: log` lines, final `event: done` with the status |
 | POST | `/deployments/{id}/rollback` | redeploys that artifact |
 | POST | `/deployments/{id}/cancel` | queued only |
+| POST | `/deployments/{id}/diagnose` | developer+. `{refresh?}` → `{summary, likely_cause, suggested_fixes[], provider, model, created_at, cached}`: asks the configured AI provider to explain the failure from the redacted log tail, app output and error. Suggestions only. Cached per deployment (`refresh` asks again); 400 when no provider is set, 409 while the deployment runs, 429 over 30 per user per hour, 504 when the model times out |
+| GET | `/deployments/{id}/diagnosis` | `{enabled, diagnosis}`: whether AI diagnosis is configured and the cached answer (or `null`) |
 
 Deployment `status`: `queued`, `building`, `deploying`, `active`, `superseded`, `failed`, `cancelled`.
 
@@ -222,6 +226,7 @@ and unlink with `DELETE /api/v1/me/github`.
 | GET/PUT | `/api/v1/admin/storage` | off-site S3 storage `{endpoint, region, bucket, access_key, secret_key, prefix, virtual_host}`; PUT tests it first, an empty endpoint turns it off. `PAAS_S3_*` env wins (`from_env`) |
 | GET/POST | `/api/v1/admin/state-backups` | platform state (control-plane database) backups: list `{last, backups, offsite_error, every}` / back up now |
 | GET | `/api/v1/admin/state-backups/{name}` | download a sealed backup (restore with `paasd restore-state --file`) |
+| GET/PUT | `/api/v1/admin/ai` | AI failure diagnosis provider `{provider, model, base_url, api_key}` (provider `anthropic`, `openai` or empty) → `{enabled, provider, model, base_url, has_key, default_model}`. `anthropic`: Messages API, key required, model defaults to `claude-sonnet-5-5`, `base_url` optional; `openai`: any OpenAI-compatible `/chat/completions` endpoint (`base_url` like `http://ollama:11434/v1`, model required, key optional). The key is stored encrypted and never returned; an empty `api_key` keeps the stored one; an empty provider turns AI off |
 | PUT | `/api/v1/admin/settings` | `{allow_signup?, limits?: {max_projects, max_services, max_databases, max_memory_mb, max_replicas, max_signups_per_ip_per_day}}` (0 = unlimited) |
 
 With sign-up on, anyone can register at `/#/signup` and gets a personal team. Limits apply to every

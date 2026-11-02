@@ -33,7 +33,8 @@ See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap, and [docs/API.md](d
 | Cluster | `join` with one command, WireGuard mesh, internal DNS (`<service>.<project>.internal`), cross-node project isolation, internal image registry, cordon / drain, node health and rescheduling |
 | Security | Sessions + API tokens, TOTP two-factor auth, team RBAC (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, per-IP rate limiting at the edge |
 | Notify | Webhook, Slack, Discord and Telegram channels for deploys, crashes, node outages, failed backups and jobs |
-| Interfaces | Web dashboard (embedded Svelte app), `paas` CLI, REST API |
+| AI / MCP | MCP endpoint (`/mcp`) so AI agents such as Claude Code can inspect, deploy, roll back, restart and scale apps with an API token and its RBAC; optional "Explain this failure" on failed deployments (Anthropic or any OpenAI-compatible / self-hosted model, secrets redacted, off by default) |
+| Interfaces | Web dashboard (embedded Svelte app), `paas` CLI, REST API, MCP server for AI agents ([docs/MCP.md](docs/MCP.md)) |
 
 ## Install
 

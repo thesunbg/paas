@@ -133,6 +133,8 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/deployments/{id}/logs/stream", s.handleDeploymentLogStream)
 	h("POST /api/v1/deployments/{id}/rollback", s.handleRollback)
 	h("POST /api/v1/deployments/{id}/cancel", s.handleCancelDeployment)
+	h("GET /api/v1/deployments/{id}/diagnosis", s.handleGetDiagnosis)
+	h("POST /api/v1/deployments/{id}/diagnose", s.handleDiagnose)
 
 	h("GET /api/v1/databases/{id}", s.handleGetDatabase)
 	h("DELETE /api/v1/databases/{id}", s.handleDeleteDatabase)
@@ -183,6 +185,11 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/admin/state-backups", s.handleListStateBackups)
 	h("POST /api/v1/admin/state-backups", s.handleCreateStateBackup)
 	h("GET /api/v1/admin/state-backups/{name}", s.handleDownloadStateBackup)
+	h("GET /api/v1/admin/ai", s.handleGetAI)
+	h("PUT /api/v1/admin/ai", s.handlePutAI)
+
+	// MCP for AI agents: its tools call back into this mux with the caller's token.
+	mux.HandleFunc("/mcp", s.handleMCP(mux))
 
 	mux.Handle("/", webui.Handler())
 	return logRequests(securityHeaders(mux))
