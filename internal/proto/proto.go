@@ -86,6 +86,11 @@ const (
 	CmdArchive     = "archive"  // tar.gz a directory under the data dir (volume backups, static sites)
 	CmdExtract     = "extract"  // unpack such an archive into a directory
 	CmdTermOpen    = "termopen" // interactive shell in a container (see TermOpenRequest)
+	// Volume moves between nodes (see VolumeRecvRequest).
+	CmdVolumeRecv   = "volrecv"
+	CmdVolumeSend   = "volsend"
+	CmdVolumeDigest = "voldigest"
+	CmdVolumeCommit = "volcommit"
 	// CmdRefreshImage pulls an image even when it is already on the node (agents without it do
 	// not answer: the caller sees no responders and must not go on).
 	CmdRefreshImage = "refreshimage"
@@ -421,6 +426,61 @@ type ExtractRequest struct {
 	File    string `json:"file"`
 	Dir     string `json:"dir"`
 	Replace bool   `json:"replace,omitempty"`
+}
+
+// VolumeRecvRequest opens a one-shot receiver for the volumes of a service on the node's
+// WireGuard mesh address (never anywhere else). It accepts one connection, from From (the
+// sender's mesh address), that starts with Token, and unpacks the tar stream it carries into
+// Dir (relative to the data dir). Cancel ends a receive of the same ID and removes Dir.
+type VolumeRecvRequest struct {
+	ID     string `json:"id"`
+	Token  string `json:"token,omitempty"`
+	From   string `json:"from,omitempty"`
+	Dir    string `json:"dir"`
+	Cancel bool   `json:"cancel,omitempty"`
+}
+
+type VolumeRecvReply struct {
+	Port  int    `json:"port,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// VolumeSendRequest streams Dir to the receiver at Addr (a mesh address) and waits for its answer.
+type VolumeSendRequest struct {
+	ID    string `json:"id"`
+	Addr  string `json:"addr"`
+	Token string `json:"token"`
+	Dir   string `json:"dir"`
+}
+
+// VolumeSum describes a directory tree: bytes of file content, entries, and a SHA-256 over every
+// entry's name, type, permissions, owner, size, link target and content.
+type VolumeSum struct {
+	Bytes  int64  `json:"bytes"`
+	Files  int64  `json:"files"`
+	Digest string `json:"digest"`
+}
+
+type VolumeSendReply struct {
+	Sent     VolumeSum `json:"sent"`
+	Received VolumeSum `json:"received"` // what the receiver says it unpacked
+	Error    string    `json:"error,omitempty"`
+}
+
+type VolumeDigestRequest struct {
+	Dir string `json:"dir"`
+}
+
+type VolumeDigestReply struct {
+	Sum   VolumeSum `json:"sum"`
+	Error string    `json:"error,omitempty"`
+}
+
+// VolumeCommitRequest renames a received tree (From) to the volumes directory of a service (To),
+// replacing what is there.
+type VolumeCommitRequest struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // TermOpenRequest starts an interactive process with a terminal in a running

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/thesunbg/paas/internal/proto"
 )
@@ -80,7 +81,27 @@ func archiveDir(dir, file string) (int64, error) {
 	}
 	zw := gzip.NewWriter(f)
 	tw := tar.NewWriter(zw)
-	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	walkErr := writeTree(tw, dir, nil)
+	err = errors.Join(walkErr, tw.Close(), zw.Close(), f.Close())
+	if err != nil {
+		os.Remove(tmp)
+		return 0, err
+	}
+	if err := os.Rename(tmp, file); err != nil {
+		return 0, err
+	}
+	st, err := os.Stat(file)
+	if err != nil {
+		return 0, err
+	}
+	return st.Size(), nil
+}
+
+// walkTree calls fn for every entry under dir that an archive keeps (directories, regular
+// files, symlinks), in lexical order, with the tar header that describes it. Archives, volume
+// moves and their checksums all walk a tree this way, so they agree on what it holds.
+func walkTree(dir string, fn func(path string, h *tar.Header) error) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil
@@ -115,36 +136,33 @@ func archiveDir(dir, file string) (int64, error) {
 			h.Uid, h.Gid = int(st.Uid), int(st.Gid)
 		}
 		h.Uname, h.Gname = "", ""
+		return fn(path, h)
+	})
+}
+
+// writeTree writes dir to tw. With sum set, every entry is also added to it.
+func writeTree(tw *tar.Writer, dir string, sum *treeSum) error {
+	return walkTree(dir, func(path string, h *tar.Header) error {
 		if err := tw.WriteHeader(h); err != nil {
 			return err
 		}
-		if info.Mode().IsRegular() {
-			src, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			// A file that shrinks while copied would break the archive: copy exactly h.Size.
-			_, err = io.CopyN(tw, io.MultiReader(src, zeroReader{}), h.Size)
-			src.Close()
-			if err != nil {
-				return err
-			}
+		var content io.Writer = tw
+		if sum != nil {
+			sum.header(h)
+			content = io.MultiWriter(tw, sum.h)
 		}
-		return nil
+		if h.Typeflag != tar.TypeReg {
+			return nil
+		}
+		src, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer src.Close()
+		// A file that shrinks while copied would break the archive: copy exactly h.Size.
+		_, err = io.CopyN(content, io.MultiReader(src, zeroReader{}), h.Size)
+		return err
 	})
-	err = errors.Join(walkErr, tw.Close(), zw.Close(), f.Close())
-	if err != nil {
-		os.Remove(tmp)
-		return 0, err
-	}
-	if err := os.Rename(tmp, file); err != nil {
-		return 0, err
-	}
-	st, err := os.Stat(file)
-	if err != nil {
-		return 0, err
-	}
-	return st.Size(), nil
 }
 
 type zeroReader struct{}
@@ -187,14 +205,20 @@ func extractArchive(file, dest string) error {
 	if err != nil {
 		return err
 	}
+	return extractTar(tar.NewReader(zr), dest, nil)
+}
+
+// extractTar unpacks tr into dest. Paths that leave dest, or go through a symlink, are refused.
+// With sum set, every entry unpacked is also added to it.
+func extractTar(tr *tar.Reader, dest string, sum *treeSum) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
-	tr := tar.NewReader(zr)
 	type dirMeta struct {
 		path     string
 		mode     fs.FileMode
 		uid, gid int
+		mtime    time.Time
 	}
 	var dirs []dirMeta
 	for {
@@ -213,12 +237,18 @@ func extractArchive(file, dest string) error {
 		if err := safeParent(dest, target); err != nil {
 			return err
 		}
+		if sum != nil {
+			switch h.Typeflag {
+			case tar.TypeDir, tar.TypeReg, tar.TypeSymlink:
+				sum.header(h)
+			}
+		}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return err
 			}
-			dirs = append(dirs, dirMeta{target, fs.FileMode(h.Mode) & fs.ModePerm, h.Uid, h.Gid})
+			dirs = append(dirs, dirMeta{target, fs.FileMode(h.Mode) & fs.ModePerm, h.Uid, h.Gid, h.ModTime})
 			continue
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -229,12 +259,20 @@ func extractArchive(file, dest string) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(out, tr); err != nil {
+			var w io.Writer = out
+			if sum != nil {
+				w = io.MultiWriter(out, sum.h)
+			}
+			if _, err := io.Copy(w, tr); err != nil {
 				out.Close()
 				return err
 			}
 			if err := out.Close(); err != nil {
 				return err
+			}
+			_ = os.Chmod(target, fs.FileMode(h.Mode)&fs.ModePerm) // the umask may have dropped bits
+			if !h.ModTime.IsZero() {
+				_ = os.Chtimes(target, h.ModTime, h.ModTime)
 			}
 		case tar.TypeSymlink:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -254,6 +292,9 @@ func extractArchive(file, dest string) error {
 		d := dirs[i]
 		_ = os.Chmod(d.path, d.mode)
 		_ = os.Lchown(d.path, d.uid, d.gid)
+		if !d.mtime.IsZero() {
+			_ = os.Chtimes(d.path, d.mtime, d.mtime)
+		}
 	}
 	return nil
 }

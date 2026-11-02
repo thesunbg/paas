@@ -53,6 +53,9 @@ type Agent struct {
 
 	fz *fencer // lease + self-fence of HA postgres
 
+	recvs  volumeRecvs // volume moves being received (volmove.go)
+	moveIP string      // tests only: the address volume moves use instead of the mesh address
+
 	jobsMu sync.Mutex
 	jobs   map[string]bool // job run IDs being handled (see handleJob), reported in the heartbeat
 
@@ -160,6 +163,18 @@ func (a *Agent) Run(ctx context.Context) error {
 		{proto.CmdPush, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handlePush) }},
 		{proto.CmdJob, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleJob) }},
 		{proto.CmdTransfer, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleTransfer) }},
+		{proto.CmdVolumeRecv, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
+			return bus.Handle(nc, s, a.handleVolumeRecv)
+		}},
+		{proto.CmdVolumeSend, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
+			return bus.Handle(nc, s, a.handleVolumeSend)
+		}},
+		{proto.CmdVolumeDigest, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
+			return bus.Handle(nc, s, a.handleVolumeDigest)
+		}},
+		{proto.CmdVolumeCommit, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
+			return bus.Handle(nc, s, a.handleVolumeCommit)
+		}},
 		{proto.CmdDetect, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleDetect) }},
 		{proto.CmdRefreshImage, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
 			return bus.Handle(nc, s, a.handleRefreshImage)

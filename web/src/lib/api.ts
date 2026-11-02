@@ -521,6 +521,52 @@ export interface VolumeBackups {
   node_online: boolean;
 }
 
+export type VolumeMovePhase = 'pending' | 'stopping' | 'copying' | 'verifying' | 'switching' | 'starting' | 'done' | 'failed' | 'aborted';
+
+/** A move of a service's volumes to another node (kind move), or a restore from a backup (kind restore). */
+export interface VolumeMove {
+  id: string;
+  service_id: string;
+  kind: 'move' | 'restore';
+  from_node: string | null;
+  to_node: string | null;
+  phase: VolumeMovePhase;
+  prev_status: string;
+  abort_requested: boolean;
+  backup_id: string | null;
+  rpo_at: string | null; // restore: time of the backup used (later writes are lost)
+  bytes: number;
+  files: number;
+  digest: string;
+  retain_days: number;
+  error: string;
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+export interface VolumeMoveStatus {
+  active: VolumeMove | null;
+  history: VolumeMove[];
+  movable: boolean;
+  reason: string;
+  node?: { id: string; name: string; online: boolean };
+  targets: { id: string; name: string; memory_available_mb: number }[]; // empty unless team admin
+}
+
+export interface DrainResult {
+  status: string;
+  moving: number;
+  pinned_stateful: string[];
+  moving_stateful: string[];
+}
+
+export interface RecoverNodeResult {
+  started: { service: string; id: string; move: string; node: string; rpo_at: string | null }[];
+  skipped: { kind: string; name: string; id: string; reason: string }[];
+}
+
 export interface StuckItem {
   kind: 'service' | 'database' | 'shared-database';
   id: string;
@@ -1123,8 +1169,16 @@ export const api = {
   recoverDatabase: (id: string, allowEmpty: boolean) => post<{ status: string }>(`/databases/${e(id)}/recover`, { allow_empty: allowEmpty }),
   volumeBackups: (id: string) => get<VolumeBackups>(`/services/${e(id)}/volume-backups`),
   volumeBackupNow: (id: string) => post<VolumeBackup>(`/services/${e(id)}/volume-backups`),
-  recoverService: (id: string, allowEmpty: boolean, backupId?: string) =>
-    post<{ node: string; backup: VolumeBackup | null }>(`/services/${e(id)}/recover`, { allow_empty: allowEmpty, backup_id: backupId }),
+  recoverService: (id: string, allowEmpty: boolean, backupId?: string, node?: string) =>
+    post<{ node: string; backup: VolumeBackup | null; move: VolumeMove; rpo_at: string | null }>(`/services/${e(id)}/recover`, {
+      allow_empty: allowEmpty,
+      backup_id: backupId,
+      node,
+    }),
+  volumeMove: (id: string) => get<VolumeMoveStatus>(`/services/${e(id)}/move`),
+  startVolumeMove: (id: string, node: string, retainDays?: number) =>
+    post<VolumeMove>(`/services/${e(id)}/move`, { node, retain_days: retainDays, confirm_downtime: true }),
+  abortVolumeMove: (id: string) => del(`/services/${e(id)}/move`),
   storage: () => get<StorageSettings>('/admin/storage'),
   putStorage: (input: StorageInput) => put<StorageSettings>('/admin/storage', input),
   stateBackups: () => get<StateBackups>('/admin/state-backups'),
@@ -1161,6 +1215,9 @@ export const api = {
   updateNode: (id: string, input: NodeUpdate) => patch<ClusterNode>(`/nodes/${e(id)}`, input),
   deleteNode: (id: string, force = false) => del(`/nodes/${e(id)}${force ? '?force=true' : ''}`),
   nodeStuck: (id: string) => get<StuckItem[] | null>(`/nodes/${e(id)}/stuck`),
+  drainNode: (id: string, moveVolumes: boolean) => post<DrainResult>(`/nodes/${e(id)}/drain`, { move_volumes: moveVolumes }),
+  recoverNode: (id: string, allowEmpty: boolean, node?: string) =>
+    post<RecoverNodeResult>(`/nodes/${e(id)}/recover`, { allow_empty: allowEmpty, node, confirm_data_loss: true }),
   nodeMetrics: (id: string) => get<NodeMetricPoint[] | null>(`/nodes/${e(id)}/metrics`),
   createJoinToken: (roles: string[]) => post<JoinToken>('/cluster/join-tokens', { roles }),
   sizes: () => get<SizesResponse>('/sizes'),

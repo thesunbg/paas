@@ -12,6 +12,7 @@
   import AutoscaleFields from '../../components/AutoscaleFields.svelte';
   import { parseCron } from '../../lib/cron';
   import VolumeBackups from '../../components/VolumeBackups.svelte';
+  import VolumeMove from '../../components/VolumeMove.svelte';
 
   let { detail, reload, canEdit }: { detail: ServiceDetail; reload: () => Promise<void>; canEdit: boolean } = $props();
 
@@ -465,6 +466,7 @@
       </div>
     {/if}
     {#if !isStatic && (s0.spec.volumes ?? []).length > 0}
+      <VolumeMove serviceId={s0.id} />
       <VolumeBackups serviceId={s0.id} {canEdit} />
     {/if}
     <div class="card">
