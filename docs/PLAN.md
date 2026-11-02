@@ -25,7 +25,14 @@ Mã nguồn đã chạy end-to-end trong môi trường thử nghiệm (2 node, 
 | HA control plane | ✅ | Nhiều `paasd server` dùng chung PostgreSQL, NATS chạy thành cluster, bầu leader bằng advisory lock, khoá phân tán theo service. Đã thử: tắt hẳn control plane chính thì bản còn lại lên leader trong khoảng 1 giây. PostgreSQL HA (Patroni/managed) thì tự lo |
 | Tự động thêm node qua API cloud (Hetzner/DO/AWS) | ⏳ | Chưa làm |
 | Lazy pulling, Firecracker, Wasm, CRIU | ⏳ | Giai đoạn 4 |
-| SSO/OIDC, tính phí, đa vùng/GeoDNS, quét image | ⏳ | Giai đoạn 4 |
+| Git host ngoài GitHub: GitLab, Gitea/Forgejo, Bitbucket Cloud | ✅ | Token theo team (mã hoá, chỉ gửi tới đúng host), webhook có xác thực, preview cho MR/PR, commit status. Chưa thử với server thật |
+| Cảnh báo theo ngưỡng, uptime check, Prometheus `/metrics` | ✅ | Leader đánh giá rule mỗi phút (CPU, RAM, restart, tỉ lệ 5xx, số instance), uptime check có cảnh báo chứng chỉ sắp hết hạn. Chưa có p95 latency vì proxy chưa đo |
+| Quét lỗ hổng image (Trivy) | ✅ | Chính sách theo project: off / warn / block theo ngưỡng severity. Chưa chạy end-to-end với containerd/BuildKit thật; nên ghim checksum Trivy trong installer |
+| Di chuyển service có volume giữa các node, khôi phục node mất | ✅ | Một lượt copy sau khi dừng (có downtime), qua mesh, kiểm SHA-256, giữ bản cũ 7 ngày; `drain --move-volumes`; khôi phục từ backup off-site có ghi RPO. Chưa thử trên cụm nhiều node thật |
+| SSO/OIDC | ✅ | PKCE, nonce, kiểm JWKS, liên kết tài khoản an toàn, tạo tài khoản tự động, map group → role, bắt buộc SSO theo domain (owner giữ đăng nhập mật khẩu dự phòng) |
+| Quota theo team | ✅ | Project, service, database, RAM/CPU reserve, RAM limit, disk DB, preview, domain. Mặc định không giới hạn |
+| MCP cho AI agent, AI chẩn đoán lỗi | ✅ | `POST /mcp` dùng chung RBAC với REST, không lộ secret, audit mọi lệnh ghi. AI chẩn đoán tắt mặc định (Anthropic hoặc API tương thích OpenAI) |
+| Tính phí, đa vùng/GeoDNS | ⏳ | Giai đoạn 4 |
 | VictoriaMetrics/VictoriaLogs | ↔️ | Thay bằng metrics tối giản trong Postgres (48 giờ) và log file trên agent, để nhẹ hơn |
 
 ---
