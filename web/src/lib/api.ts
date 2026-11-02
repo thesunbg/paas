@@ -308,6 +308,8 @@ export interface ServiceDetail {
   databases: LinkedDatabase[];
   webhook_url: string;
   webhook_secret: string;
+  /** Provider of the repository's host ('' when unknown: the GitHub format is shown). */
+  git_provider?: GitProvider | '';
   internal_host: string;
   recommendation: Recommendation | null;
   tuning_env: Record<string, string> | null;
@@ -779,6 +781,28 @@ export interface InstallResponse {
   warnings?: string[] | null;
 }
 
+export type GitProvider = 'github' | 'gitlab' | 'gitea' | 'bitbucket';
+
+/** A team's access token for one git host (the token itself is never returned). */
+export interface GitCredential {
+  id: string;
+  team_id: string;
+  provider: GitProvider;
+  host: string;
+  username: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GitCredentialInput {
+  provider: GitProvider;
+  host?: string;
+  username?: string;
+  token: string;
+  name?: string;
+}
+
 export type ChannelKind = 'webhook' | 'slack' | 'discord' | 'telegram';
 
 export interface Channel {
@@ -1058,6 +1082,9 @@ export const api = {
     post<Channel>(`/teams/${e(team)}/notifications`, input),
   deleteChannel: (team: string, id: string) => del(`/teams/${e(team)}/notifications/${e(id)}`),
   testChannel: (team: string, id: string) => post<{ status: string }>(`/teams/${e(team)}/notifications/${e(id)}/test`),
+  gitCredentials: (team: string) => get<{ credentials: GitCredential[]; providers: GitProvider[] }>(`/teams/${e(team)}/git-credentials`),
+  setGitCredential: (team: string, input: GitCredentialInput) => post<GitCredential>(`/teams/${e(team)}/git-credentials`, input),
+  deleteGitCredential: (team: string, id: string) => del(`/teams/${e(team)}/git-credentials/${e(id)}`),
   projects: (team: string) => get<ProjectListItem[] | null>(`/teams/${e(team)}/projects`),
   createProject: (team: string, name: string) => post<Project>(`/teams/${e(team)}/projects`, { name }),
 

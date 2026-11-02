@@ -25,6 +25,7 @@ See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap, and [docs/API.md](d
 | Area | What you get |
 |---|---|
 | Deploy | Git repositories (GitHub webhooks, auto-deploy, commit statuses), Docker images, Docker Compose import, one-click templates (WordPress, n8n, Uptime Kuma, Umami, Gitea, Metabase…) |
+| Git hosts | Private repositories from GitLab (gitlab.com or self-hosted), Gitea / Forgejo (codeberg.org or self-hosted) and Bitbucket Cloud with a per-team access token (encrypted, sent only to its own host); push-to-deploy webhooks with token / HMAC verification, MR/PR previews, commit statuses; `paas git-credentials`, `paas webhook` |
 | Build | Language detection for Node (npm/pnpm/yarn/bun, Next/Nuxt/SvelteKit/Remix/Astro/Vite/CRA/Angular/Nest/Express), Go, Python (Django/FastAPI/Flask), PHP (Laravel via FrankenPHP), Ruby (Rails), Rust, Java (Maven/Gradle), Deno and static HTML. Your own Dockerfile always wins. Build-time secrets never land in image layers |
 | Run | Web services, workers, static sites (SPA fallback, gzip, immutable asset caching), cron jobs, PR preview deployments, persistent volumes |
 | Operate | Zero-downtime rolling deploys, instant rollback, environment variables encrypted at rest, custom domains with automatic HTTPS (Let's Encrypt), live build and runtime logs, web console (exec), scaling, autoscaling (CPU / requests per second), metrics history, crash restarts and self-healing |

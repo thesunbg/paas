@@ -31,6 +31,9 @@ Errors are `{"error": "message"}` with a 4xx/5xx status.
 | GET/POST | `/teams/{team}/members` | `{email, role}` (role: admin, developer, viewer). Unknown emails get an account; the response contains `temporary_password` |
 | DELETE | `/teams/{team}/members/{user}` | |
 | GET/POST | `/teams/{team}/projects` | `{name}`. GET items include `services`, `running`, `databases` counts |
+| GET | `/teams/{team}/git-credentials` | viewer+. `{credentials: [{id, provider, host, username, name, created_at, updated_at}], providers}`; tokens are never returned |
+| POST | `/teams/{team}/git-credentials` | admin+. `{provider: gitlab\|gitea\|bitbucket\|github, host?, username?, token, name?}` → 201. One credential per host (saving again replaces it). `host` defaults to gitlab.com / bitbucket.org / github.com and is required for gitea; https only, no path |
+| DELETE | `/teams/{team}/git-credentials/{id}` | admin+ |
 
 Roles: `viewer` (read) < `developer` (deploy, configure) < `admin` (delete, restore, members) < `owner`.
 
@@ -72,7 +75,8 @@ Create body:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/services/{id}` | `{service, project, domains, urls, instances, deployments, databases, webhook_url, webhook_secret, internal_host, recommendation, tuning_env}` |
+| GET | `/services/{id}` | `{service, project, domains, urls, instances, deployments, databases, webhook_url, webhook_secret, git_provider, internal_host, recommendation, tuning_env}`. `webhook_url` is the endpoint for the repository's provider |
+| GET | `/services/{id}/webhook` | developer+. `{provider, url, secret, urls: {github, gitlab, gitea, bitbucket}}` |
 | PATCH | `/services/{id}` | same fields as create (partial). Runtime changes trigger a rolling restart |
 | DELETE | `/services/{id}` | |
 | POST | `/services/{id}/deploy` | `{commit_sha?}` → deployment (202) |
@@ -174,6 +178,18 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 
 `POST /webhooks/github/{serviceId}` — configure it in GitHub (content type `application/json`, secret = the service `webhook_secret`, event `push`). Pushes to the service branch deploy automatically; `root_dir` limits deploys to changes under that folder.
 
+The same push and preview behaviour for other hosts, all with the service `webhook_secret`:
+
+| Path | Provider | Verification | Events |
+|---|---|---|---|
+| `POST /webhooks/gitlab/{serviceId}` | GitLab (gitlab.com or self-hosted) | `X-Gitlab-Token` equals the secret | `Push Hook`, `Merge Request Hook` |
+| `POST /webhooks/gitea/{serviceId}` | Gitea / Forgejo | `X-Gitea-Signature` or `X-Forgejo-Signature`: hex HMAC-SHA256 of the body | `push`, `pull_request` |
+| `POST /webhooks/bitbucket/{serviceId}` | Bitbucket Cloud | `X-Hub-Signature: sha256=<hex HMAC>` (the secret is mandatory) | `repo:push`, `pullrequest:created/updated/fulfilled/rejected` |
+
+Pull / merge requests from forks never get previews. Bitbucket pushes carry no file lists, so `root_dir` does not filter them.
+
+**Private repositories on other hosts.** A team stores one access token per git host (`/teams/{team}/git-credentials`, encrypted at rest). Builds of the team's services whose repository is `https://<that host>/…` clone with it; it is never sent to another host, over http, or for a URL that carries credentials. A service's own `git_token` takes precedence. The same credential reports commit statuses (GitLab, Gitea, Bitbucket Cloud, GitHub) and posts the preview URL on the pull / merge request; give the token write access to statuses for that (GitLab `api`, Gitea write:repository, Bitbucket Repositories: Write). Clone user: `oauth2` for GitLab, `x-token-auth` for Bitbucket access tokens (set `username` for an app password), `x-access-token` otherwise. Build nodes only clone from public addresses, so a self-hosted host must resolve to a public IP.
+
 ## Databases as a service
 
 | Method | Path | Notes |
@@ -253,7 +269,7 @@ receives pushes and pull requests through the app webhook (no per-repository web
 
 ### Service fields (create / PATCH)
 - `"type": "cron"` with `"schedule": "*/15 * * * *"` (UTC, 5 fields or `@daily`/`@hourly`…), `"job_timeout_sec": 3600`, `"command": [...]`. Cron services get no domain and no replicas.
-- `"previews": true` — every pull request targeting the service branch gets its own service (`<slug>-pr-<n>`, URL `<slug>-pr-<n>-<project>.<base>`), sleeping when idle, deleted when the PR closes. Needs the GitHub webhook with the `pull_request` event.
+- `"previews": true` — every pull request targeting the service branch gets its own service (`<slug>-pr-<n>`, URL `<slug>-pr-<n>-<project>.<base>`), sleeping when idle, deleted when the PR closes. Needs the webhook with pull / merge request events (GitHub, GitLab, Gitea / Forgejo or Bitbucket).
 - `"autoscale": {"enabled": true, "min": 1, "max": 5, "target_cpu_percent": 70, "target_rps": 50}`.
 - `GET /services/{id}` additionally returns `previews` (list of services with `parent_id`/`preview_pr`) and `next_run` (cron).
 - Services have `parent_id` and `preview_pr` (null for normal services).

@@ -36,12 +36,22 @@ type pullRequestEvent struct {
 
 // handlePullRequest creates, updates or removes the preview deployment of a pull request.
 func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request, svc *store.Service, body []byte) {
+	var ev pullRequestEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+	s.handlePullRequestEvent(w, r, svc, ev)
+}
+
+// handlePullRequestEvent acts on a verified pull / merge request event from any
+// provider, mapped onto GitHub's shape.
+func (s *Server) handlePullRequestEvent(w http.ResponseWriter, r *http.Request, svc *store.Service, ev pullRequestEvent) {
 	if !svc.Spec.Previews || svc.ParentID != nil {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "reason": "previews disabled"})
 		return
 	}
-	var ev pullRequestEvent
-	if err := json.Unmarshal(body, &ev); err != nil || ev.Number == 0 {
+	if ev.Number <= 0 {
 		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
@@ -148,12 +158,11 @@ func (s *Server) ensurePreview(ctx context.Context, parent *store.Service, ev pu
 	return created, true, nil
 }
 
-// commentPreview posts the preview URL on the pull request (needs GitHub access).
+// commentPreview posts the preview URL on the pull / merge request (needs
+// credentials for the repository's host).
 func (s *Server) commentPreview(parent, preview *store.Service, pr int) {
 	m := githubRepoRe.FindStringSubmatch(parent.Source.Repo)
-	if m == nil || (parent.GitTokenEnc == "" && parent.Source.InstallationID == 0) {
-		return
-	}
+	github := m != nil && (parent.GitTokenEnc != "" || parent.Source.InstallationID != 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	doms, _ := s.store.DomainsForService(ctx, preview.ID)
@@ -162,6 +171,15 @@ func (s *Server) commentPreview(parent, preview *store.Service, pr int) {
 		urls = append(urls, s.urlFor(d.Hostname))
 	}
 	body := fmt.Sprintf("🚀 Preview deployment for **%s**: %s\n\nIt updates on every push and is removed when this pull request is closed.", parent.Name, strings.Join(urls, ", "))
+	if !github {
+		err := s.providerPost(ctx, parent, func(provider string) (string, any, error) {
+			return commentCall(provider, parent.Source.Repo, pr, body)
+		})
+		if err != nil {
+			slog.Debug("preview comment", "err", err)
+		}
+		return
+	}
 	if err := s.githubPost(ctx, parent, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", m[1], m[2], pr), map[string]string{"body": body}); err != nil {
 		slog.Debug("github comment", "err", err)
 	}

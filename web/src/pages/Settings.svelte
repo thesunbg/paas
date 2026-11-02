@@ -12,6 +12,7 @@
   import Notifications from './settings/Notifications.svelte';
   import TwoFactor from './settings/TwoFactor.svelte';
   import GitHub from './settings/GitHub.svelte';
+  import GitCredentials from './settings/GitCredentials.svelte';
   import System from './settings/System.svelte';
   import Users from './settings/Users.svelte';
   import GitHubSignIn from './settings/GitHubSignIn.svelte';
@@ -26,6 +27,7 @@
     { id: 'members', label: 'Team members' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'github', label: 'GitHub' },
+    { id: 'git', label: 'Git hosts' },
     ...(session.me?.user.is_admin ? [{ id: 'users', label: 'Users' }, { id: 'backups', label: 'Backups' }, { id: 'system', label: 'System' }] : []),
   ];
 
@@ -300,6 +302,8 @@
         <Notifications />
       {:else if tab === 'github'}
         <GitHub />
+      {:else if tab === 'git'}
+        <GitCredentials />
       {:else if tab === 'users' && session.me?.user.is_admin}
         <Users />
       {:else if tab === 'backups' && session.me?.user.is_admin}
