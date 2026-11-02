@@ -29,6 +29,7 @@ import (
 	"github.com/thesunbg/paas/internal/proto"
 	"github.com/thesunbg/paas/internal/proxy"
 	rt "github.com/thesunbg/paas/internal/runtime"
+	"github.com/thesunbg/paas/internal/scan"
 )
 
 const Version = "0.1.0"
@@ -39,6 +40,7 @@ type Agent struct {
 	rt      *rt.Runtime
 	net     *network.Manager
 	builder *build.Builder
+	scanner *scan.Trivy // image vulnerability scans (build nodes)
 	// buildBlocked explains why this node refuses builds (empty when it accepts them).
 	buildBlocked string
 	nodeID       string
@@ -100,6 +102,7 @@ func New(ctx context.Context, cfg config.Agent, nc *nats.Conn) (*Agent, error) {
 	}
 	if slices.Contains(cfg.Roles, "build") {
 		a.builder = build.New(cfg.BuildkitAddr, cfg.DataDir, 2)
+		a.scanner = scan.NewTrivy(filepath.Join(cfg.DataDir, "trivy"))
 	}
 	return a, nil
 }
@@ -161,6 +164,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		{proto.CmdTermOpen, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleTermOpen) }},
 		{proto.CmdBuild, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleBuild) }},
 		{proto.CmdPush, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handlePush) }},
+		{proto.CmdScan, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleScan) }},
 		{proto.CmdJob, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleJob) }},
 		{proto.CmdTransfer, func(nc *nats.Conn, s string) (*nats.Subscription, error) { return bus.Handle(nc, s, a.handleTransfer) }},
 		{proto.CmdVolumeRecv, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
@@ -181,7 +185,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}},
 	}
 	for _, s := range subs {
-		if (s.cmd == proto.CmdBuild || s.cmd == proto.CmdDetect || s.cmd == proto.CmdPush) && a.builder == nil {
+		if (s.cmd == proto.CmdBuild || s.cmd == proto.CmdDetect || s.cmd == proto.CmdPush || s.cmd == proto.CmdScan) && a.builder == nil {
 			continue
 		}
 		sub, err := s.fn(a.nc, proto.AgentSubject(a.nodeID, s.cmd))

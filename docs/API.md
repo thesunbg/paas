@@ -116,6 +116,21 @@ Service `status`: `created`, `deploying`, `running`, `sleeping`, `stopped`, `fai
 
 Deployment `status`: `queued`, `building`, `deploying`, `active`, `superseded`, `failed`, `cancelled`.
 
+### Vulnerability scans
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/deployments/{id}/scan` | viewer. The deployment's scan, 404 when it has none (static sites, rollbacks/restarts, policy `off`) |
+| GET | `/services/{id}/scan` | viewer. `{scan: <newest scan or null>, policy: {mode, threshold}}` |
+| GET | `/projects/{id}/scan-policy` | viewer. `{mode, threshold}`; default `{"mode":"warn","threshold":"CRITICAL"}` |
+| PUT | `/projects/{id}/scan-policy` | team admin. `{mode: off|warn|block, threshold: CRITICAL|HIGH|MEDIUM|LOW}` |
+
+A scan: `{deployment_id, service_id, image, status: scanned|unavailable, scanner, scanner_version, db_updated_at, os, critical, high, medium, low, unknown, findings: [{id, severity, pkg, installed, fixed, title, target, url}], policy_mode, threshold, blocked, message, scanned_at}`. `findings` holds the 200 most severe (fixable first within a severity); the counts cover everything, a CVE found twice in the same package version counting once.
+
+How it runs: after a build, the build node exports the image from containerd to a local archive and runs `trivy image --input <archive> --format json --scanners vuln --skip-db-update --offline-scan`. For a Docker-image deployment a build node first pulls the image the way a worker would. Trivy never contacts a registry and nothing from the image is executed. Its DB is cached in `<data dir>/trivy` and refreshed (`trivy image --download-db-only`) when older than 12 hours, so a scan on a fresh cache adds only the export and the analysis; when a refresh fails the cached copy is used and retried an hour later. Scans on one node run one at a time.
+
+Policy: `off` skips the scan. `warn` (default) records the result and deploys; findings at or above the threshold send `deploy.vulnerable`. `block` fails the deployment before any instance starts (log line `blocked by the vulnerability policy: N finding(s) at or above HIGH (...)`), sends `deploy.vulnerable`, and forgets the deployment's image so it cannot be rolled back to. When no scan can be made (Trivy not installed on the build node, an agent too old to scan, no online build node, scan error), `warn` deploys with `vulnerability scan skipped: <why>` and `block` fails closed with `vulnerability scan is required by the project policy (block) but could not run: <why>`. UNKNOWN severities never count towards the threshold. Rollbacks and restarts reuse an artifact and are not scanned again.
+
 ## Databases
 
 Create body: `{"name": "main", "engine": "postgres", "mode": "shared", "size": "micro", "link_services": ["<service id>"], "env_name": "DATABASE_URL", "backup_schedule_hours": 24}`.
@@ -363,7 +378,7 @@ receives pushes and pull requests through the app webhook (no per-repository web
 | DELETE | `/teams/{team}/notifications/{id}` | |
 | POST | `/teams/{team}/notifications/{id}/test` | sends a test message |
 
-Events: `deploy.succeeded`, `deploy.failed`, `instance.crashloop`, `instance.evicted`, `node.offline`, `backup.failed`, `job.failed`, `autoscale`.
+Events: `deploy.succeeded`, `deploy.failed`, `deploy.vulnerable`, `instance.crashloop`, `instance.evicted`, `node.offline`, `backup.failed`, `job.failed`, `autoscale`.
 
 ### Two-factor authentication
 | Method | Path | Notes |

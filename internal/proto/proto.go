@@ -94,6 +94,9 @@ const (
 	// CmdRefreshImage pulls an image even when it is already on the node (agents without it do
 	// not answer: the caller sees no responders and must not go on).
 	CmdRefreshImage = "refreshimage"
+	// CmdScan scans an image for known vulnerabilities on a build node (see ScanRequest).
+	// Agents without it do not answer: the caller treats that like a node without a scanner.
+	CmdScan = "scan"
 )
 
 type RegisterRequest struct {
@@ -336,6 +339,54 @@ type MeshPeer struct {
 
 type MeshTable struct {
 	Peers []MeshPeer `json:"peers"`
+}
+
+// ScanRequest asks a build node to scan an image for known vulnerabilities. The
+// image is taken from the node's containerd store (a build's output), pulled
+// first when Pull is set (an image deployment), then exported to a local archive
+// the scanner reads: the scanner itself never contacts a registry.
+type ScanRequest struct {
+	Image             string `json:"image"`
+	Pull              bool   `json:"pull,omitempty"`
+	PlainHTTPRegistry string `json:"plain_http_registry,omitempty"`
+	LogSubject        string `json:"log_subject,omitempty"`
+}
+
+type ScanReply struct {
+	// Missing is set when the node has no scanner binary (Error says so too).
+	Missing bool        `json:"missing,omitempty"`
+	Result  *ScanResult `json:"result,omitempty"`
+	Error   string      `json:"error,omitempty"`
+}
+
+// ScanResult summarises one image scan.
+type ScanResult struct {
+	Scanner        string     `json:"scanner"` // e.g. trivy
+	ScannerVersion string     `json:"scanner_version"`
+	DBUpdatedAt    *time.Time `json:"db_updated_at,omitempty"`
+	ScannedAt      time.Time  `json:"scanned_at"`
+	OS             string     `json:"os,omitempty"` // e.g. "alpine 3.19.1"
+	Critical       int        `json:"critical"`
+	High           int        `json:"high"`
+	Medium         int        `json:"medium"`
+	Low            int        `json:"low"`
+	Unknown        int        `json:"unknown"`
+	// Findings holds the most severe findings, at most MaxScanFindings.
+	Findings []ScanFinding `json:"findings"`
+}
+
+// MaxScanFindings bounds the findings kept per scan.
+const MaxScanFindings = 200
+
+type ScanFinding struct {
+	ID        string `json:"id"` // CVE-2024-0727, GHSA-...
+	Severity  string `json:"severity"`
+	Pkg       string `json:"pkg"`
+	Installed string `json:"installed"`
+	Fixed     string `json:"fixed,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Target    string `json:"target,omitempty"` // where the package was found (OS, lock file, binary)
+	URL       string `json:"url,omitempty"`
 }
 
 // PushRequest asks a build node to copy a local image to the internal registry.

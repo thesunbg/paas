@@ -177,6 +177,9 @@ Usage:
   paas git-credentials [ls]            Team tokens for GitLab, Gitea/Forgejo, Bitbucket, GitHub
   paas git-credentials add <gitlab|gitea|bitbucket|github> [--host H] [--username U] [--token T] [--name N]
   paas git-credentials rm <host|id>
+  paas scan <service> [--all]          Latest vulnerability scan of the service's image
+  paas scan policy [off|warn|block] [--threshold CRITICAL|HIGH|MEDIUM|LOW]
+                                       Show or set the project's scan policy (setting: team admin)
   paas db ls
   paas db create <name> --engine postgres|mysql|mariadb|redis|mongo [--mode shared|dedicated] [--size micro] [--link svc]
   paas db info <name>
@@ -257,6 +260,8 @@ func main() {
 		err = cmdWebhook(rest)
 	case "git-credentials", "git-creds":
 		err = cmdGitCredentials(rest)
+	case "scan":
+		err = cmdScan(rest)
 	case "db":
 		err = cmdDB(rest)
 	case "nodes":
@@ -660,7 +665,7 @@ func splitFlags(args []string) (pos, flags []string) {
 
 func boolFlag(f string) bool {
 	switch strings.TrimLeft(f, "-") {
-	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh", "yes", "status", "abort", "allow-empty", "move-volumes":
+	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh", "yes", "status", "abort", "allow-empty", "move-volumes", "all":
 		return true
 	}
 	return false

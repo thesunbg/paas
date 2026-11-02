@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, errorMessage, type Deployment, type ServiceDetail } from '../../lib/api';
+  import { api, errorMessage, ApiError, type Deployment, type ImageScan, type ServiceDetail } from '../../lib/api';
   import { href, navigate } from '../../lib/router.svelte';
   import { relTime, between, shortSha, absTime } from '../../lib/format';
   import { toast } from '../../lib/toast.svelte';
@@ -9,6 +9,7 @@
   import LogView from '../../components/LogView.svelte';
   import Icon from '../../components/Icon.svelte';
   import Diagnosis from '../../components/Diagnosis.svelte';
+  import ScanPanel from '../../components/ScanPanel.svelte';
 
   let {
     serviceId,
@@ -25,6 +26,8 @@
   let error = $state('');
   let filter = $state('');
   let tickNow = $state(Date.now());
+  let scan = $state<ImageScan | null>(null);
+  let scanLoaded = false;
 
   const terminal = ['active', 'superseded', 'failed', 'cancelled'];
 
@@ -33,6 +36,14 @@
       const d = await api.deployment(deploymentId);
       dep = d.deployment;
       if (d.service.id !== serviceId) navigate(`/services/${d.service.id}/deployments/${deploymentId}`, true);
+      // The scan runs between the build and the rollout: final once the deployment is.
+      if (!scanLoaded && terminal.includes(dep.status)) {
+        scanLoaded = true;
+        scan = await api.deploymentScan(deploymentId).catch((e) => {
+          if (!(e instanceof ApiError && e.status === 404)) scanLoaded = false;
+          return null;
+        });
+      }
     } catch (e) {
       error = errorMessage(e);
     }
@@ -150,6 +161,13 @@
       Deployment finished with status <b>{final}</b>.
       {#if final === 'active' && detail.urls[0]}<a href={detail.urls[0]} target="_blank" rel="noreferrer">Open {detail.urls[0].replace(/^https?:\/\//, '')}</a>{/if}
     </div>
+  {/if}
+
+  {#if scan}
+    <section class="card" aria-label="Security">
+      <div class="card-head"><h3>Security</h3></div>
+      <div class="card-body"><ScanPanel {scan} limit={20} /></div>
+    </section>
   {/if}
 </div>
 

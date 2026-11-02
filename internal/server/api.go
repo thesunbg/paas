@@ -153,6 +153,10 @@ func (s *Server) routes() http.Handler {
 	h("POST /api/v1/deployments/{id}/cancel", s.handleCancelDeployment)
 	h("GET /api/v1/deployments/{id}/diagnosis", s.handleGetDiagnosis)
 	h("POST /api/v1/deployments/{id}/diagnose", s.handleDiagnose)
+	h("GET /api/v1/deployments/{id}/scan", s.handleGetDeploymentScan)
+	h("GET /api/v1/services/{id}/scan", s.handleGetServiceScan)
+	h("GET /api/v1/projects/{id}/scan-policy", s.handleGetScanPolicy)
+	h("PUT /api/v1/projects/{id}/scan-policy", s.handlePutScanPolicy)
 
 	h("GET /api/v1/databases/{id}", s.handleGetDatabase)
 	h("DELETE /api/v1/databases/{id}", s.handleDeleteDatabase)
