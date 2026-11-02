@@ -83,6 +83,10 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, err.Error())
 		return
 	}
+	if err := s.checkQuota(r.Context(), team, TeamUsage{Projects: 1}); err != nil {
+		writeLimitError(w, err)
+		return
+	}
 	p, err := s.store.CreateProject(r.Context(), team, strings.TrimSpace(in.Name), s.uniqueProjectSlug(r.Context(), in.Name))
 	if err != nil {
 		writeError(w, 500, err.Error())

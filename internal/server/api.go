@@ -73,6 +73,8 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/teams", s.handleListTeams)
 	h("POST /api/v1/teams", s.handleCreateTeam)
 	h("GET /api/v1/teams/{team}/members", s.handleListMembers)
+	h("GET /api/v1/teams/{team}/quota", s.handleGetTeamQuota)
+	h("PUT /api/v1/teams/{team}/quota", s.handlePutTeamQuota)
 	h("POST /api/v1/teams/{team}/members", s.handleAddMember)
 	h("DELETE /api/v1/teams/{team}/members/{user}", s.handleRemoveMember)
 	h("GET /api/v1/teams/{team}/projects", s.handleListProjects)

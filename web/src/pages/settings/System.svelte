@@ -25,7 +25,7 @@
     busy = true;
     error = '';
     try {
-      settings = await api.putSystemSettings({ allow_signup: settings.allow_signup, limits: settings.limits });
+      settings = await api.putSystemSettings({ allow_signup: settings.allow_signup, limits: settings.limits, quota: settings.quota });
       toast.success('Settings saved');
     } catch (err) {
       error = errorMessage(err);
@@ -42,6 +42,17 @@
     { key: 'max_replicas', label: 'Replicas per service', hint: 'Including autoscaling' },
     { key: 'max_teams', label: 'Teams per user', hint: 'Owned teams, including the personal one' },
     { key: 'max_signups_per_ip_per_day', label: 'Sign-ups per IP per day', hint: 'Against spam' },
+  ];
+  const quotaFields: { key: keyof SystemSettings['quota']; label: string; hint: string }[] = [
+    { key: 'max_projects', label: 'Projects', hint: '' },
+    { key: 'max_services', label: 'Services', hint: '' },
+    { key: 'max_databases', label: 'Databases', hint: '' },
+    { key: 'max_memory_mb', label: 'Memory reserved (MB)', hint: 'Sum of requests, as the scheduler counts' },
+    { key: 'max_memory_limit_mb', label: 'Memory limits (MB)', hint: 'Sum of limits: the worst case' },
+    { key: 'max_cpu_millis', label: 'CPU reserved (millicores)', hint: '1000 = 1 CPU' },
+    { key: 'max_disk_mb', label: 'Database storage (MB)', hint: '' },
+    { key: 'max_previews', label: 'Preview deployments', hint: '' },
+    { key: 'max_domains', label: 'Custom domains', hint: '' },
   ];
 </script>
 
@@ -68,6 +79,19 @@
           <label class="field">
             <span>{f.label}</span>
             <input type="number" min="0" bind:value={settings.limits[f.key]} />
+            <span class="hint">{f.hint ? f.hint + ' · ' : ''}0 = unlimited</span>
+          </label>
+        {/each}
+      </div>
+      <div class="stack">
+        <h4>Default team quota</h4>
+        <p class="hint">Applies to every team, administrators' changes included (bulk installs too). Override it per team under Settings → Team usage.</p>
+      </div>
+      <div class="grid-3">
+        {#each quotaFields as f (f.key)}
+          <label class="field">
+            <span>{f.label}</span>
+            <input type="number" min="0" bind:value={settings.quota[f.key]} />
             <span class="hint">{f.hint ? f.hint + ' · ' : ''}0 = unlimited</span>
           </label>
         {/each}

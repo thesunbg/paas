@@ -438,6 +438,10 @@ func (s *Server) handlePITRRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, err.Error())
 		return
 	}
+	if err := s.checkQuota(r.Context(), p.TeamID, dbUsage(&store.Database{Engine: src.Engine, Mode: "dedicated", SizePreset: src.SizePreset})); err != nil {
+		writeLimitError(w, err)
+		return
+	}
 	if _, err := databases.CheckCreate(src.Engine, src.Version, time.Now()); err != nil {
 		code := 400
 		var eol *databases.ErrEOL

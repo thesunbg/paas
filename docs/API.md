@@ -252,10 +252,37 @@ instance owner (the first administrator), whose password stays as a break-glass 
 | GET/PUT | `/api/v1/admin/storage` | off-site S3 storage `{endpoint, region, bucket, access_key, secret_key, prefix, virtual_host}`; PUT tests it first, an empty endpoint turns it off. `PAAS_S3_*` env wins (`from_env`) |
 | GET/POST | `/api/v1/admin/state-backups` | platform state (control-plane database) backups: list `{last, backups, offsite_error, every}` / back up now |
 | GET | `/api/v1/admin/state-backups/{name}` | download a sealed backup (restore with `paasd restore-state --file`) |
-| PUT | `/api/v1/admin/settings` | `{allow_signup?, limits?: {max_projects, max_services, max_databases, max_memory_mb, max_replicas, max_signups_per_ip_per_day}}` (0 = unlimited) |
+| PUT | `/api/v1/admin/settings` | `{allow_signup?, limits?: {max_projects, max_services, max_databases, max_memory_mb, max_replicas, max_signups_per_ip_per_day}, quota?: TeamQuota}` (0 = unlimited); `quota` is the default team quota |
 
 With sign-up on, anyone can register at `/#/signup` and gets a personal team. Limits apply to every
 non-administrator; requests over a limit return 403, too many sign-ups from one IP return 429.
+
+## Team quotas
+
+A quota is a team's budget, set by instance administrators: a default for every team
+(`quota` in `/admin/settings`) and an optional per-team override. Unlike the limits above it binds
+every change to the team, administrators' and bulk installs included.
+
+`TeamQuota` (0 = unlimited): `max_projects`, `max_services`, `max_databases`, `max_memory_mb`
+(sum of memory requests, as the scheduler reserves them), `max_memory_limit_mb` (sum of memory
+limits: the worst case, which also covers best-effort instances that reserve nothing),
+`max_cpu_millis` (sum of CPU requests), `max_disk_mb` (database storage quotas; twice with an HA
+standby; service volumes are unsized and not counted), `max_previews`, `max_domains` (custom domains).
+A service counts its replicas (the autoscaling maximum when higher; one for a cron job, none for a
+static site); stopped and sleeping services keep counting.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/teams/{team}/quota` | team members: `{quota (effective), default, override, usage: {projects, services, databases, memory_mb, memory_limit_mb, cpu_millis, disk_mb, previews, domains}}` |
+| PUT | `/api/v1/teams/{team}/quota` | administrators: `{quota: {max_…}}` replaces the team's override; keys left out use the default, `{}` resets |
+
+Checked when a project, service, database, custom domain or preview is created, a service is scaled
+or resized, a database is resized, upgraded to dedicated, given HA, a larger storage quota or
+restored to a new database, and when a template, compose file or repository is imported. Batches
+check all copies up front (accounts mode: one copy against the default quota of each learner's new
+team). Over quota the request fails with 403, e.g. `quota exceeded: memory 3.5 GiB of 4 GiB used,
+this needs 1 GiB more; …`. Changes that lower usage are always allowed, and restarts, rescheduling,
+waking and starting stopped services are never checked. CLI: `paas quota`.
 
 ## GitHub App (Vercel-style integration)
 

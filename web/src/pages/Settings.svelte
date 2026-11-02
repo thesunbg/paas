@@ -17,6 +17,7 @@
   import GitHubSignIn from './settings/GitHubSignIn.svelte';
   import SSOSignIn from './settings/SSOSignIn.svelte';
   import SSOProviders from './settings/SSOProviders.svelte';
+  import Quota from './settings/Quota.svelte';
   import Backups from './settings/Backups.svelte';
 
   let { tab = 'tokens' }: { tab?: string } = $props();
@@ -26,6 +27,7 @@
     { id: 'password', label: 'Password' },
     { id: 'security', label: 'Security' },
     { id: 'members', label: 'Team members' },
+    { id: 'quota', label: 'Team usage' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'github', label: 'GitHub' },
     ...(session.me?.user.is_admin ? [{ id: 'users', label: 'Users' }, { id: 'sso', label: 'Single sign-on' }, { id: 'backups', label: 'Backups' }, { id: 'system', label: 'System' }] : []),
@@ -299,6 +301,8 @@
           <SSOSignIn />
           <GitHubSignIn />
         </div>
+      {:else if tab === 'quota'}
+        <Quota />
       {:else if tab === 'notifications'}
         <Notifications />
       {:else if tab === 'github'}

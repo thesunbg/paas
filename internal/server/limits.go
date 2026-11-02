@@ -107,7 +107,7 @@ func (s *Server) handleGetSystemSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	signup, _ := s.store.GetSetting(r.Context(), settingAllowSignup)
-	writeJSON(w, 200, map[string]any{"allow_signup": signup == "true", "limits": s.teamLimits(r.Context())})
+	writeJSON(w, 200, map[string]any{"allow_signup": signup == "true", "limits": s.teamLimits(r.Context()), "quota": s.defaultQuota(r.Context())})
 }
 
 // PUT /api/v1/admin/settings
@@ -118,6 +118,7 @@ func (s *Server) handlePutSystemSettings(w http.ResponseWriter, r *http.Request)
 	var in struct {
 		AllowSignup *bool       `json:"allow_signup"`
 		Limits      *TeamLimits `json:"limits"`
+		Quota       *TeamQuota  `json:"quota"` // default team quota
 	}
 	if err := decode(r, &in); err != nil {
 		writeError(w, 400, err.Error())
@@ -134,6 +135,17 @@ func (s *Server) handlePutSystemSettings(w http.ResponseWriter, r *http.Request)
 		}
 		b, _ := json.Marshal(l)
 		if err := s.store.SetSetting(ctx, settingTeamLimits, string(b)); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+	}
+	if in.Quota != nil {
+		if !in.Quota.valid() {
+			writeError(w, 400, "quotas cannot be negative")
+			return
+		}
+		b, _ := json.Marshal(in.Quota)
+		if err := s.store.SetSetting(ctx, settingTeamQuota, string(b)); err != nil {
 			writeError(w, 500, err.Error())
 			return
 		}

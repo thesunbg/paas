@@ -64,7 +64,7 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request, svc *
 	case "opened", "reopened", "synchronize", "ready_for_review":
 		preview, created, err := s.ensurePreview(ctx, svc, ev)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeLimitError(w, err)
 			return
 		}
 		d, err := s.QueueDeployment(ctx, preview, "preview", ev.PullRequest.Head.SHA, ev.PullRequest.Title, nil)
@@ -124,6 +124,11 @@ func (s *Server) ensurePreview(ctx context.Context, parent *store.Service, ev pu
 	}
 	size := resources.Size{MemoryLimitMB: spec.Resources.MemoryLimitMB, CPULimitMillis: spec.Resources.CPULimitMillis}
 	resources.Apply(&spec, size, model.QoSBestEffort)
+	add := serviceUsage(parent.Type, spec)
+	add.Previews = 1
+	if err := s.checkQuota(ctx, proj.TeamID, add); err != nil {
+		return nil, false, err
+	}
 	pr := ev.Number
 	prv := &store.Service{
 		ProjectID: parent.ProjectID, Name: fmt.Sprintf("%s (PR #%d)", parent.Name, pr), Slug: fmt.Sprintf("%s-pr-%d", parent.Slug, pr),

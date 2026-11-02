@@ -203,20 +203,39 @@ func (s *Server) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Quotas are checked for the whole batch up front: copies are created in the
+	// background, and a class half installed is worse than a clear refusal.
+	perCopy := planUsage(tpl.Services, tpl.Databases, nil, "")
+	if in.Mode == "accounts" {
+		// Each learner gets a new team (with the default quota) holding one project and one copy.
+		if err := s.defaultQuota(ctx).fits(TeamUsage{}, perCopy.plus(TeamUsage{Projects: 1})); err != nil {
+			writeError(w, 403, "each learner's team: "+err.Error())
+			return
+		}
+	}
 	u := currentUser(r)
 	var projectID *string
 	if in.Mode == "instances" {
 		var p *store.Project
 		var err error
+		need := perCopy.times(len(labels))
 		if in.ProjectID != "" {
 			if p, err = s.store.ProjectByID(ctx, in.ProjectID); err != nil {
 				writeError(w, 404, "project not found")
+				return
+			}
+			if err := s.checkQuota(ctx, p.TeamID, need); err != nil {
+				writeLimitError(w, err)
 				return
 			}
 		} else {
 			team := firstNonEmpty(in.TeamID, s.firstTeam(ctx, u.ID))
 			if team == "" {
 				writeError(w, 400, "team_id is required")
+				return
+			}
+			if err := s.checkQuota(ctx, team, need.plus(TeamUsage{Projects: 1})); err != nil {
+				writeLimitError(w, err)
 				return
 			}
 			if p, err = s.store.CreateProject(ctx, team, in.Name, s.uniqueProjectSlug(ctx, in.Name)); err != nil {

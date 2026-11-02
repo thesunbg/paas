@@ -185,6 +185,12 @@ func (s *Server) handleSetHA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Enabled && !db.Options.HA {
+		withHA := *db
+		withHA.Options.HA = true
+		if err := s.checkQuota(r.Context(), p.TeamID, dbUsage(&withHA).minus(dbUsage(db))); err != nil {
+			writeLimitError(w, err)
+			return
+		}
 		srv, err := s.store.ServiceByID(r.Context(), *db.ServerServiceID)
 		if err != nil {
 			writeError(w, 500, err.Error())

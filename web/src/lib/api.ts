@@ -1011,6 +1011,40 @@ export interface TeamLimits {
 export interface SystemSettings {
   allow_signup: boolean;
   limits: TeamLimits;
+  /** Default team quota (teams without an override). */
+  quota: TeamQuota;
+}
+
+/** A team's budget; 0 = unlimited. Memory and CPU count what instances reserve (requests). */
+export interface TeamQuota {
+  max_projects: number;
+  max_services: number;
+  max_databases: number;
+  max_memory_mb: number;
+  max_memory_limit_mb: number;
+  max_cpu_millis: number;
+  max_disk_mb: number;
+  max_previews: number;
+  max_domains: number;
+}
+
+export interface TeamUsage {
+  projects: number;
+  services: number;
+  databases: number;
+  memory_mb: number;
+  memory_limit_mb: number;
+  cpu_millis: number;
+  disk_mb: number;
+  previews: number;
+  domains: number;
+}
+
+export interface TeamQuotaStatus {
+  quota: TeamQuota;
+  default: TeamQuota;
+  override: Partial<TeamQuota>;
+  usage: TeamUsage;
 }
 
 export interface OIDCGroupRole {
@@ -1104,6 +1138,9 @@ export const api = {
   members: (team: string) => get<Member[] | null>(`/teams/${e(team)}/members`),
   addMember: (team: string, email: string, role: Role) => post<AddMemberResponse>(`/teams/${e(team)}/members`, { email, role }),
   removeMember: (team: string, user: string) => del(`/teams/${e(team)}/members/${e(user)}`),
+  teamQuota: (team: string) => get<TeamQuotaStatus>(`/teams/${e(team)}/quota`),
+  /** Replaces the team's override (administrators); keys left out use the default. */
+  putTeamQuota: (team: string, quota: Partial<TeamQuota>) => put<TeamQuotaStatus>(`/teams/${e(team)}/quota`, { quota }),
   channels: (team: string) => get<ChannelsResponse>(`/teams/${e(team)}/notifications`),
   createChannel: (team: string, input: { name: string; kind: ChannelKind; target: string; events: string[] }) =>
     post<Channel>(`/teams/${e(team)}/notifications`, input),

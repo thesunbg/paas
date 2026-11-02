@@ -56,6 +56,10 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := s.checkQuota(r.Context(), p.TeamID, planUsage(tpl.Services, tpl.Databases, nil, in.Domain)); err != nil {
+		writeLimitError(w, err)
+		return
+	}
 	ctx := context.WithoutCancel(r.Context())
 	created, dbs, err := s.installTemplate(ctx, p, tpl, in.Name, in.Domain, in.Env)
 	if err != nil {
@@ -130,6 +134,10 @@ func (s *Server) handleImportCompose(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.checkCounts(r, p.TeamID, 0, len(plan.Services), len(plan.Databases)); err != nil {
 		writeError(w, 403, err.Error())
+		return
+	}
+	if err := s.checkQuota(r.Context(), p.TeamID, planUsage(plan.Services, plan.Databases, nil, "")); err != nil {
+		writeLimitError(w, err)
 		return
 	}
 	created, dbs, err := s.installPlan(context.WithoutCancel(r.Context()), p, plan.Services, plan.Databases, templateOpts{})
@@ -218,6 +226,10 @@ func (s *Server) handleImportRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.checkCounts(r, p.TeamID, 0, len(plan.Services), len(plan.Databases)); err != nil {
 		writeError(w, 403, err.Error())
+		return
+	}
+	if err := s.checkQuota(r.Context(), p.TeamID, planUsage(plan.Services, plan.Databases, in.Existing, in.Domain)); err != nil {
+		writeLimitError(w, err)
 		return
 	}
 	src := &model.ServiceSource{Kind: "git", Repo: in.Repo, Branch: in.Branch, AutoDeploy: true, InstallationID: in.InstallationID}

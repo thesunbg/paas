@@ -185,6 +185,7 @@ Usage:
   paas nodes                           Cluster nodes and density (admin)
   paas drain <node>                    Move workloads off a node (admin)
   paas join-command [--roles r1,r2]    Print a single-use command to add a node (admin; roles default to worker)
+  paas quota [show]                    The team's usage against its quota
 
 Global flags via env: PAAS_SERVER, PAAS_TOKEN, PAAS_PROJECT.
 `)
@@ -252,6 +253,8 @@ func main() {
 		err = cmdDrain(rest)
 	case "join-command":
 		err = cmdJoinCommand(rest)
+	case "quota":
+		err = cmdQuota(rest)
 	default:
 		usage()
 		os.Exit(2)
@@ -259,6 +262,59 @@ func main() {
 	if err != nil {
 		die(err)
 	}
+}
+
+// cmdQuota prints the current team's usage against its quota.
+func cmdQuota(args []string) error {
+	if len(args) > 0 && args[0] != "show" {
+		return fmt.Errorf("usage: paas quota [show]")
+	}
+	tid, err := teamID()
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Quota map[string]int `json:"quota"`
+		Usage map[string]int `json:"usage"`
+	}
+	if err := call(http.MethodGet, "/teams/"+tid+"/quota", nil, &out); err != nil {
+		return err
+	}
+	mib := func(v int) string {
+		if v >= 1024 {
+			return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(v)/1024), ".0") + " GiB"
+		}
+		return fmt.Sprintf("%d MiB", v)
+	}
+	cpu := func(v int) string { return fmt.Sprintf("%g CPU", float64(v)/1000) }
+	num := func(v int) string { return fmt.Sprint(v) }
+	rows := []struct {
+		label, used, max string
+		format           func(int) string
+	}{
+		{"Projects", "projects", "max_projects", num},
+		{"Services", "services", "max_services", num},
+		{"Databases", "databases", "max_databases", num},
+		{"Memory (reserved)", "memory_mb", "max_memory_mb", mib},
+		{"Memory (limits)", "memory_limit_mb", "max_memory_limit_mb", mib},
+		{"CPU (reserved)", "cpu_millis", "max_cpu_millis", cpu},
+		{"Disk", "disk_mb", "max_disk_mb", mib},
+		{"Preview deployments", "previews", "max_previews", num},
+		{"Custom domains", "domains", "max_domains", num},
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "RESOURCE\tUSED\tQUOTA\t")
+	for _, r := range rows {
+		limit := "unlimited"
+		if q := out.Quota[r.max]; q > 0 {
+			limit = r.format(q)
+			if u := out.Usage[r.used]; u > q {
+				limit += " (over)"
+			}
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t\n", r.label, r.format(out.Usage[r.used]), limit)
+	}
+	return tw.Flush()
 }
 
 func cmdJoinCommand(args []string) error {

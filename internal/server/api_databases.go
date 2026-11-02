@@ -25,6 +25,10 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, err.Error())
 		return
 	}
+	if err := s.checkQuota(r.Context(), p.TeamID, newDBUsage(in)); err != nil {
+		writeLimitError(w, err)
+		return
+	}
 	db, err := s.createDatabase(r.Context(), p, in)
 	if err != nil {
 		var eol *databases.ErrEOL
@@ -287,6 +291,12 @@ func (s *Server) handleUpgradeDatabase(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "unknown size")
 			return
 		}
+	}
+	dedicated := *db
+	dedicated.Mode, dedicated.SizePreset = "dedicated", firstNonEmpty(in.Size, db.SizePreset)
+	if err := s.checkQuota(r.Context(), p.TeamID, dbUsage(&dedicated).minus(dbUsage(db))); err != nil {
+		writeLimitError(w, err)
+		return
 	}
 	if ok, err := s.store.ClaimDatabaseStatus(r.Context(), db.ID, "ready", "upgrading"); err != nil || !ok {
 		writeError(w, 409, "database is not ready")
