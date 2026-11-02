@@ -124,6 +124,12 @@ func (s *Server) handleDatabaseResize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, fmt.Sprintf("memory is limited to %d MB per instance", l.MaxMemoryMB))
 		return
 	}
+	resized := *db
+	resized.SizePreset = in.Size
+	if err := s.checkQuota(r.Context(), p.TeamID, dbUsage(&resized).minus(dbUsage(db))); err != nil {
+		writeLimitError(w, err)
+		return
+	}
 	if err := s.store.SetDatabaseSize(r.Context(), db.ID, in.Size); err != nil {
 		writeError(w, 500, err.Error())
 		return

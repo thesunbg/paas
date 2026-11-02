@@ -208,6 +208,14 @@ func (s *Server) handleDatabaseQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "quota_mb must be 0 or more")
 		return
 	}
+	if p, err := s.store.ProjectByID(r.Context(), db.ProjectID); err == nil {
+		grown := *db
+		grown.Options.QuotaMB = in.QuotaMB
+		if err := s.checkQuota(r.Context(), p.TeamID, dbUsage(&grown).minus(dbUsage(db))); err != nil {
+			writeLimitError(w, err)
+			return
+		}
+	}
 	o, err := s.store.UpdateDatabaseOptions(r.Context(), db.ID, func(o *store.DBOptions) error {
 		o.QuotaMB = in.QuotaMB
 		return nil

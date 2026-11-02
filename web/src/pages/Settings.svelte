@@ -16,6 +16,9 @@
   import System from './settings/System.svelte';
   import Users from './settings/Users.svelte';
   import GitHubSignIn from './settings/GitHubSignIn.svelte';
+  import SSOSignIn from './settings/SSOSignIn.svelte';
+  import SSOProviders from './settings/SSOProviders.svelte';
+  import Quota from './settings/Quota.svelte';
   import Backups from './settings/Backups.svelte';
   import AI from './settings/AI.svelte';
 
@@ -26,10 +29,11 @@
     { id: 'password', label: 'Password' },
     { id: 'security', label: 'Security' },
     { id: 'members', label: 'Team members' },
+    { id: 'quota', label: 'Team usage' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'github', label: 'GitHub' },
     { id: 'git', label: 'Git hosts' },
-    ...(session.me?.user.is_admin ? [{ id: 'users', label: 'Users' }, { id: 'backups', label: 'Backups' }, { id: 'ai', label: 'AI' }, { id: 'system', label: 'System' }] : []),
+    ...(session.me?.user.is_admin ? [{ id: 'users', label: 'Users' }, { id: 'sso', label: 'Single sign-on' }, { id: 'backups', label: 'Backups' }, { id: 'ai', label: 'AI' }, { id: 'system', label: 'System' }] : []),
   ];
 
   // Tokens
@@ -297,8 +301,11 @@
       {:else if tab === 'security'}
         <div class="stack-lg">
           <TwoFactor />
+          <SSOSignIn />
           <GitHubSignIn />
         </div>
+      {:else if tab === 'quota'}
+        <Quota />
       {:else if tab === 'notifications'}
         <Notifications />
       {:else if tab === 'github'}
@@ -307,6 +314,8 @@
         <GitCredentials />
       {:else if tab === 'users' && session.me?.user.is_admin}
         <Users />
+      {:else if tab === 'sso' && session.me?.user.is_admin}
+        <SSOProviders />
       {:else if tab === 'backups' && session.me?.user.is_admin}
         <Backups />
       {:else if tab === 'ai' && session.me?.user.is_admin}

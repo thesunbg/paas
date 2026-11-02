@@ -40,6 +40,8 @@ export interface SetupStatus {
   allow_signup: boolean;
   base_domain: string;
   github_login?: boolean;
+  /** Enabled single sign-on providers ("Sign in with <name>"). */
+  sso?: { slug: string; name: string }[];
 }
 
 export interface AuthResponse {
@@ -1060,6 +1062,81 @@ export interface TeamLimits {
 export interface SystemSettings {
   allow_signup: boolean;
   limits: TeamLimits;
+  /** Default team quota (teams without an override). */
+  quota: TeamQuota;
+}
+
+/** A team's budget; 0 = unlimited. Memory and CPU count what instances reserve (requests). */
+export interface TeamQuota {
+  max_projects: number;
+  max_services: number;
+  max_databases: number;
+  max_memory_mb: number;
+  max_memory_limit_mb: number;
+  max_cpu_millis: number;
+  max_disk_mb: number;
+  max_previews: number;
+  max_domains: number;
+}
+
+export interface TeamUsage {
+  projects: number;
+  services: number;
+  databases: number;
+  memory_mb: number;
+  memory_limit_mb: number;
+  cpu_millis: number;
+  disk_mb: number;
+  previews: number;
+  domains: number;
+}
+
+export interface TeamQuotaStatus {
+  quota: TeamQuota;
+  default: TeamQuota;
+  override: Partial<TeamQuota>;
+  usage: TeamUsage;
+}
+
+export interface OIDCGroupRole {
+  group: string;
+  team_id: string;
+  role: Exclude<Role, 'owner'>;
+}
+
+export interface OIDCProvider {
+  id: string;
+  slug: string;
+  name: string;
+  issuer: string;
+  client_id: string;
+  scopes: string[];
+  enabled: boolean;
+  trusted_domains: string[];
+  allowed_domains: string[];
+  enforce_domains: string[];
+  auto_provision: boolean;
+  default_team_id: string | null;
+  default_role: Exclude<Role, 'owner'>;
+  groups_claim: string;
+  group_roles: OIDCGroupRole[];
+  skip_totp: boolean;
+  has_secret?: boolean;
+  created_at: string;
+}
+
+/** Fields sent to create or update a provider; client_secret is write-only ("" keeps it). */
+export type OIDCProviderInput = Partial<Omit<OIDCProvider, 'id' | 'has_secret' | 'created_at' | 'default_team_id'>> & {
+  client_secret?: string;
+  default_team_id?: string;
+};
+
+export interface OIDCIdentity {
+  provider_id: string;
+  provider_slug: string;
+  provider_name: string;
+  email: string;
+  created_at: string;
 }
 
 export const api = {
@@ -1070,6 +1147,14 @@ export const api = {
   deleteUser: (id: string) => del(`/users/${e(id)}`),
   unlinkMyGitHub: () => del('/me/github'),
   githubLogin2FA: (pending: string, code: string) => post<AuthResponse>('/auth/github/2fa', { pending, code }),
+  /** Completes a GitHub or SSO sign-in that needs the two-factor code. */
+  login2FA: (pending: string, code: string) => post<AuthResponse>('/auth/2fa', { pending, code }),
+  myOIDC: () => get<OIDCIdentity[]>('/me/oidc'),
+  unlinkMyOIDC: (slug: string) => del(`/me/oidc/${e(slug)}`),
+  oidcProviders: () => get<{ providers: OIDCProvider[]; redirect_uri: string }>('/admin/oidc'),
+  createOIDCProvider: (p: OIDCProviderInput) => post<{ provider: OIDCProvider }>('/admin/oidc', p),
+  updateOIDCProvider: (id: string, p: OIDCProviderInput) => patch<{ provider: OIDCProvider }>(`/admin/oidc/${e(id)}`, p),
+  deleteOIDCProvider: (id: string) => del(`/admin/oidc/${e(id)}`),
   systemSettings: () => get<SystemSettings>('/admin/settings'),
   putSystemSettings: (s: Partial<SystemSettings>) => put<SystemSettings>('/admin/settings', s),
   // GitHub App
@@ -1104,6 +1189,9 @@ export const api = {
   members: (team: string) => get<Member[] | null>(`/teams/${e(team)}/members`),
   addMember: (team: string, email: string, role: Role) => post<AddMemberResponse>(`/teams/${e(team)}/members`, { email, role }),
   removeMember: (team: string, user: string) => del(`/teams/${e(team)}/members/${e(user)}`),
+  teamQuota: (team: string) => get<TeamQuotaStatus>(`/teams/${e(team)}/quota`),
+  /** Replaces the team's override (administrators); keys left out use the default. */
+  putTeamQuota: (team: string, quota: Partial<TeamQuota>) => put<TeamQuotaStatus>(`/teams/${e(team)}/quota`, { quota }),
   channels: (team: string) => get<ChannelsResponse>(`/teams/${e(team)}/notifications`),
   createChannel: (team: string, input: { name: string; kind: ChannelKind; target: string; events: string[] }) =>
     post<Channel>(`/teams/${e(team)}/notifications`, input),

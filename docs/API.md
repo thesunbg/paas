@@ -15,9 +15,9 @@ AI agents can also use the [MCP endpoint](MCP.md) at `POST /mcp` (same API token
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/setup` | | `{needs_setup, allow_signup, base_domain}` (no auth) |
+| GET | `/setup` | | `{needs_setup, allow_signup, base_domain, github_login, sso: [{slug, name}]}` (no auth) |
 | POST | `/auth/register` | `{email, password, name}` | `{user, token}`. The first user becomes administrator; later signups need `allow_signup` |
-| POST | `/auth/login` | `{email, password}` | `{user, token}` |
+| POST | `/auth/login` | `{email, password}` | `{user, token}`. 403 `{error, sso}` when single sign-on is enforced for the email's domain |
 | POST | `/auth/logout` | | |
 | GET | `/me` | | `{user, teams: [{id, name, slug, role}]}` |
 | POST | `/me/password` | `{current, new}` | |
@@ -229,6 +229,36 @@ otherwise a new account is created when sign-up is open. Accounts with 2FA finis
 `POST /api/v1/auth/github/2fa {pending, code}`. Signed-in users link with `GET /api/v1/me/github/link`
 and unlink with `DELETE /api/v1/me/github`.
 
+## Single sign-on (OpenID Connect)
+
+Instance administrators configure providers; every provider uses the same redirect URI,
+`<public URL>/api/v1/auth/oidc/callback`. Sign-in is an Authorization Code flow with PKCE (S256), a
+single-use `state` bound to the browser by a cookie, and a `nonce`; the ID token's signature (JWKS,
+refetched on key rotation), `iss`, `aud`, `azp`, `exp` and `nonce` are checked.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/auth/oidc/{slug}` | starts a sign-in (no auth); the callback redirects to `/#/` with a session cookie, or to `/#/login?sso_error=…` / `?sso_2fa=<pending>` |
+| POST | `/api/v1/auth/2fa` | `{pending, code}` finishes an SSO or GitHub sign-in when the account has 2FA and the provider does not skip it |
+| GET | `/api/v1/me/oidc` | providers linked to the signed-in account `[{provider_id, provider_slug, provider_name, email, created_at}]` |
+| GET | `/api/v1/me/oidc/{slug}/link` | links the provider to the signed-in account (browser redirect) |
+| DELETE | `/api/v1/me/oidc/{slug}` | unlinks it (refused when it is the only way in under enforced SSO) |
+| GET | `/api/v1/admin/oidc` | `{providers, redirect_uri}`; the client secret is never returned (`has_secret`) |
+| POST | `/api/v1/admin/oidc` | `{name, slug?, issuer, client_id, client_secret?, scopes?, enabled?, trusted_domains?, allowed_domains?, enforce_domains?, auto_provision?, default_team_id?, default_role?, groups_claim?, group_roles?: [{group, team_id, role}], skip_totp?}`; discovery is checked first. 201 |
+| PATCH | `/api/v1/admin/oidc/{id}` | same fields, all optional; an empty `client_secret` keeps the stored one |
+| DELETE | `/api/v1/admin/oidc/{id}` | removes the provider and its links |
+
+Which account an identity signs in to: a linked identity (provider + `sub`) signs in to its account.
+Otherwise the provider must report `email_verified: true`; an existing account with that email is
+linked automatically only when the domain is in `trusted_domains` and the account is not an
+administrator — anything else must be linked from a signed-in session. Unknown users get an account
+only with `auto_provision` (added to `default_team_id` with `default_role`). `allowed_domains` limits
+every sign-in to verified emails in those domains. `group_roles` sets team roles from the groups claim
+at each sign-in (highest role wins; owners untouched; memberships are not removed). `skip_totp`
+(default true) trusts the provider's MFA; turn it off to ask accounts with 2FA for their code.
+`enforce_domains` refuses password and GitHub sign-in (and sign-up) for those domains, except for the
+instance owner (the first administrator), whose password stays as a break-glass login; API tokens keep working.
+
 ## Sign-up and team limits (administrators)
 
 | Method | Path | Notes |
@@ -243,10 +273,37 @@ and unlink with `DELETE /api/v1/me/github`.
 | GET/POST | `/api/v1/admin/state-backups` | platform state (control-plane database) backups: list `{last, backups, offsite_error, every}` / back up now |
 | GET | `/api/v1/admin/state-backups/{name}` | download a sealed backup (restore with `paasd restore-state --file`) |
 | GET/PUT | `/api/v1/admin/ai` | AI failure diagnosis provider `{provider, model, base_url, api_key}` (provider `anthropic`, `openai` or empty) → `{enabled, provider, model, base_url, has_key, default_model}`. `anthropic`: Messages API, key required, model defaults to `claude-sonnet-5-5`, `base_url` optional; `openai`: any OpenAI-compatible `/chat/completions` endpoint (`base_url` like `http://ollama:11434/v1`, model required, key optional). The key is stored encrypted and never returned; an empty `api_key` keeps the stored one; an empty provider turns AI off |
-| PUT | `/api/v1/admin/settings` | `{allow_signup?, limits?: {max_projects, max_services, max_databases, max_memory_mb, max_replicas, max_signups_per_ip_per_day}}` (0 = unlimited) |
+| PUT | `/api/v1/admin/settings` | `{allow_signup?, limits?: {max_projects, max_services, max_databases, max_memory_mb, max_replicas, max_signups_per_ip_per_day}, quota?: TeamQuota}` (0 = unlimited); `quota` is the default team quota |
 
 With sign-up on, anyone can register at `/#/signup` and gets a personal team. Limits apply to every
 non-administrator; requests over a limit return 403, too many sign-ups from one IP return 429.
+
+## Team quotas
+
+A quota is a team's budget, set by instance administrators: a default for every team
+(`quota` in `/admin/settings`) and an optional per-team override. Unlike the limits above it binds
+every change to the team, administrators' and bulk installs included.
+
+`TeamQuota` (0 = unlimited): `max_projects`, `max_services`, `max_databases`, `max_memory_mb`
+(sum of memory requests, as the scheduler reserves them), `max_memory_limit_mb` (sum of memory
+limits: the worst case, which also covers best-effort instances that reserve nothing),
+`max_cpu_millis` (sum of CPU requests), `max_disk_mb` (database storage quotas; twice with an HA
+standby; service volumes are unsized and not counted), `max_previews`, `max_domains` (custom domains).
+A service counts its replicas (the autoscaling maximum when higher; one for a cron job, none for a
+static site); stopped and sleeping services keep counting.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/teams/{team}/quota` | team members: `{quota (effective), default, override, usage: {projects, services, databases, memory_mb, memory_limit_mb, cpu_millis, disk_mb, previews, domains}}` |
+| PUT | `/api/v1/teams/{team}/quota` | administrators: `{quota: {max_…}}` replaces the team's override; keys left out use the default, `{}` resets |
+
+Checked when a project, service, database, custom domain or preview is created, a service is scaled
+or resized, a database is resized, upgraded to dedicated, given HA, a larger storage quota or
+restored to a new database, and when a template, compose file or repository is imported. Batches
+check all copies up front (accounts mode: one copy against the default quota of each learner's new
+team). Over quota the request fails with 403, e.g. `quota exceeded: memory 3.5 GiB of 4 GiB used,
+this needs 1 GiB more; …`. Changes that lower usage are always allowed, and restarts, rescheduling,
+waking and starting stopped services are never checked. CLI: `paas quota`.
 
 ## GitHub App (Vercel-style integration)
 

@@ -225,6 +225,15 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	add := serviceUsage(svc.Type, svc.Spec)
+	add.Services = 1
+	if in.Domain != "" && svc.Type != model.TypeWorker && svc.Type != model.TypeCron {
+		add.Domains = 1
+	}
+	if err := s.checkQuota(r.Context(), p.TeamID, add); err != nil {
+		writeLimitError(w, err)
+		return
+	}
 	svc.Slug = util.Slugify(svc.Name)
 	for k := range in.Env {
 		if !envKeyRe.MatchString(k) {
@@ -394,6 +403,10 @@ func (s *Server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, err.Error())
 		return
 	}
+	if err := s.checkQuota(r.Context(), p.TeamID, serviceUsage(svc.Type, svc.Spec).minus(serviceUsage(svc.Type, before))); err != nil {
+		writeLimitError(w, err)
+		return
+	}
 	// The checks above ran on the copy loaded for this request; the write re-applies
 	// the input to the fresh row, so a concurrent change (a build recording the
 	// language, a scale) to a field this request does not touch is kept.
@@ -508,7 +521,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleScale(w http.ResponseWriter, r *http.Request) {
-	svc, _ := s.serviceFor(w, r, "developer")
+	svc, p := s.serviceFor(w, r, "developer")
 	if svc == nil {
 		return
 	}
@@ -521,6 +534,12 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request) {
 	}
 	if l := s.teamLimits(r.Context()); limited(r) && l.MaxReplicas > 0 && in.Replicas > l.MaxReplicas {
 		writeError(w, 403, fmt.Sprintf("services are limited to %d replicas", l.MaxReplicas))
+		return
+	}
+	scaled := svc.Spec
+	scaled.Replicas = in.Replicas
+	if err := s.checkQuota(r.Context(), p.TeamID, serviceUsage(svc.Type, scaled).minus(serviceUsage(svc.Type, svc.Spec))); err != nil {
+		writeLimitError(w, err)
 		return
 	}
 	if err := s.scaleService(context.WithoutCancel(r.Context()), svc, in.Replicas); err != nil {
@@ -682,7 +701,7 @@ func (s *Server) handleListDomains(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAddDomain(w http.ResponseWriter, r *http.Request) {
-	svc, _ := s.serviceFor(w, r, "developer")
+	svc, p := s.serviceFor(w, r, "developer")
 	if svc == nil {
 		return
 	}
@@ -696,6 +715,10 @@ func (s *Server) handleAddDomain(w http.ResponseWriter, r *http.Request) {
 	host := strings.ToLower(strings.TrimSpace(in.Hostname))
 	if err := s.checkCustomDomain(r, host); err != nil {
 		writeError(w, 400, err.Error())
+		return
+	}
+	if err := s.checkQuota(r.Context(), p.TeamID, TeamUsage{Domains: 1}); err != nil {
+		writeLimitError(w, err)
 		return
 	}
 	d, err := s.store.AddDomain(r.Context(), svc.ID, host, false)
