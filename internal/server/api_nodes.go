@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/thesunbg/paas/internal/bus"
@@ -161,9 +162,22 @@ func (s *Server) handleDrainNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "node not found")
 		return
 	}
+	var in struct {
+		// MoveVolumes moves the services with volumes too (each stops while its volumes are
+		// copied to another node); without it they stay on the node.
+		MoveVolumes bool `json:"move_volumes"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
 	if err := s.store.UpdateNodeSettings(r.Context(), n.ID, "cordoned", n.OvercommitMemory, n.OvercommitCPU, n.ReservedMB, n.Labels); err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	movingStateful := []string{}
+	if in.MoveVolumes {
+		movingStateful = s.drainStateful(context.WithoutCancel(r.Context()), n, currentUser(r).Email)
 	}
 	instances, _ := s.store.InstancesForNode(r.Context(), n.ID)
 	moved, pinned := 0, []string{}
@@ -173,13 +187,15 @@ func (s *Server) handleDrainNode(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if svc.NodeID != nil && *svc.NodeID == n.ID {
-			pinned = append(pinned, svc.Slug) // stateful: its volume lives here
+			if !slices.Contains(movingStateful, svc.Slug) {
+				pinned = append(pinned, svc.Slug) // stateful: its volume lives here
+			}
 			continue
 		}
 		moved++
 		go s.moveInstance(context.Background(), svc.ID, in, n.ID)
 	}
-	writeJSON(w, 202, map[string]any{"status": "draining", "moving": moved, "pinned_stateful": pinned})
+	writeJSON(w, 202, map[string]any{"status": "draining", "moving": moved, "pinned_stateful": pinned, "moving_stateful": movingStateful})
 }
 
 func (s *Server) moveInstance(ctx context.Context, serviceID string, in store.Instance, from string) {

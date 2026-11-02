@@ -132,6 +132,77 @@
     }
   }
 
+  // Stateful services of a node: drain with their volumes (node online), or restore them on other
+  // nodes from their latest backups (node lost).
+  let sfNode = $state<ClusterNode | null>(null);
+  let sfItems = $state<StuckItem[]>([]);
+  let sfOpen = $state(false);
+  let sfBusy = $state(false);
+
+  async function openStateful(n: ClusterNode) {
+    try {
+      sfItems = (await api.nodeStuck(n.id)) ?? [];
+    } catch (e) {
+      return void toast.error(errorMessage(e));
+    }
+    sfNode = n;
+    sfOpen = true;
+  }
+
+  async function drain(n: ClusterNode, moveVolumes: boolean) {
+    const ok = await confirmDialog({
+      title: moveVolumes ? `Drain ${n.name} and move its volumes` : `Drain ${n.name}`,
+      message: moveVolumes
+        ? `${n.name} is cordoned, its stateless instances move without downtime, and each service with volumes moves to another node one at a time: it stops while its volumes are copied and checked, then starts on the new node. A failed move leaves it running on ${n.name}. Database servers stay.`
+        : `${n.name} is cordoned and its stateless instances move without downtime. Services with volumes stay on it.`,
+      confirmLabel: 'Drain',
+      danger: moveVolumes,
+    });
+    if (!ok) return;
+    sfBusy = true;
+    try {
+      const r = await api.drainNode(n.id, moveVolumes);
+      const parts = [`${r.moving} instance(s) moving`];
+      if (r.moving_stateful.length) parts.push(`volumes moving: ${r.moving_stateful.join(', ')}`);
+      if (r.pinned_stateful.length) parts.push(`staying: ${r.pinned_stateful.join(', ')}`);
+      toast.success(`Draining ${n.name}: ${parts.join('; ')}`);
+      sfOpen = false;
+      await load();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      sfBusy = false;
+    }
+  }
+
+  async function recoverAll(n: ClusterNode) {
+    const services = sfItems.filter((it) => it.kind === 'service');
+    const ok = await confirmDialog({
+      title: `Restore the services of ${n.name}`,
+      message:
+        `Each of the ${services.length} service(s) with volumes is restored on another online node from its newest off-site backup, one at a time. ` +
+        `What it wrote after that backup is lost (the times are listed). Services without a backup are skipped. ` +
+        `Only do this if ${n.name} is not coming back; its old volumes are kept and removed 7 days after it is back.`,
+      confirmLabel: 'Restore',
+      danger: true,
+      requireText: n.name,
+    });
+    if (!ok) return;
+    sfBusy = true;
+    try {
+      const r = await api.recoverNode(n.id, false);
+      const msg = [`${r.started.length} restore(s) started`];
+      if (r.skipped.length) msg.push(`skipped: ${r.skipped.map((x) => `${x.name} (${x.reason})`).join(', ')}`);
+      if (r.skipped.length) toast.error(msg.join('; '));
+      else toast.success(msg.join('; '));
+      sfOpen = false;
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      sfBusy = false;
+    }
+  }
+
   const stuckLabel: Record<StuckItem['kind'], string> = { service: 'Service volumes', database: 'Database', 'shared-database': 'Database on a shared server' };
 
   function edit(n: ClusterNode) {
@@ -161,6 +232,8 @@
   const ratio = (a: number, b: number) => (b > 0 ? a / b : 0);
   const level = (r: number) => (r > 0.9 ? 'crit' : r > 0.75 ? 'warn' : '');
   const stale = (n: ClusterNode) => Date.now() - Date.parse(n.last_seen_at) > 60_000;
+  // Its agent still reports in (online or cordoned): its data can be moved, not restored from a backup.
+  const alive = (n: ClusterNode) => n.status !== 'offline' && !stale(n);
 
   const totals = $derived.by(() => {
     const ns = data?.nodes ?? [];
@@ -332,6 +405,7 @@
                     {:else}
                       <button class="sm" onclick={() => setStatus(n, 'online')} disabled={busy === n.id}>Uncordon</button>
                     {/if}
+                    <button class="sm" onclick={() => openStateful(n)} title="Services with volumes on this node: drain them, or restore them elsewhere if the node is lost">{alive(n) ? 'Drain…' : 'Recover…'}</button>
                     <button class="sm" onclick={() => edit(n)}>Edit</button>
                     {#if n.status !== 'online'}
                       <button class="sm danger" aria-label="Remove {n.name}" onclick={() => remove(n)}><Icon name="trash" size={12} />Remove</button>
@@ -373,6 +447,44 @@
   {#snippet footer()}
     <button type="button" onclick={() => (stuckOpen = false)}>Cancel</button>
     <button type="button" class="danger" onclick={forceRemove}>Remove anyway…</button>
+  {/snippet}
+</Modal>
+
+<Modal bind:open={sfOpen} title="Stateful services on {sfNode?.name ?? 'this node'}" width={600}>
+  <div class="stack small">
+    {#if sfNode && alive(sfNode)}
+      <p>These keep their data on this node. A drain moves stateless instances only, unless you also move the volumes (each service is down while its volumes are copied).</p>
+    {:else}
+      <p><span class="badge red">unreachable</span> If this node is not coming back, restore its services on other nodes from their newest off-site backups. Databases have their own recovery (open each one).</p>
+    {/if}
+    {#if sfItems.length === 0}
+      <p class="muted">Nothing keeps its data only on this node.</p>
+    {:else}
+      <table>
+        <thead><tr><th>What</th><th>Project</th><th>Newest off-site backup</th></tr></thead>
+        <tbody>
+          {#each sfItems as it (it.kind + it.id)}
+            <tr>
+              <td>
+                <a href={href(it.kind === 'service' ? `/services/${it.id}/settings` : `/databases/${it.id}`)} onclick={() => (sfOpen = false)}>{it.name}</a>
+                <div class="faint">{stuckLabel[it.kind]}</div>
+              </td>
+              <td>{it.project ?? ''}</td>
+              <td>{#if it.backup}<span title={absTime(it.backup)}>{relTime(it.backup)}</span>{:else}<span class="badge red">none</span>{/if}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  </div>
+  {#snippet footer()}
+    <button type="button" onclick={() => (sfOpen = false)}>Cancel</button>
+    {#if sfNode && alive(sfNode)}
+      <button type="button" onclick={() => sfNode && drain(sfNode, false)} disabled={sfBusy}>Drain</button>
+      <button type="button" class="danger" onclick={() => sfNode && drain(sfNode, true)} disabled={sfBusy || !sfItems.some((it) => it.kind === 'service')}>Drain and move volumes</button>
+    {:else}
+      <button type="button" class="danger" onclick={() => sfNode && recoverAll(sfNode)} disabled={sfBusy || !sfItems.some((it) => it.kind === 'service')}>Restore on other nodes…</button>
+    {/if}
   {/snippet}
 </Modal>
 

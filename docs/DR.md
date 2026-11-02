@@ -39,13 +39,19 @@ build node within a few minutes. PostgreSQL databases with high availability fai
 standby in about 45–60 seconds.
 
 What stays down is anything that keeps data on that node: services with volumes, and database
-servers. The node page lists them (Nodes → remove → "Data still on …", or
-`GET /api/v1/nodes/{id}/stuck`), with the newest off-site backup of each. If the node is coming back
-(reboot, network), wait. If it is not:
+servers. Nothing of it moves by itself: a restore from a backup loses what was written after the
+backup, so it is always an administrator's decision. The `node.offline` notification says how many
+there are. The node page lists them (Nodes → *Recover…*, or `GET /api/v1/nodes/{id}/stuck`), with
+the newest off-site backup of each. If the node is coming back (reboot, network), wait. If it is not:
 
-1. **Each service with volumes**: Service → Settings → Volume backups → *Recover on another node*
-   (`POST /api/v1/services/{id}/recover`). The service moves to another node and its volumes are
-   filled from the newest backup, or a chosen one. Changes since that backup are lost.
+1. **Services with volumes**: all at once from the node page (Nodes → *Recover…* → *Restore on
+   other nodes*, `POST /api/v1/nodes/{id}/recover` with `confirm_data_loss`,
+   `paas restore-volume --node <node> --yes`), or one by one: Service → Settings → Volume backups →
+   *Recover on another node* (`POST /api/v1/services/{id}/recover`,
+   `paas restore-volume <service> --yes`). Each service is restored on another node from its newest
+   off-site volume backup (or a chosen one), then pinned there and started. Changes since that
+   backup are lost: the restore records the backup's time (`rpo_at`, shown on the service page and
+   in the `volume.move` notification). Services without a backup are skipped unless `allow_empty`.
 2. **Each dedicated database**: Database → Backups → *Recover on another node*
    (`POST /api/v1/databases/{id}/recover`). A new server is created elsewhere from the newest
    off-site dump; linked services restart with the new address.
@@ -57,6 +63,20 @@ servers. The node page lists them (Nodes → remove → "Data still on …", or
 
 With no backup the recovery stops and offers to start the service or database empty. The data left
 on the dead node is not touched; if it ever comes back, its old volumes are deleted after 7 days.
+
+## Taking a node out of service (planned)
+
+When the node is still up (maintenance, replacement), nothing needs a backup: drain it with its
+volumes (Nodes → *Drain…* → *Drain and move volumes*, `POST /api/v1/nodes/{id}/drain` with
+`move_volumes`, `paas drain <node> --move-volumes`), or move one service
+(`paas move <service> --to <node> --yes`, Service → Settings → Node). Each service with volumes
+stops, its volumes are streamed straight to the other node over the WireGuard mesh, checked
+(bytes, entries and a SHA-256 of the whole tree on both sides), and it starts on the new node. The
+downtime is the copy (volume size / mesh bandwidth) plus the check and the start: there is no live
+pre-copy. A failure before the switch, an abort, or a service that does not start on the new node
+puts it back on the old node, whose copy was not written to since the stop. The old copy stays for
+7 days (`retain_days`) after a successful move. A control plane restart in the middle undoes a move
+that had not switched yet and finishes one that had. Database servers stay (use their own tools).
 
 ## The control plane is lost
 

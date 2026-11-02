@@ -97,6 +97,10 @@ func (s *Store) RepinService(ctx context.Context, serviceID, newNode, oldNode st
 	if _, err := tx.Exec(ctx, `DELETE FROM instances WHERE service_id=$1`, serviceID); err != nil {
 		return err
 	}
+	// A copy left on the new node by an earlier stay there is replaced, not removed later.
+	if _, err := tx.Exec(ctx, `DELETE FROM volume_gc WHERE node_id=$1 AND service_id=$2`, newNode, serviceID); err != nil {
+		return err
+	}
 	if oldNode != "" {
 		if _, err := tx.Exec(ctx, `INSERT INTO volume_gc (node_id, service_id, delete_after) VALUES ($1,$2, now() + interval '7 days')
 			ON CONFLICT (node_id, service_id) DO NOTHING`, oldNode, serviceID); err != nil {

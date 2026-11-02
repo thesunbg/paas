@@ -107,7 +107,8 @@ type VolumeGC struct{ NodeID, ServiceID string }
 // DueVolumeGC lists volumes past their retention whose node is online (to delete them).
 func (s *Store) DueVolumeGC(ctx context.Context) ([]VolumeGC, error) {
 	rows, err := s.q(ctx).Query(ctx, `SELECT g.node_id, g.service_id FROM volume_gc g JOIN nodes n ON n.id=g.node_id
-		WHERE g.delete_after < now() AND n.status='online'`)
+		WHERE g.delete_after < now() AND n.status='online'
+		AND NOT EXISTS (SELECT 1 FROM services s WHERE s.id=g.service_id AND s.node_id=g.node_id)`) // never the live copy
 	if err != nil {
 		return nil, err
 	}

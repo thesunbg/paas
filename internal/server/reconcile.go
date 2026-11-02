@@ -193,7 +193,12 @@ func (s *Server) reconcileOnce(ctx context.Context) {
 		for _, id := range ids {
 			slog.Warn("node offline", "id", id)
 			if n, err := s.store.NodeByID(ctx, id); err == nil {
-				s.notifyAdmins(ctx, "node.offline", fmt.Sprintf("Node %s (%s) stopped responding; rescheduling its stateless workloads", n.Name, n.Address), nil)
+				msg := fmt.Sprintf("Node %s (%s) stopped responding; rescheduling its stateless workloads", n.Name, n.Address)
+				if stuck := s.stuckOnNode(ctx, id); len(stuck) > 0 {
+					// Never moved automatically: a restore from backup loses what was written after it.
+					msg += fmt.Sprintf(". %d service(s) or database(s) keep their data on it and wait for it to come back; if it does not, recover them on another node from their latest backups (Nodes page, POST /api/v1/nodes/%s/recover)", len(stuck), id)
+				}
+				s.notifyAdmins(ctx, "node.offline", msg, map[string]any{"node": id})
 			}
 			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE instances SET status='lost' WHERE node_id=$1 AND status IN ('running','starting')`, id)
 		}

@@ -22,7 +22,8 @@ import (
 // their off-site backups:
 //
 //   - a service: its newest volume backup is unpacked on another node, the
-//     service is pinned there (POST /services/{id}/recover);
+//     service is pinned there (POST /services/{id}/recover, or every service
+//     of the node at once with POST /nodes/{id}/recover; see volmove.go);
 //   - a dedicated database: a new server is created elsewhere and the newest
 //     off-site dump restored into it (POST /databases/{id}/recover);
 //   - a shared server: recreated, and every database it held restored from
@@ -169,7 +170,7 @@ func (s *Server) handleListVolumeBackups(w http.ResponseWriter, r *http.Request)
 	node := s.serviceNode(r.Context(), svc)
 	writeJSON(w, 200, map[string]any{
 		"backups": bs, "offsite": s.storage().Enabled(), "every_hours": max(svc.Spec.VolumeBackupHours, 0),
-		"enabled": svc.Spec.VolumeBackupHours >= 0, "node_online": node == nil || s.nodeOnline(r.Context(), node),
+		"enabled": svc.Spec.VolumeBackupHours >= 0, "node_online": node == nil || s.nodeAlive(r.Context(), node),
 	})
 }
 
@@ -191,89 +192,6 @@ func (s *Server) handleCreateVolumeBackup(w http.ResponseWriter, r *http.Request
 	u := currentUser(r)
 	s.store.Audit(r.Context(), &u.ID, &p.TeamID, "service.volume_backup", svc.Slug)
 	writeJSON(w, 201, b)
-}
-
-// POST /api/v1/services/{id}/recover {backup_id, allow_empty}
-// Starts a service whose node is offline on another node, with the volumes of
-// a backup (default: the newest), or empty volumes when allow_empty is set.
-func (s *Server) handleRecoverService(w http.ResponseWriter, r *http.Request) {
-	svc, p := s.serviceFor(w, r, "admin")
-	if svc == nil {
-		return
-	}
-	var in struct {
-		BackupID   string `json:"backup_id"`
-		AllowEmpty bool   `json:"allow_empty"`
-	}
-	_ = decode(r, &in)
-	ctx := r.Context()
-	old := s.serviceNode(ctx, svc)
-	if old == nil || s.nodeOnline(ctx, old) {
-		writeError(w, 409, "the service's node is online: nothing to recover")
-		return
-	}
-	var b *store.VolumeBackup
-	if len(svc.Spec.Volumes) > 0 && !in.AllowEmpty {
-		var err error
-		if in.BackupID != "" {
-			b, err = s.store.VolumeBackupByID(ctx, in.BackupID)
-			if err == nil && (b.ServiceID != svc.ID || b.Status != "completed") {
-				err = store.ErrNotFound
-			}
-		} else {
-			var bs []store.VolumeBackup
-			if bs, err = s.store.VolumeBackups(ctx, svc.ID, 30); err == nil {
-				err = store.ErrNotFound
-				for i := range bs {
-					if bs[i].Status == "completed" && bs[i].S3Key != "" {
-						b, err = &bs[i], nil
-						break
-					}
-				}
-			}
-		}
-		if err != nil {
-			writeError(w, 409, "no off-site volume backup to recover from: pass allow_empty to start it with empty volumes")
-			return
-		}
-		if !s.storage().Enabled() {
-			writeError(w, 409, "off-site storage is not configured")
-			return
-		}
-	}
-	node, err := s.pickReplicaNode(ctx, *old, svc.Spec.Resources.MemoryLimitMB)
-	if err != nil {
-		writeError(w, 409, "no other online worker node")
-		return
-	}
-	if b != nil {
-		file := path.Join("backups", "volumes", svc.ID, "restore-"+util.RandomToken(4)+".tar.gz")
-		if err := s.transfer(ctx, node.ID, http.MethodGet, b.S3Key, file); err != nil {
-			writeError(w, 502, "download the volume backup: "+err.Error())
-			return
-		}
-		var rep proto.GenericReply
-		err := s.requestAgent(ctx, node.ID, proto.CmdExtract, proto.ExtractRequest{File: file, Dir: path.Join("volumes", svc.ID), Replace: true}, &rep, time.Hour)
-		_ = s.requestAgent(ctx, node.ID, proto.CmdRemoveFiles, proto.RemoveFilesRequest{Paths: []string{file}}, &proto.GenericReply{}, time.Minute)
-		if err == nil && rep.Error != "" {
-			err = errors.New(rep.Error)
-		}
-		if err != nil {
-			writeError(w, 500, "unpack the volume backup: "+err.Error())
-			return
-		}
-	}
-	if err := s.store.RepinService(ctx, svc.ID, node.ID, *old); err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
-	u := currentUser(r)
-	what := "empty volumes"
-	if b != nil {
-		what = "volumes from " + b.CreatedAt.UTC().Format(time.RFC3339)
-	}
-	s.store.Audit(ctx, &u.ID, &p.TeamID, "service.recover", svc.Slug+" on "+node.Name+" with "+what)
-	writeJSON(w, 202, map[string]any{"node": node.Name, "backup": b})
 }
 
 // latestOffsiteDump is a database's newest completed dump with an off-site copy.

@@ -42,7 +42,7 @@
   async function recover(backupId?: string) {
     const msg = backupId
       ? 'The service moves to another node and its volumes are filled from this backup.'
-      : 'The service moves to another node and its volumes are filled from the newest off-site backup. Changes since that backup are lost.';
+      : `The service moves to another node and its volumes are filled from the newest off-site backup${done[0] ? ` (${absTime(done[0].created_at)})` : ''}. Changes since that backup are lost.`;
     if (!(await confirmDialog({ title: 'Recover on another node', message: msg, confirmLabel: 'Recover', danger: true }))) return;
     await run(false, backupId);
   }
@@ -51,7 +51,7 @@
     busy = 'recover';
     try {
       const r = await api.recoverService(serviceId, allowEmpty, backupId);
-      toast.success(`Recovered on ${r.node}${r.backup ? '' : ' with empty volumes'}`);
+      toast.success(`Restoring on ${r.node} ${r.rpo_at ? `with the data of ${absTime(r.rpo_at)}` : 'with empty volumes'}; progress is shown under Node`);
       await load();
     } catch (e) {
       const m = errorMessage(e);

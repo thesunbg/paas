@@ -188,7 +188,18 @@ Usage:
   paas install <template> [--domain D] Install a template into the project
   paas compose <docker-compose.yml>    Import a compose file into the project
   paas nodes                           Cluster nodes and density (admin)
-  paas drain <node>                    Move workloads off a node (admin)
+  paas drain <node> [--move-volumes]   Move workloads off a node (admin); with --move-volumes
+                                       services with volumes move too (each stops during its copy)
+  paas move <service> [--to <node>] [--retain-days 7] --yes
+                                       Move a service with volumes to another node (team admin):
+                                       it stops, its volumes are copied over the mesh and checked,
+                                       it starts on the new node; the old copy is kept retain-days
+  paas move <service> --status | --abort
+  paas restore-volume <service> [--to <node>] [--backup ID] [--allow-empty] --yes
+                                       Restore a service whose node is lost from its latest volume
+                                       backup (writes after the backup are lost)
+  paas restore-volume --node <lost-node> [--to <node>] [--allow-empty] --yes
+                                       Same for every service with volumes of a lost node (admin)
   paas join-command [--roles r1,r2]    Print a single-use command to add a node (admin; roles default to worker)
   paas quota [show]                    The team's usage against its quota
 
@@ -262,6 +273,10 @@ func main() {
 		err = cmdCompose(rest)
 	case "drain":
 		err = cmdDrain(rest)
+	case "move":
+		err = cmdMove(rest)
+	case "restore-volume":
+		err = cmdRestoreVolume(rest)
 	case "join-command":
 		err = cmdJoinCommand(rest)
 	case "quota":
@@ -645,7 +660,7 @@ func splitFlags(args []string) (pos, flags []string) {
 
 func boolFlag(f string) bool {
 	switch strings.TrimLeft(f, "-") {
-	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh":
+	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh", "yes", "status", "abort", "allow-empty", "move-volumes":
 		return true
 	}
 	return false
@@ -1460,10 +1475,7 @@ func cmdCompose(args []string) error {
 	return nil
 }
 
-func cmdDrain(args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: paas drain <node>")
-	}
+func findNode(ref string) (string, string, error) {
 	var out struct {
 		Nodes []struct {
 			ID   string `json:"id"`
@@ -1471,17 +1483,224 @@ func cmdDrain(args []string) error {
 		} `json:"nodes"`
 	}
 	if err := call(http.MethodGet, "/nodes", nil, &out); err != nil {
-		return err
+		return "", "", err
 	}
 	for _, n := range out.Nodes {
-		if n.Name == args[0] || n.ID == args[0] {
-			var res map[string]any
-			if err := call(http.MethodPost, "/nodes/"+n.ID+"/drain", nil, &res); err != nil {
-				return err
-			}
-			fmt.Printf("Draining %s: moving %v instance(s); stateful services kept: %v\n", n.Name, res["moving"], res["pinned_stateful"])
-			return nil
+		if n.Name == ref || n.ID == ref {
+			return n.ID, n.Name, nil
 		}
 	}
-	return fmt.Errorf("node %q not found", args[0])
+	return "", "", fmt.Errorf("node %q not found", ref)
+}
+
+func cmdDrain(args []string) error {
+	pos, flags := splitFlags(args)
+	fs := flag.NewFlagSet("drain", flag.ExitOnError)
+	moveVolumes := fs.Bool("move-volumes", false, "move the services with volumes too (each stops while its volumes are copied)")
+	_ = fs.Parse(flags)
+	if len(pos) != 1 {
+		return errors.New("usage: paas drain <node> [--move-volumes]")
+	}
+	id, name, err := findNode(pos[0])
+	if err != nil {
+		return err
+	}
+	var res map[string]any
+	if err := call(http.MethodPost, "/nodes/"+id+"/drain", map[string]bool{"move_volumes": *moveVolumes}, &res); err != nil {
+		return err
+	}
+	fmt.Printf("Draining %s: moving %v instance(s); stateful services kept: %v\n", name, res["moving"], res["pinned_stateful"])
+	if ms, _ := res["moving_stateful"].([]any); len(ms) > 0 {
+		fmt.Printf("Moving the volumes of %v, one at a time (follow with: paas move <service> --status)\n", ms)
+	}
+	return nil
+}
+
+type volumeMove struct {
+	ID         string     `json:"id"`
+	Kind       string     `json:"kind"`
+	Phase      string     `json:"phase"`
+	Bytes      int64      `json:"bytes"`
+	Files      int64      `json:"files"`
+	RPOAt      *time.Time `json:"rpo_at"`
+	Error      string     `json:"error"`
+	CreatedAt  time.Time  `json:"created_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+}
+
+func printMove(m *volumeMove) {
+	line := fmt.Sprintf("%s %s: %s", m.Kind, m.ID, m.Phase)
+	if m.Bytes > 0 || m.Files > 0 {
+		line += fmt.Sprintf(" (%d entries, %.1f MB)", m.Files, float64(m.Bytes)/(1<<20))
+	}
+	if m.RPOAt != nil {
+		line += ", data as of " + m.RPOAt.Local().Format("2006-01-02 15:04")
+	}
+	if m.Error != "" {
+		line += ": " + m.Error
+	}
+	fmt.Println(line)
+}
+
+// followMove prints the phases of a service's move until it ends.
+func followMove(serviceID, moveID string) error {
+	last := ""
+	for {
+		var st struct {
+			History []volumeMove `json:"history"`
+		}
+		if err := call(http.MethodGet, "/services/"+serviceID+"/move", nil, &st); err != nil {
+			return err
+		}
+		for i := range st.History {
+			m := &st.History[i]
+			if m.ID != moveID {
+				continue
+			}
+			if m.Phase != last {
+				printMove(m)
+				last = m.Phase
+			}
+			switch m.Phase {
+			case "done":
+				return nil
+			case "failed", "aborted":
+				return fmt.Errorf("%s %s", m.Kind, m.Phase)
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func cmdMove(args []string) error {
+	pos, flags := splitFlags(args)
+	fs := flag.NewFlagSet("move", flag.ExitOnError)
+	to := fs.String("to", "", "target node (default: the online worker with the most free memory)")
+	retain := fs.Int("retain-days", 0, "days the old copy stays on the old node (default 7)")
+	yes := fs.Bool("yes", false, "confirm the downtime")
+	status := fs.Bool("status", false, "show the move in progress and the last ones")
+	abort := fs.Bool("abort", false, "abort the move in progress (only before it switched over)")
+	noFollow := fs.Bool("no-follow", false, "do not wait for the end")
+	_ = fs.Parse(flags)
+	if len(pos) != 1 {
+		return errors.New("usage: paas move <service> [--to <node>] [--retain-days 7] --yes | --status | --abort")
+	}
+	s, _, err := findService(pos[0])
+	if err != nil {
+		return err
+	}
+	switch {
+	case *status:
+		var st struct {
+			Node *struct {
+				Name   string `json:"name"`
+				Online bool   `json:"online"`
+			} `json:"node"`
+			History []volumeMove `json:"history"`
+		}
+		if err := call(http.MethodGet, "/services/"+s.ID+"/move", nil, &st); err != nil {
+			return err
+		}
+		if st.Node != nil {
+			fmt.Printf("%s is on %s (online: %v)\n", s.Slug, st.Node.Name, st.Node.Online)
+		}
+		for i := range st.History {
+			printMove(&st.History[i])
+		}
+		return nil
+	case *abort:
+		if err := call(http.MethodDelete, "/services/"+s.ID+"/move", nil, nil); err != nil {
+			return err
+		}
+		fmt.Println("Aborting; the service starts again on its node")
+		return nil
+	}
+	if !*yes {
+		return errors.New("the service stops while its volumes are copied and checked (downtime about size / mesh bandwidth), then starts on the new node; pass --yes to go ahead")
+	}
+	body := map[string]any{"confirm_downtime": true, "retain_days": *retain}
+	if *to != "" {
+		body["node"] = *to
+	}
+	var m volumeMove
+	if err := call(http.MethodPost, "/services/"+s.ID+"/move", body, &m); err != nil {
+		return err
+	}
+	fmt.Println("Move", m.ID, "started")
+	if *noFollow {
+		return nil
+	}
+	return followMove(s.ID, m.ID)
+}
+
+func cmdRestoreVolume(args []string) error {
+	pos, flags := splitFlags(args)
+	fs := flag.NewFlagSet("restore-volume", flag.ExitOnError)
+	to := fs.String("to", "", "target node (default: the online worker with the most free memory)")
+	node := fs.String("node", "", "restore every service with volumes of this lost node")
+	backup := fs.String("backup", "", "volume backup id (default: the newest off-site one)")
+	allowEmpty := fs.Bool("allow-empty", false, "start with empty volumes when there is no backup")
+	yes := fs.Bool("yes", false, "confirm: what was written after the backup is lost")
+	noFollow := fs.Bool("no-follow", false, "do not wait for the end")
+	_ = fs.Parse(flags)
+	if (*node == "") == (len(pos) != 1) {
+		return errors.New("usage: paas restore-volume <service> [--to <node>] [--backup ID] [--allow-empty] --yes\n       paas restore-volume --node <lost-node> [--to <node>] [--allow-empty] --yes")
+	}
+	if !*yes {
+		return errors.New("a restore starts from the latest volume backup: what was written after it is lost; pass --yes to go ahead")
+	}
+	if *node != "" {
+		id, name, err := findNode(*node)
+		if err != nil {
+			return err
+		}
+		var out struct {
+			Started []struct {
+				Service string     `json:"service"`
+				Node    string     `json:"node"`
+				RPOAt   *time.Time `json:"rpo_at"`
+			} `json:"started"`
+			Skipped []struct {
+				Kind   string `json:"kind"`
+				Name   string `json:"name"`
+				Reason string `json:"reason"`
+			} `json:"skipped"`
+		}
+		if err := call(http.MethodPost, "/nodes/"+id+"/recover", map[string]any{"node": *to, "allow_empty": *allowEmpty, "confirm_data_loss": true}, &out); err != nil {
+			return err
+		}
+		fmt.Printf("Restoring the services of %s, one at a time:\n", name)
+		for _, st := range out.Started {
+			rpo := "empty volumes"
+			if st.RPOAt != nil {
+				rpo = "data as of " + st.RPOAt.Local().Format("2006-01-02 15:04")
+			}
+			fmt.Printf("  %s on %s (%s)\n", st.Service, st.Node, rpo)
+		}
+		for _, sk := range out.Skipped {
+			fmt.Printf("  skipped %s %s: %s\n", sk.Kind, sk.Name, sk.Reason)
+		}
+		return nil
+	}
+	s, _, err := findService(pos[0])
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Node  string     `json:"node"`
+		RPOAt *time.Time `json:"rpo_at"`
+		Move  volumeMove `json:"move"`
+	}
+	if err := call(http.MethodPost, "/services/"+s.ID+"/recover", map[string]any{"node": *to, "backup_id": *backup, "allow_empty": *allowEmpty}, &out); err != nil {
+		return err
+	}
+	rpo := "with empty volumes"
+	if out.RPOAt != nil {
+		rpo = "from the backup of " + out.RPOAt.Local().Format("2006-01-02 15:04") + " (later writes are lost)"
+	}
+	fmt.Printf("Restoring %s on %s %s\n", s.Slug, out.Node, rpo)
+	if *noFollow {
+		return nil
+	}
+	return followMove(s.ID, out.Move.ID)
 }
