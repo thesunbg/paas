@@ -30,6 +30,7 @@ type Server struct {
 	StudioBranch    string // PAAS_STUDIO_BRANCH
 	DBPortMin       int    // PAAS_DB_PORT_MIN, first public port for databases (default 20000)
 	DBPortMax       int    // PAAS_DB_PORT_MAX (default 20999)
+	MetricsToken    string // PAAS_METRICS_TOKEN, bearer token for GET /metrics (Prometheus); admins can always use their own token
 
 	// High availability: several control planes share PostgreSQL and form a NATS cluster.
 	ServerName    string   // PAAS_SERVER_NAME (unique per control plane)
@@ -133,6 +134,7 @@ func LoadServer() Server {
 		DashboardDomain: env("PAAS_DASHBOARD_DOMAIN", "paas."+base),
 		PublicURL:       strings.TrimRight(env("PAAS_PUBLIC_URL", "http://paas."+base), "/"),
 		ClusterToken:    env("PAAS_CLUSTER_TOKEN", ""),
+		MetricsToken:    env("PAAS_METRICS_TOKEN", ""),
 		AllowLocalGit:   envBool("PAAS_ALLOW_LOCAL_GIT", false),
 		ImageRetention:  envInt("PAAS_IMAGE_RETENTION", 3),
 		DBHost:          env("PAAS_DB_HOST", "db."+base),

@@ -378,7 +378,41 @@ receives pushes and pull requests through the app webhook (no per-repository web
 | DELETE | `/teams/{team}/notifications/{id}` | |
 | POST | `/teams/{team}/notifications/{id}/test` | sends a test message |
 
-Events: `deploy.succeeded`, `deploy.failed`, `deploy.vulnerable`, `instance.crashloop`, `instance.evicted`, `node.offline`, `backup.failed`, `job.failed`, `autoscale`.
+Events: `deploy.succeeded`, `deploy.failed`, `deploy.vulnerable`, `instance.crashloop`, `instance.evicted`, `node.offline`, `backup.failed`, `job.failed`, `autoscale`, `database.quota`, `database.failover`, `database.eol`, `volume.move`, `alert.firing`, `alert.resolved`, `uptime.down`, `uptime.up`, `uptime.cert`. Webhook payloads of alert and uptime events carry `data` (rule / check, project, service, value or status). Channels created before the alert / uptime events existed are not subscribed to them; an alert rule or uptime check that lists `channel_ids` sends to those channels whatever their events.
+
+### Alert rules (per project)
+Developers and above create, change and delete; viewers read. The leader evaluates enabled rules every minute against the per-minute service metrics; a rule fires when its condition held for `for_seconds`, notifies `alert.firing` once, then `alert.resolved` when the condition stops holding. A new firing within `cooldown_seconds` of the previous notification is not notified (nor is its resolve). States are kept per rule and service and survive a leader change. Only running services are judged.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/projects/{id}/alerts[?service={serviceId}]` | `{rules: [{id, service_id, name, metric, comparator, threshold, for_seconds, cooldown_seconds, channel_ids, enabled, states: [{service_id, service_name, state: ok|pending|firing, value, pending_since, firing_since, resolved_at, last_notified_at, notified}]}], metrics: {name: description}, comparators}`. With `service`, the service's rules and the project-wide ones |
+| POST | `/projects/{id}/alerts` | `{metric, comparator: > >= < <=, threshold, service_id?, name?, for_seconds? (300), cooldown_seconds? (1800), channel_ids? ([]: the team's channels subscribed to the event), enabled?}`. No `service_id`: every web and worker service of the project. At most 50 per project |
+| PATCH | `/alerts/{id}` | any field above but `service_id`; a changed condition or disabling resets the state |
+| DELETE | `/alerts/{id}` | |
+
+Metrics: `cpu_percent` (of the CPU limit, else the request, else one core; average per instance), `memory_percent` (of the memory limit, else the request), `restarts` (container restarts during the last 5 minutes), `error_rate` (5xx share of the requests of the last 5 minutes, in %; no traffic = no data), `instances` (running instances). The edge proxies report request and 5xx counts but no response times, so there is no latency metric.
+
+### Uptime checks (per project)
+HTTP(S) checks run from the control-plane leader (exactly once per interval cluster-wide, results straight into PostgreSQL). By default a check may only reach public addresses (`PAAS_UPTIME_ALLOW_PRIVATE=true` lifts that); redirects are followed (at most 5); an invalid or expired certificate fails the check. `uptime.down` after `failure_threshold` consecutive failures, `uptime.up` on the first success after that, `uptime.cert` once per certificate that expires within 14 days. Results are kept 7 days.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/projects/{id}/uptime[?service={serviceId}]` | `{checks: [{id, service_id, name, url, method, expected_status, keyword, timeout_seconds, interval_seconds, failure_threshold, channel_ids, enabled, state: unknown|up|down, consecutive_failures, last_checked_at, last_error, state_changed_at, cert_expires_at, stats: {uptime_24h, uptime_7d, avg_latency_ms_24h, p95_latency_ms_24h, checks_24h}}]}` (percentages; `null` without results) |
+| POST | `/projects/{id}/uptime` | `{url, name? (host), service_id?, method? GET|HEAD|POST, expected_status? (0 = any 2xx/3xx), keyword?, timeout_seconds? (10, max 30), interval_seconds? (60, min 30), failure_threshold? (3), channel_ids?, enabled?}`. At most 20 per project |
+| GET | `/uptime/{id}?limit=100` | `{check, results: [{ts, ok, status_code, latency_ms, error}]}` newest first (limit ≤ 1000) |
+| PATCH | `/uptime/{id}` | any field above but `service_id`; a new URL starts over (`unknown`) |
+| DELETE | `/uptime/{id}` | deletes the history too |
+
+### Prometheus
+`GET /metrics` (same as `GET /api/v1/metrics/prometheus`) in the Prometheus text format. Authentication: `Authorization: Bearer $PAAS_METRICS_TOKEN` (set on the control plane), or an administrator's session or API token; anyone else gets 401 / 403. Families: `paas_node_up`, `paas_node_cpu_percent`, `paas_node_load1`, `paas_node_memory_used_bytes`, `paas_node_memory_total_bytes`, `paas_node_disk_used_bytes`, `paas_node_disk_total_bytes`; per service (`team`, `project`, `service`, `type` labels) `paas_service_running`, `paas_service_instances`, `paas_service_cpu_millicores`, `paas_service_memory_bytes`, `paas_service_restarts`, and for web / static services `paas_service_http_requests_5m`, `paas_service_http_errors_5xx_5m`; `paas_deployments{status}`, `paas_deployments_24h`; `paas_alert_firing`, `paas_alert_value`; `paas_uptime_up`, `paas_uptime_ratio_24h`, `paas_uptime_ratio_7d`, `paas_uptime_latency_p95_seconds`, `paas_uptime_cert_expiry_timestamp_seconds`. All are gauges (the platform keeps no cumulative counters).
+
+```yaml
+scrape_configs:
+  - job_name: paas
+    scheme: https
+    authorization: {credentials: "<PAAS_METRICS_TOKEN>"}
+    static_configs: [{targets: ["paas.example.com"]}]
+```
 
 ### Two-factor authentication
 | Method | Path | Notes |

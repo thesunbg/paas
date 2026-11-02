@@ -190,6 +190,14 @@ Usage:
   paas templates                       List one-click templates
   paas install <template> [--domain D] Install a template into the project
   paas compose <docker-compose.yml>    Import a compose file into the project
+  paas alerts [ls]                     Alert rules of the project and their state
+  paas alerts add [name] --metric cpu_percent|memory_percent|restarts|error_rate|instances --op '>' --threshold 80
+                  [--for 5m] [--cooldown 30m] [--service svc] [--channel name]
+  paas alerts rm|enable|disable <rule>
+  paas uptime [ls]                     Uptime checks with 24h / 7d uptime
+  paas uptime add <url> [--interval 60s] [--expect 200] [--keyword K] [--method GET] [--timeout 10s] [--failures 3] [--service svc] [--channel name]
+  paas uptime show <check>             Stats and recent results
+  paas uptime rm|enable|disable <check>
   paas nodes                           Cluster nodes and density (admin)
   paas drain <node> [--move-volumes]   Move workloads off a node (admin); with --move-volumes
                                        services with volumes move too (each stops during its copy)
@@ -264,6 +272,10 @@ func main() {
 		err = cmdScan(rest)
 	case "db":
 		err = cmdDB(rest)
+	case "alerts":
+		err = cmdAlerts(rest)
+	case "uptime":
+		err = cmdUptime(rest)
 	case "nodes":
 		err = cmdNodes()
 	case "run":

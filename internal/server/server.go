@@ -97,6 +97,8 @@ type Server struct {
 	haMu        sync.Mutex
 	haRunning   map[string]time.Time
 	ha          haMemory // leader-only HA observations, guarded by haMu
+
+	uptime uptimeRunner // uptime checks in flight (uptime.go)
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.
@@ -488,6 +490,8 @@ func (s *Server) leaderLoop(ctx context.Context) {
 		go s.dbMetricsLoop(lctx)
 		go s.haLoop(lctx)
 		go s.walShipLoop(lctx)
+		go s.alertLoop(lctx)
+		go s.uptimeLoop(lctx)
 		for lctx.Err() == nil {
 			time.Sleep(5 * time.Second)
 			pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)
