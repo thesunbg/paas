@@ -8,6 +8,7 @@
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import LogView from '../../components/LogView.svelte';
   import Icon from '../../components/Icon.svelte';
+  import Diagnosis from '../../components/Diagnosis.svelte';
 
   let {
     serviceId,
@@ -130,6 +131,8 @@
     </div>
     {#if dep?.error}<div class="alert error" style="margin-top:10px">{dep.error}</div>{/if}
   </div>
+
+  {#if status === 'failed'}<Diagnosis {deploymentId} {canEdit} />{/if}
 
   <ErrorMsg {error} />
 
