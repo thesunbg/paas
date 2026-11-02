@@ -40,6 +40,8 @@ export interface SetupStatus {
   allow_signup: boolean;
   base_domain: string;
   github_login?: boolean;
+  /** Enabled single sign-on providers ("Sign in with <name>"). */
+  sso?: { slug: string; name: string }[];
 }
 
 export interface AuthResponse {
@@ -1011,6 +1013,47 @@ export interface SystemSettings {
   limits: TeamLimits;
 }
 
+export interface OIDCGroupRole {
+  group: string;
+  team_id: string;
+  role: Exclude<Role, 'owner'>;
+}
+
+export interface OIDCProvider {
+  id: string;
+  slug: string;
+  name: string;
+  issuer: string;
+  client_id: string;
+  scopes: string[];
+  enabled: boolean;
+  trusted_domains: string[];
+  allowed_domains: string[];
+  enforce_domains: string[];
+  auto_provision: boolean;
+  default_team_id: string | null;
+  default_role: Exclude<Role, 'owner'>;
+  groups_claim: string;
+  group_roles: OIDCGroupRole[];
+  skip_totp: boolean;
+  has_secret?: boolean;
+  created_at: string;
+}
+
+/** Fields sent to create or update a provider; client_secret is write-only ("" keeps it). */
+export type OIDCProviderInput = Partial<Omit<OIDCProvider, 'id' | 'has_secret' | 'created_at' | 'default_team_id'>> & {
+  client_secret?: string;
+  default_team_id?: string;
+};
+
+export interface OIDCIdentity {
+  provider_id: string;
+  provider_slug: string;
+  provider_name: string;
+  email: string;
+  created_at: string;
+}
+
 export const api = {
   users: () => get<UserSummary[]>('/users'),
   createUser: (u: { email: string; name?: string; password?: string; is_admin?: boolean }) => post<{ user: User; password?: string }>('/users', u),
@@ -1019,6 +1062,14 @@ export const api = {
   deleteUser: (id: string) => del(`/users/${e(id)}`),
   unlinkMyGitHub: () => del('/me/github'),
   githubLogin2FA: (pending: string, code: string) => post<AuthResponse>('/auth/github/2fa', { pending, code }),
+  /** Completes a GitHub or SSO sign-in that needs the two-factor code. */
+  login2FA: (pending: string, code: string) => post<AuthResponse>('/auth/2fa', { pending, code }),
+  myOIDC: () => get<OIDCIdentity[]>('/me/oidc'),
+  unlinkMyOIDC: (slug: string) => del(`/me/oidc/${e(slug)}`),
+  oidcProviders: () => get<{ providers: OIDCProvider[]; redirect_uri: string }>('/admin/oidc'),
+  createOIDCProvider: (p: OIDCProviderInput) => post<{ provider: OIDCProvider }>('/admin/oidc', p),
+  updateOIDCProvider: (id: string, p: OIDCProviderInput) => patch<{ provider: OIDCProvider }>(`/admin/oidc/${e(id)}`, p),
+  deleteOIDCProvider: (id: string) => del(`/admin/oidc/${e(id)}`),
   systemSettings: () => get<SystemSettings>('/admin/settings'),
   putSystemSettings: (s: Partial<SystemSettings>) => put<SystemSettings>('/admin/settings', s),
   // GitHub App

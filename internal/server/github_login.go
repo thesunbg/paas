@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -103,6 +104,10 @@ func (s *Server) finishGitHubLogin(w http.ResponseWriter, r *http.Request, _ *gh
 	}
 	if err != nil {
 		fail(err.Error())
+		return
+	}
+	if p := s.ssoEnforced(ctx, u.Email); p != nil {
+		fail(fmt.Sprintf("sign-in with GitHub is disabled for %s addresses: use Sign in with %s", emailDomain(u.Email), p.Name))
 		return
 	}
 	if u.TOTPEnabled {

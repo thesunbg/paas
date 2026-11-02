@@ -13,9 +13,9 @@ Errors are `{"error": "message"}` with a 4xx/5xx status.
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/setup` | | `{needs_setup, allow_signup, base_domain}` (no auth) |
+| GET | `/setup` | | `{needs_setup, allow_signup, base_domain, github_login, sso: [{slug, name}]}` (no auth) |
 | POST | `/auth/register` | `{email, password, name}` | `{user, token}`. The first user becomes administrator; later signups need `allow_signup` |
-| POST | `/auth/login` | `{email, password}` | `{user, token}` |
+| POST | `/auth/login` | `{email, password}` | `{user, token}`. 403 `{error, sso}` when single sign-on is enforced for the email's domain |
 | POST | `/auth/logout` | | |
 | GET | `/me` | | `{user, teams: [{id, name, slug, role}]}` |
 | POST | `/me/password` | `{current, new}` | |
@@ -208,6 +208,36 @@ GitHub returns to the app callback URL. Accounts are matched by linked GitHub id
 otherwise a new account is created when sign-up is open. Accounts with 2FA finish with
 `POST /api/v1/auth/github/2fa {pending, code}`. Signed-in users link with `GET /api/v1/me/github/link`
 and unlink with `DELETE /api/v1/me/github`.
+
+## Single sign-on (OpenID Connect)
+
+Instance administrators configure providers; every provider uses the same redirect URI,
+`<public URL>/api/v1/auth/oidc/callback`. Sign-in is an Authorization Code flow with PKCE (S256), a
+single-use `state` bound to the browser by a cookie, and a `nonce`; the ID token's signature (JWKS,
+refetched on key rotation), `iss`, `aud`, `azp`, `exp` and `nonce` are checked.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/auth/oidc/{slug}` | starts a sign-in (no auth); the callback redirects to `/#/` with a session cookie, or to `/#/login?sso_error=…` / `?sso_2fa=<pending>` |
+| POST | `/api/v1/auth/2fa` | `{pending, code}` finishes an SSO or GitHub sign-in when the account has 2FA and the provider does not skip it |
+| GET | `/api/v1/me/oidc` | providers linked to the signed-in account `[{provider_id, provider_slug, provider_name, email, created_at}]` |
+| GET | `/api/v1/me/oidc/{slug}/link` | links the provider to the signed-in account (browser redirect) |
+| DELETE | `/api/v1/me/oidc/{slug}` | unlinks it (refused when it is the only way in under enforced SSO) |
+| GET | `/api/v1/admin/oidc` | `{providers, redirect_uri}`; the client secret is never returned (`has_secret`) |
+| POST | `/api/v1/admin/oidc` | `{name, slug?, issuer, client_id, client_secret?, scopes?, enabled?, trusted_domains?, allowed_domains?, enforce_domains?, auto_provision?, default_team_id?, default_role?, groups_claim?, group_roles?: [{group, team_id, role}], skip_totp?}`; discovery is checked first. 201 |
+| PATCH | `/api/v1/admin/oidc/{id}` | same fields, all optional; an empty `client_secret` keeps the stored one |
+| DELETE | `/api/v1/admin/oidc/{id}` | removes the provider and its links |
+
+Which account an identity signs in to: a linked identity (provider + `sub`) signs in to its account.
+Otherwise the provider must report `email_verified: true`; an existing account with that email is
+linked automatically only when the domain is in `trusted_domains` and the account is not an
+administrator — anything else must be linked from a signed-in session. Unknown users get an account
+only with `auto_provision` (added to `default_team_id` with `default_role`). `allowed_domains` limits
+every sign-in to verified emails in those domains. `group_roles` sets team roles from the groups claim
+at each sign-in (highest role wins; owners untouched; memberships are not removed). `skip_totp`
+(default true) trusts the provider's MFA; turn it off to ask accounts with 2FA for their code.
+`enforce_domains` refuses password and GitHub sign-in (and sign-up) for those domains, except for the
+instance owner (the first administrator), whose password stays as a break-glass login; API tokens keep working.
 
 ## Sign-up and team limits (administrators)
 

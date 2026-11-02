@@ -31,7 +31,7 @@ See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap, and [docs/API.md](d
 | Databases | Shared or dedicated PostgreSQL / MySQL / MariaDB, plus Redis and MongoDB; linking injects `DATABASE_URL`; scheduled backups and restore; off-site copies to S3/R2/B2/MinIO; one-click upgrade from shared to dedicated |
 | Density | QoS classes (guaranteed / burstable / best-effort), per-node overcommit, sleep mode, memory-pressure eviction (PSI), language runtime tuning, right-sizing, zram, image and build-cache GC |
 | Cluster | `join` with one command, WireGuard mesh, internal DNS (`<service>.<project>.internal`), cross-node project isolation, internal image registry, cordon / drain, node health and rescheduling |
-| Security | Sessions + API tokens, TOTP two-factor auth, team RBAC (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, per-IP rate limiting at the edge |
+| Security | Sessions + API tokens, TOTP two-factor auth, single sign-on with OpenID Connect (Google Workspace, Entra ID, Keycloak, Authentik…: PKCE, safe account linking, just-in-time accounts, group → team role mapping, enforced SSO per email domain with an owner break-glass login), team RBAC (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, per-IP rate limiting at the edge |
 | Notify | Webhook, Slack, Discord and Telegram channels for deploys, crashes, node outages, failed backups and jobs |
 | Interfaces | Web dashboard (embedded Svelte app), `paas` CLI, REST API |
 

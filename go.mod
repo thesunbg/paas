@@ -12,6 +12,7 @@ require (
 	github.com/containerd/go-cni v1.1.14
 	github.com/containerd/platforms v1.0.0-rc.5
 	github.com/containerd/typeurl/v2 v2.3.0
+	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/miekg/dns v1.1.73
 	github.com/nats-io/nats-server/v2 v2.15.1
@@ -23,6 +24,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	golang.org/x/crypto v0.57.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.47.0
 	golang.org/x/text v0.43.0
 	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
@@ -46,6 +48,7 @@ require (
 	github.com/containernetworking/plugins v1.9.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect

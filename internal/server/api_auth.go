@@ -30,7 +30,12 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	signup, _ := s.store.GetSetting(r.Context(), settingAllowSignup)
 	_, ghErr := s.githubApp(r.Context())
-	writeJSON(w, 200, map[string]any{"needs_setup": n == 0, "allow_signup": signup == "true", "base_domain": s.cfg.BaseDomain, "github_login": ghErr == nil && n > 0})
+	sso := []map[string]string{}
+	if n > 0 {
+		sso = s.ssoButtons(r.Context())
+	}
+	writeJSON(w, 200, map[string]any{"needs_setup": n == 0, "allow_signup": signup == "true", "base_domain": s.cfg.BaseDomain, "github_login": ghErr == nil && n > 0,
+		"sso": sso})
 }
 
 type credentialsInput struct {
@@ -67,6 +72,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		signup, _ := s.store.GetSetting(r.Context(), settingAllowSignup)
 		if signup != "true" {
 			writeError(w, 403, "registration is closed; ask an administrator to invite you")
+			return
+		}
+		if p := s.ssoEnforced(r.Context(), in.Email); p != nil {
+			writeError(w, 403, fmt.Sprintf("accounts for %s addresses are created by signing in with %s", emailDomain(in.Email), p.Name))
 			return
 		}
 		if max := s.teamLimits(r.Context()).MaxPerIPPerDay; max > 0 && !signupGuard.take(clientAddr(r), max) {
@@ -119,6 +128,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	failed := func() { loginGuard.fail(pairKey); loginGuard.fail(ip); loginGuard.fail(emailKey) }
+	// Enforced SSO is decided by the email's domain alone, before looking the
+	// account up, so the answer does not reveal whether an account exists.
+	if p := s.ssoEnforced(r.Context(), email); p != nil {
+		writeJSON(w, 403, map[string]any{"error": ssoEnforcedMessage(p, email), "sso": p.Slug})
+		return
+	}
 	u, err := s.store.UserByEmail(r.Context(), strings.TrimSpace(in.Email))
 	if err != nil {
 		// Spend comparable time to avoid user enumeration.

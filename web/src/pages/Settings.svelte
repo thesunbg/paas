@@ -15,6 +15,8 @@
   import System from './settings/System.svelte';
   import Users from './settings/Users.svelte';
   import GitHubSignIn from './settings/GitHubSignIn.svelte';
+  import SSOSignIn from './settings/SSOSignIn.svelte';
+  import SSOProviders from './settings/SSOProviders.svelte';
   import Backups from './settings/Backups.svelte';
 
   let { tab = 'tokens' }: { tab?: string } = $props();
@@ -26,7 +28,7 @@
     { id: 'members', label: 'Team members' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'github', label: 'GitHub' },
-    ...(session.me?.user.is_admin ? [{ id: 'users', label: 'Users' }, { id: 'backups', label: 'Backups' }, { id: 'system', label: 'System' }] : []),
+    ...(session.me?.user.is_admin ? [{ id: 'users', label: 'Users' }, { id: 'sso', label: 'Single sign-on' }, { id: 'backups', label: 'Backups' }, { id: 'system', label: 'System' }] : []),
   ];
 
   // Tokens
@@ -294,6 +296,7 @@
       {:else if tab === 'security'}
         <div class="stack-lg">
           <TwoFactor />
+          <SSOSignIn />
           <GitHubSignIn />
         </div>
       {:else if tab === 'notifications'}
@@ -302,6 +305,8 @@
         <GitHub />
       {:else if tab === 'users' && session.me?.user.is_admin}
         <Users />
+      {:else if tab === 'sso' && session.me?.user.is_admin}
+        <SSOProviders />
       {:else if tab === 'backups' && session.me?.user.is_admin}
         <Backups />
       {:else if tab === 'system' && session.me?.user.is_admin}

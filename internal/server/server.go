@@ -91,6 +91,8 @@ type Server struct {
 	ghMu sync.Mutex
 	gh   *github.Client
 
+	oidc oidcCache // discovered OIDC providers and their key sets
+
 	pitrRunning atomic.Bool
 	haMu        sync.Mutex
 	haRunning   map[string]time.Time
