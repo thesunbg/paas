@@ -170,6 +170,7 @@ Usage:
   paas scale <service> <replicas>
   paas restart|stop|start <service>
   paas rollback <service> [deployment-id]
+  paas diagnose <service|deployment-id> [--refresh]  Explain a failed deployment with the configured AI model
   paas exec <service> -- <command>
   paas domains <service> [add|rm <hostname>]
   paas db ls
@@ -230,6 +231,8 @@ func main() {
 		err = cmdAction(cmd, rest)
 	case "rollback":
 		err = cmdRollback(rest)
+	case "diagnose":
+		err = cmdDiagnose(rest)
 	case "exec":
 		err = cmdExec(rest)
 	case "domains":
@@ -578,7 +581,7 @@ func splitFlags(args []string) (pos, flags []string) {
 
 func boolFlag(f string) bool {
 	switch strings.TrimLeft(f, "-") {
-	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart":
+	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh":
 		return true
 	}
 	return false
@@ -960,6 +963,65 @@ func cmdRollback(args []string) error {
 	}
 	fmt.Println("Rolling back to", target[:8])
 	return followDeployment(d.ID)
+}
+
+// cmdDiagnose asks the server's AI provider to explain a deployment failure.
+// A service name picks its latest failed deployment.
+func cmdDiagnose(args []string) error {
+	pos, flags := splitFlags(args)
+	fs := flag.NewFlagSet("diagnose", flag.ExitOnError)
+	refresh := fs.Bool("refresh", false, "ask again instead of showing the cached answer")
+	_ = fs.Parse(flags)
+	if len(pos) != 1 {
+		return errors.New("usage: paas diagnose <service|deployment-id> [--refresh]")
+	}
+	target := pos[0]
+	if s, _, err := findService(target); err == nil {
+		var deps []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		}
+		if err := call(http.MethodGet, "/services/"+s.ID+"/deployments", nil, &deps); err != nil {
+			return err
+		}
+		target = ""
+		for _, d := range deps {
+			if d.Status == "failed" {
+				target = d.ID
+				break
+			}
+		}
+		if target == "" {
+			return fmt.Errorf("%s has no failed deployment; pass a deployment id to diagnose another one", s.Slug)
+		}
+	}
+	var out struct {
+		Summary        string   `json:"summary"`
+		LikelyCause    string   `json:"likely_cause"`
+		SuggestedFixes []string `json:"suggested_fixes"`
+		Model          string   `json:"model"`
+		Cached         bool     `json:"cached"`
+	}
+	fmt.Fprintf(os.Stderr, "Diagnosing deployment %s...\n", target)
+	if err := call(http.MethodPost, "/deployments/"+url.PathEscape(target)+"/diagnose", map[string]bool{"refresh": *refresh}, &out); err != nil {
+		return err
+	}
+	fmt.Println(out.Summary)
+	if out.LikelyCause != "" {
+		fmt.Println("\nLikely cause:\n  " + out.LikelyCause)
+	}
+	if len(out.SuggestedFixes) > 0 {
+		fmt.Println("\nSuggested fixes:")
+		for i, f := range out.SuggestedFixes {
+			fmt.Printf("  %d. %s\n", i+1, f)
+		}
+	}
+	note := "AI suggestions by " + out.Model + "; nothing was changed."
+	if out.Cached {
+		note += " Cached answer (--refresh to ask again)."
+	}
+	fmt.Println("\n" + note)
+	return nil
 }
 
 func cmdExec(args []string) error {

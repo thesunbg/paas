@@ -383,6 +383,33 @@ export interface LogLine {
   line: string;
 }
 
+export interface Diagnosis {
+  deployment_id: string;
+  summary: string;
+  likely_cause: string;
+  suggested_fixes: string[];
+  provider: string;
+  model: string;
+  created_at: string;
+  cached: boolean;
+}
+
+export interface AISettings {
+  enabled: boolean;
+  provider: '' | 'anthropic' | 'openai';
+  model: string;
+  base_url: string;
+  has_key: boolean;
+  default_model: string;
+}
+
+export interface AIInput {
+  provider: '' | 'anthropic' | 'openai';
+  model: string;
+  base_url: string;
+  api_key: string;
+}
+
 export interface DeploymentDetail {
   deployment: Deployment;
   service: Service;
@@ -1110,6 +1137,8 @@ export const api = {
   deploymentLogStreamURL: (id: string) => `${BASE}/deployments/${e(id)}/logs/stream`,
   rollback: (id: string) => post<Deployment>(`/deployments/${e(id)}/rollback`),
   cancelDeployment: (id: string) => post<{ status: string }>(`/deployments/${e(id)}/cancel`),
+  diagnosis: (id: string) => get<{ enabled: boolean; diagnosis: Diagnosis | null }>(`/deployments/${e(id)}/diagnosis`),
+  diagnose: (id: string, refresh = false) => post<Diagnosis>(`/deployments/${e(id)}/diagnose`, { refresh }),
 
   // Databases
   database: (id: string) => get<DatabaseDetail>(`/databases/${e(id)}`),
@@ -1125,6 +1154,8 @@ export const api = {
   volumeBackupNow: (id: string) => post<VolumeBackup>(`/services/${e(id)}/volume-backups`),
   recoverService: (id: string, allowEmpty: boolean, backupId?: string) =>
     post<{ node: string; backup: VolumeBackup | null }>(`/services/${e(id)}/recover`, { allow_empty: allowEmpty, backup_id: backupId }),
+  aiSettings: () => get<AISettings>('/admin/ai'),
+  putAISettings: (input: AIInput) => put<AISettings>('/admin/ai', input),
   storage: () => get<StorageSettings>('/admin/storage'),
   putStorage: (input: StorageInput) => put<StorageSettings>('/admin/storage', input),
   stateBackups: () => get<StateBackups>('/admin/state-backups'),
