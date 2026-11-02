@@ -1,6 +1,6 @@
 ---
 title: Biên mạng của tenant
-status: pending
+status: implemented
 created: 2026-10-16
 brainstorm: ../reports/brainstorm-261016-tenant-network-boundary.md
 ---
