@@ -244,7 +244,7 @@ func (s *Server) buildDeployment(ctx context.Context, svc *store.Service, d *sto
 	}
 	_ = s.store.UpdateDeploymentBuild(ctx, d.ID, node.ID)
 	d.BuildNodeID = &node.ID
-	token, err := s.gitToken(ctx, svc)
+	auth, err := s.gitToken(ctx, svc)
 	if err != nil {
 		return fmt.Errorf("git credentials: %w", err)
 	}
@@ -255,7 +255,7 @@ func (s *Server) buildDeployment(ctx context.Context, svc *store.Service, d *sto
 	s.hub.Log(d.ID, "==> building on node "+node.Name)
 	req := proto.BuildRequest{
 		DeploymentID: d.ID, ServiceID: svc.ID, ProjectID: svc.ProjectID, ServiceType: svc.Type,
-		Repo: svc.Source.Repo, Branch: svc.Source.Branch, CommitSHA: d.CommitSHA, GitToken: token,
+		Repo: svc.Source.Repo, Branch: svc.Source.Branch, CommitSHA: d.CommitSHA, GitToken: auth.Token, GitUser: auth.User,
 		RootDir: svc.Source.RootDir, Dockerfile: svc.Source.Dockerfile, Build: svc.Build,
 		ImageName: build.ImageName(svc.ID, d.ID), BuildEnv: env, LogSubject: proto.DeployLogSubject(d.ID),
 	}

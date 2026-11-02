@@ -172,6 +172,10 @@ Usage:
   paas rollback <service> [deployment-id]
   paas exec <service> -- <command>
   paas domains <service> [add|rm <hostname>]
+  paas webhook <service>               Push-to-deploy webhook URL and secret for the service's git host
+  paas git-credentials [ls]            Team tokens for GitLab, Gitea/Forgejo, Bitbucket, GitHub
+  paas git-credentials add <gitlab|gitea|bitbucket|github> [--host H] [--username U] [--token T] [--name N]
+  paas git-credentials rm <host|id>
   paas db ls
   paas db create <name> --engine postgres|mysql|mariadb|redis|mongo [--mode shared|dedicated] [--size micro] [--link svc]
   paas db info <name>
@@ -234,6 +238,10 @@ func main() {
 		err = cmdExec(rest)
 	case "domains":
 		err = cmdDomains(rest)
+	case "webhook":
+		err = cmdWebhook(rest)
+	case "git-credentials", "git-creds":
+		err = cmdGitCredentials(rest)
 	case "db":
 		err = cmdDB(rest)
 	case "nodes":

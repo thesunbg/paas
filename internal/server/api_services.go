@@ -265,10 +265,6 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, resp)
 }
 
-func (s *Server) webhookURL(svc *store.Service) string {
-	return fmt.Sprintf("%s/api/v1/webhooks/github/%s", s.cfg.PublicURL, svc.ID)
-}
-
 func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 	svc, p := s.serviceFor(w, r, "viewer")
 	if svc == nil {
@@ -333,6 +329,7 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	role, _ := s.teamRole(r, p.TeamID)
+	provider := s.gitProviderOf(ctx, svc, p.TeamID)
 	webhookSecret := svc.WebhookSecret
 	if roleRank[role] < roleRank["developer"] {
 		webhookSecret = ""
@@ -359,7 +356,8 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		"instances":      insts,
 		"deployments":    deps,
 		"databases":      linked,
-		"webhook_url":    s.webhookURL(svc),
+		"webhook_url":    s.webhookURL(svc, provider),
+		"git_provider":   provider,
 		"webhook_secret": webhookSecret,
 		"internal_host":  internalHost(svc.Slug, p.Slug),
 		"recommendation": resources.Recommend(svc.Spec.Resources, peak),

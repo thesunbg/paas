@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { api, ApiError, catalog, errorMessage, type HealthCheck, type QoS, type Resources, type ServiceDetail, type ServiceInput, type Size, type Volume } from '../../lib/api';
   import { mb, cpu } from '../../lib/format';
-  import { navigate } from '../../lib/router.svelte';
+  import { navigate, href } from '../../lib/router.svelte';
   import { toast } from '../../lib/toast.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import CopyField from '../../components/CopyField.svelte';
@@ -21,6 +21,8 @@
   const isWeb = s0.type === 'web';
   const isCron = s0.type === 'cron';
   const isPreview = !!s0.parent_id;
+  const provider = $derived(detail.git_provider || 'github');
+  const providerName = $derived({ github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea / Forgejo', bitbucket: 'Bitbucket' }[provider]);
   // Version of the service the form was filled from; sent as If-Match so a change made elsewhere is not overwritten.
   let formVersion = s0.version;
 
@@ -261,6 +263,7 @@
           <label class="field">
             <span>Access token</span>
             <input type="password" class="mono" bind:value={gitToken} placeholder={detail.service.has_git_token ? '•••••••• (set — leave blank to keep)' : 'not set'} autocomplete="off" disabled={clearToken} />
+            <span class="hint">Optional when the team has a credential for this host (Settings → <a href={href('/settings/git')}>Git hosts</a>).</span>
           </label>
           {#if detail.service.has_git_token}<label class="check small"><input type="checkbox" bind:checked={clearToken} />Remove the stored token</label>{/if}
           {/if}
@@ -342,7 +345,7 @@
             <AutoscaleFields bind:value={autoscale} disabled={!canEdit} />
             {#if !isPreview && kind === 'git'}
               <label class="check"><input type="checkbox" bind:checked={previews} />Preview deployments for pull requests</label>
-              <p class="hint" style="margin-top:-6px">Needs the GitHub webhook with the <code>pull_request</code> event (see the webhook panel).</p>
+              <p class="hint" style="margin-top:-6px">Needs the webhook with pull / merge request events (see the webhook panel).</p>
             {/if}
           {/if}
           <div class="grid-3">
@@ -449,17 +452,34 @@
       </div>
     {:else if s0.source.kind !== 'image'}
       <div class="card">
-        <div class="card-head"><h3>GitHub webhook</h3></div>
+        <div class="card-head"><h3>{providerName} webhook</h3></div>
         <div class="card-body stack">
-          <div class="field"><span>Payload URL</span><CopyField value={detail.webhook_url} label="Webhook URL" /></div>
-          <div class="field"><span>Secret</span><Secret value={detail.webhook_secret} /></div>
+          <div class="field"><span>{provider === 'gitlab' ? 'URL' : provider === 'bitbucket' ? 'URL' : 'Payload URL'}</span><CopyField value={detail.webhook_url} label="Webhook URL" /></div>
+          <div class="field"><span>{provider === 'gitlab' ? 'Secret token' : 'Secret'}</span><Secret value={detail.webhook_secret} /></div>
           <ol class="howto small muted">
-            <li>Open your repository on GitHub → <b>Settings</b> → <b>Webhooks</b> → <b>Add webhook</b>.</li>
-            <li>Paste the <b>Payload URL</b> above.</li>
-            <li>Content type: <code>application/json</code>.</li>
-            <li>Secret: the value above.</li>
-            <li>Events: <b>Pushes</b>{previews ? ' and ' : ''}{#if previews}<b>Pull requests</b>{/if} (“Let me select individual events”). Save.</li>
+            {#if provider === 'gitlab'}
+              <li>Open your project on GitLab → <b>Settings</b> → <b>Webhooks</b> → <b>Add new webhook</b>.</li>
+              <li>Paste the <b>URL</b> above and the secret as <b>Secret token</b>.</li>
+              <li>Trigger: <b>Push events</b>{#if previews} and <b>Merge request events</b>{/if}. Save.</li>
+            {:else if provider === 'gitea'}
+              <li>Open your repository on Gitea / Forgejo → <b>Settings</b> → <b>Webhooks</b> → <b>Add webhook</b> → <b>Gitea</b> (or <b>Forgejo</b>).</li>
+              <li>Paste the <b>Target URL</b> above; content type <code>application/json</code>; secret: the value above.</li>
+              <li>Trigger on: <b>Push</b>{#if previews} and <b>Pull request</b>{/if} events. Save.</li>
+            {:else if provider === 'bitbucket'}
+              <li>Open your repository on Bitbucket → <b>Repository settings</b> → <b>Webhooks</b> → <b>Add webhook</b>.</li>
+              <li>Paste the <b>URL</b> above and the secret (required: unsigned deliveries are rejected).</li>
+              <li>Triggers: <b>Repository push</b>{#if previews} and Pull request <b>Created</b>, <b>Updated</b>, <b>Merged</b>, <b>Declined</b>{/if}. Save.</li>
+            {:else}
+              <li>Open your repository on GitHub → <b>Settings</b> → <b>Webhooks</b> → <b>Add webhook</b>.</li>
+              <li>Paste the <b>Payload URL</b> above.</li>
+              <li>Content type: <code>application/json</code>.</li>
+              <li>Secret: the value above.</li>
+              <li>Events: <b>Pushes</b>{previews ? ' and ' : ''}{#if previews}<b>Pull requests</b>{/if} (“Let me select individual events”). Save.</li>
+            {/if}
           </ol>
+          {#if !detail.git_provider}
+            <p class="hint">Self-hosted GitLab or Gitea? Add a credential for its host under Settings → <a href={href('/settings/git')}>Git hosts</a> to get the matching webhook.</p>
+          {/if}
           <p class="hint">Pushes to <code>{s0.source.branch || 'main'}</code>{s0.source.root_dir ? ` touching ${s0.source.root_dir}/` : ''} deploy automatically{detail.service.source.auto_deploy ? '' : ' (auto-deploy is currently off)'}.</p>
         </div>
       </div>

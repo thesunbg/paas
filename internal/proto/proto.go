@@ -241,6 +241,7 @@ type BuildRequest struct {
 	Branch       string            `json:"branch"`
 	CommitSHA    string            `json:"commit_sha,omitempty"`
 	GitToken     string            `json:"git_token,omitempty"`
+	GitUser      string            `json:"git_user,omitempty"` // HTTP basic user sent with GitToken (default x-access-token)
 	RootDir      string            `json:"root_dir,omitempty"`
 	Dockerfile   string            `json:"dockerfile,omitempty"`
 	Build        model.BuildConfig `json:"build"`
@@ -361,6 +362,7 @@ type DetectRequest struct {
 	Branch     string `json:"branch"`
 	RootDir    string `json:"root_dir,omitempty"`
 	GitToken   string `json:"git_token,omitempty"`
+	GitUser    string `json:"git_user,omitempty"`
 	Dockerfile string `json:"dockerfile,omitempty"`
 	// ComposePath reads this compose file instead of searching for one.
 	ComposePath string `json:"compose_path,omitempty"`

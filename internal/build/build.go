@@ -209,7 +209,7 @@ func (b *Builder) checkout(ctx context.Context, req proto.BuildRequest, dest str
 		if err != nil {
 			return "", "", err
 		}
-		u.User = url.UserPassword("x-access-token", req.GitToken)
+		u.User = url.UserPassword(firstNonEmpty(req.GitUser, "x-access-token"), req.GitToken)
 		cloneURL = u.String()
 		redact = func(s string) string { return strings.ReplaceAll(s, req.GitToken, "***") }
 	}
@@ -369,7 +369,7 @@ func (b *Builder) Inspect(ctx context.Context, req proto.DetectRequest) proto.De
 	}
 	defer os.RemoveAll(work)
 	src := filepath.Join(work, "src")
-	sha, msg, err := b.checkout(ctx, proto.BuildRequest{Repo: req.Repo, Branch: req.Branch, GitToken: req.GitToken}, src, func(string) {})
+	sha, msg, err := b.checkout(ctx, proto.BuildRequest{Repo: req.Repo, Branch: req.Branch, GitToken: req.GitToken, GitUser: req.GitUser}, src, func(string) {})
 	if err != nil {
 		return proto.DetectReply{Error: err.Error()}
 	}

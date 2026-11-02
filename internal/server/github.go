@@ -39,18 +39,22 @@ func verifyGitHubSignature(secret string, body []byte, header string) bool {
 }
 
 type pushEvent struct {
-	Ref        string `json:"ref"`
-	After      string `json:"after"`
-	Deleted    bool   `json:"deleted"`
-	HeadCommit *struct {
-		ID      string `json:"id"`
-		Message string `json:"message"`
-	} `json:"head_commit"`
-	Commits []struct {
-		Added    []string `json:"added"`
-		Removed  []string `json:"removed"`
-		Modified []string `json:"modified"`
-	} `json:"commits"`
+	Ref        string       `json:"ref"`
+	After      string       `json:"after"`
+	Deleted    bool         `json:"deleted"`
+	HeadCommit *headCommit  `json:"head_commit"`
+	Commits    []pushCommit `json:"commits"`
+}
+
+type headCommit struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
+}
+
+type pushCommit struct {
+	Added    []string `json:"added"`
+	Removed  []string `json:"removed"`
+	Modified []string `json:"modified"`
 }
 
 // handleGitHubWebhook triggers a deployment when the configured branch receives a push.
@@ -92,6 +96,12 @@ func (s *Server) handleGitHubEvent(w http.ResponseWriter, r *http.Request, svc *
 		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
+	s.handlePush(w, r, svc, ev)
+}
+
+// handlePush deploys a verified push (from any provider, mapped onto GitHub's
+// shape) when it updates the service's branch.
+func (s *Server) handlePush(w http.ResponseWriter, r *http.Request, svc *store.Service, ev pushEvent) {
 	branch := strings.TrimPrefix(ev.Ref, "refs/heads/")
 	want := svc.Source.Branch
 	if want == "" {
@@ -141,23 +151,20 @@ func touchesPath(ev pushEvent, prefix string) bool {
 	return false
 }
 
-// reportCommitStatus posts a commit status to GitHub when the service has GitHub access.
+// reportCommitStatus posts a commit status to the repository's host when the
+// service has credentials for it (GitHub App, its own token or a team credential).
 func (s *Server) reportCommitStatus(ctx context.Context, svc *store.Service, d *store.Deployment, state string) {
 	if svc == nil || d == nil || d.CommitSHA == "" || svc.Source.Kind != "git" || !validSHA(d.CommitSHA) {
 		return
 	}
-	if svc.GitTokenEnc == "" && svc.Source.InstallationID == 0 {
-		return
-	}
+	desc := map[string]string{"pending": "Deploying…", "success": "Deployed", "failure": "Deployment failed", "error": "Deployment cancelled"}[state]
+	target := fmt.Sprintf("%s/#/services/%s/deployments/%s", s.cfg.PublicURL, svc.ID, d.ID)
 	m := githubRepoRe.FindStringSubmatch(svc.Source.Repo)
-	if m == nil {
+	if m == nil || (svc.GitTokenEnc == "" && svc.Source.InstallationID == 0) {
+		s.reportProviderStatus(ctx, svc, d.CommitSHA, state, desc, target)
 		return
 	}
-	desc := map[string]string{"pending": "Deploying…", "success": "Deployed", "failure": "Deployment failed"}[state]
-	payload := map[string]string{
-		"state": state, "context": "paas/" + svc.Slug, "description": desc,
-		"target_url": fmt.Sprintf("%s/#/services/%s/deployments/%s", s.cfg.PublicURL, svc.ID, d.ID),
-	}
+	payload := map[string]string{"state": state, "context": "paas/" + svc.Slug, "description": desc, "target_url": target}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
@@ -195,24 +202,40 @@ func (s *Server) githubPost(ctx context.Context, svc *store.Service, path string
 	return nil
 }
 
-// gitToken returns the credential used to clone a service's repository.
-func (s *Server) gitToken(ctx context.Context, svc *store.Service) (string, error) {
+// gitToken returns the credential used to clone a service's repository: the
+// GitHub App installation, the service's own token, or the team's credential
+// for the repository's host (never a credential of another host).
+func (s *Server) gitToken(ctx context.Context, svc *store.Service) (gitAuth, error) {
 	if svc.Source.InstallationID != 0 {
 		c, err := s.githubApp(ctx)
 		if err != nil {
-			return "", err
+			return gitAuth{}, err
 		}
 		inst, err := s.store.GitHubInstallation(ctx, svc.Source.InstallationID)
 		if err != nil {
-			return "", err
+			return gitAuth{}, err
 		}
-		return repoToken(ctx, c, inst, svc.Source.Repo)
+		tok, err := repoToken(ctx, c, inst, svc.Source.Repo)
+		if err != nil {
+			return gitAuth{}, err
+		}
+		return gitAuth{Provider: providerGitHub, User: defaultGitUser(providerGitHub), Token: tok}, nil
 	}
-	token, err := s.box.Decrypt(svc.GitTokenEnc)
-	if err != nil {
-		return "", fmt.Errorf("decrypt git token: %w", err)
+	if svc.GitTokenEnc != "" {
+		token, err := s.box.Decrypt(svc.GitTokenEnc)
+		if err != nil {
+			return gitAuth{}, fmt.Errorf("decrypt git token: %w", err)
+		}
+		if token != "" {
+			host, _ := repoHost(svc.Source.Repo)
+			p := knownGitHosts[host]
+			return gitAuth{Provider: p, User: defaultGitUser(p), Token: token}, nil
+		}
 	}
-	return token, nil
+	if svc.ProjectID == "" {
+		return gitAuth{}, nil
+	}
+	return s.teamGitAuth(ctx, s.teamOfService(ctx, svc), svc.Source.Repo)
 }
 
 // repoToken mints a token limited to repoURL, which must belong to the
