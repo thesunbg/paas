@@ -3,6 +3,7 @@
   import { duration } from '../../lib/format';
   import Icon from '../../components/Icon.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
+  import { t } from '../../lib/i18n.svelte';
   // xterm.js is large: load the terminal only when the tab opens.
   const loadTerminal = () => import('../../components/Terminal.svelte');
 
@@ -63,12 +64,12 @@
 
 <div class="stack">
   <div class="between">
-    <div class="row" role="group" aria-label="Mode">
+    <div class="row" role="group" aria-label={t('Mode')}>
       <button type="button" class="sm" class:on={mode === 'terminal'} aria-pressed={mode === 'terminal'} onclick={() => (mode = 'terminal')}><Icon name="terminal" size={13} />Terminal</button>
-      <button type="button" class="sm" class:on={mode === 'command'} aria-pressed={mode === 'command'} onclick={() => (mode = 'command')}>Run a command</button>
+      <button type="button" class="sm" class:on={mode === 'command'} aria-pressed={mode === 'command'} onclick={() => (mode = 'command')}>{t('Run a command')}</button>
     </div>
     {#if running.length > 1}
-      <label class="row small">Instance
+      <label class="row small">{t('Instance')}
         <select bind:value={instance}>
           {#each running as i (i.container_id)}<option value={i.container_id}>{i.container_id}</option>{/each}
         </select>
@@ -77,12 +78,12 @@
   </div>
   {#if mode === 'terminal'}
     {#if running.length === 0}
-      <div class="alert warn">No running instance{detail.service.status === 'sleeping' ? ' — the service is sleeping; send it a request to wake it' : ''}.</div>
+      <div class="alert warn">{detail.service.status === 'sleeping' ? t('No running instance — the service is sleeping; send it a request to wake it.') : t('No running instance.')}</div>
     {:else}
-      <p class="muted small">An interactive shell (bash if the image has it, else sh) in {instance}: interactive tools and wizards work here. Closing the tab ends it; sessions are recorded in the audit log.</p>
+      <p class="muted small">{t('An interactive shell (bash if the image has it, else sh) in {instance}: interactive tools and wizards work here. Closing the tab ends it; sessions are recorded in the audit log.', { instance })}</p>
       {#key instance}
         {#await loadTerminal()}
-          <p class="muted small">Loading the terminal…</p>
+          <p class="muted small">{t('Loading the terminal…')}</p>
         {:then m}
           <m.default serviceId={detail.service.id} {instance} />
         {:catch err}
@@ -92,16 +93,16 @@
     {/if}
   {:else}
   <p class="muted small">
-    Runs a one-off command with <code>/bin/sh -c</code> inside a running instance{running[0] ? ` (${running[0].container_id})` : ''}. Times out after 120 s. Commands are recorded in the audit log.
+    {t('Runs a one-off command with')} <code>/bin/sh -c</code> {t('inside a running instance')}{running[0] ? ` (${running[0].container_id})` : ''}. {t('Times out after 120 s. Commands are recorded in the audit log.')}
   </p>
   {#if running.length === 0}
-    <div class="alert warn">No running instance{detail.service.status === 'sleeping' ? ' — the service is sleeping; send it a request to wake it' : ''}.</div>
+    <div class="alert warn">{detail.service.status === 'sleeping' ? t('No running instance — the service is sleeping; send it a request to wake it.') : t('No running instance.')}</div>
   {/if}
   <form class="cmd" onsubmit={run}>
     <span class="prompt mono" aria-hidden="true">$</span>
-    <label class="sr-only" for="cmd">Command</label>
+    <label class="sr-only" for="cmd">{t('Command')}</label>
     <input id="cmd" class="mono" bind:value={command} {onkeydown} placeholder="ls -la /app" autocomplete="off" spellcheck="false" disabled={busy} />
-    <button class="primary" type="submit" disabled={busy || !command.trim() || running.length === 0}>{#if busy}<span class="spinner"></span>{:else}<Icon name="terminal" size={14} />{/if}Run</button>
+    <button class="primary" type="submit" disabled={busy || !command.trim() || running.length === 0}>{#if busy}<span class="spinner"></span>{:else}<Icon name="terminal" size={14} />{/if}{t('Run')}</button>
   </form>
 
   {#each history as h, i (history.length - i)}
@@ -112,7 +113,7 @@
           {#if h.result}
             <span class="badge {h.result.exit_code === 0 && !h.result.error ? 'green' : 'red'}">exit {h.result.exit_code}</span>
           {:else}
-            <span class="badge red">error</span>
+            <span class="badge red">{t('error')}</span>
           {/if}
           <span class="faint">{duration(h.ms)}</span>
         </span>
@@ -129,7 +130,7 @@
           <div class="label out-label">stderr</div>
           <pre class="log out err">{h.result.stderr}</pre>
         {/if}
-        {#if !h.result.stdout && !h.result.stderr}<div class="card-body faint small">(no output)</div>{/if}
+        {#if !h.result.stdout && !h.result.stderr}<div class="card-body faint small">{t('(no output)')}</div>{/if}
       {/if}
     </div>
   {/each}

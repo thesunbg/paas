@@ -6,6 +6,7 @@
   import { poll } from '../../lib/poll';
   import { toast } from '../../lib/toast.svelte';
   import { confirmDialog } from '../../lib/confirm.svelte';
+  import { t } from '../../lib/i18n.svelte';
   import DeployBadge from '../../components/DeployBadge.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import Loading from '../../components/Loading.svelte';
@@ -37,15 +38,15 @@
 
   async function rollback(d: Deployment) {
     const ok = await confirmDialog({
-      title: 'Roll back',
-      message: `Redeploy the artifact from ${shortSha(d.commit_sha) || d.id.slice(0, 8)} (${relTime(d.created_at)})? No rebuild is needed.`,
-      confirmLabel: 'Roll back',
+      title: t('Roll back'),
+      message: t('Redeploy the artifact from {ref} ({time})? No rebuild is needed.', { ref: shortSha(d.commit_sha) || d.id.slice(0, 8), time: relTime(d.created_at) }),
+      confirmLabel: t('Roll back'),
     });
     if (!ok) return;
     busy = d.id;
     try {
       const nd = await api.rollback(d.id);
-      toast.success('Rollback started');
+      toast.success(t('Rollback started'));
       await reload();
       navigate(`/services/${sid}/deployments/${nd.id}`);
     } catch (e) {
@@ -59,7 +60,7 @@
     busy = d.id;
     try {
       await api.cancelDeployment(d.id);
-      toast.success('Deployment cancelled');
+      toast.success(t('Deployment cancelled'));
       await load();
       reload();
     } catch (e) {
@@ -73,7 +74,7 @@
     busy = 'new';
     try {
       const d = await api.deploy(sid);
-      toast.success('Deployment queued');
+      toast.success(t('Deployment queued'));
       reload();
       navigate(`/services/${sid}/deployments/${d.id}`);
     } catch (e) {
@@ -86,24 +87,24 @@
 
 <div class="stack">
   <div class="between">
-    <p class="muted small">The latest 50 deployments. Click one to view its build and deploy log.</p>
-    {#if canEdit}<button class="primary" onclick={deploy} disabled={!!busy}>{#if busy === 'new'}<span class="spinner"></span>{:else}<Icon name="rocket" size={14} />{/if}Deploy now</button>{/if}
+    <p class="muted small">{t('The latest 50 deployments. Click one to view its build and deploy log.')}</p>
+    {#if canEdit}<button class="primary" onclick={deploy} disabled={!!busy}>{#if busy === 'new'}<span class="spinner"></span>{:else}<Icon name="rocket" size={14} />{/if}{t('Deploy now')}</button>{/if}
   </div>
   <ErrorMsg {error} onretry={load} />
   {#if deps === null && !error}
     <Loading rows={3} />
   {:else if deps && deps.length === 0}
-    <div class="card empty">No deployments yet.</div>
+    <div class="card empty">{t('No deployments yet.')}</div>
   {:else if deps}
     <div class="card table-wrap">
       <table>
-        <thead><tr><th>Status</th><th>Commit</th><th class="hide-sm">Trigger</th><th>Created</th><th class="hide-sm">Duration</th><th class="right">Actions</th></tr></thead>
+        <thead><tr><th>{t('Status')}</th><th>{t('Commit')}</th><th class="hide-sm">{t('Trigger')}</th><th>{t('Created')}</th><th class="hide-sm">{t('Duration')}</th><th class="right">{t('Actions')}</th></tr></thead>
         <tbody>
           {#each deps as d (d.id)}
             <tr class="clickable" onclick={() => navigate(`/services/${sid}/deployments/${d.id}`)}>
               <td class="nowrap">
                 <DeployBadge status={d.status} />
-                {#if d.id === detail.service.current_deployment_id}<span class="badge outline" style="margin-left:4px">current</span>{/if}
+                {#if d.id === detail.service.current_deployment_id}<span class="badge outline" style="margin-left:4px">{t('current')}</span>{/if}
               </td>
               <td>
                 <div class="commit">
@@ -119,10 +120,10 @@
               <td class="hide-sm nowrap mono small">{between(d.started_at, d.finished_at, running(d))}</td>
               <td class="right nowrap">
                 {#if canEdit && d.status === 'queued'}
-                  <button class="sm" disabled={busy === d.id} onclick={(e) => (e.stopPropagation(), cancel(d))}>Cancel</button>
+                  <button class="sm" disabled={busy === d.id} onclick={(e) => (e.stopPropagation(), cancel(d))}>{t('Cancel')}</button>
                 {/if}
                 {#if canRollback(d)}
-                  <button class="sm" disabled={busy === d.id} onclick={(e) => (e.stopPropagation(), rollback(d))}><Icon name="undo" size={12} />Rollback</button>
+                  <button class="sm" disabled={busy === d.id} onclick={(e) => (e.stopPropagation(), rollback(d))}><Icon name="undo" size={12} />{t('Rollback')}</button>
                 {/if}
               </td>
             </tr>
