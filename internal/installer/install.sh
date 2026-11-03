@@ -103,11 +103,17 @@ fetch() { curl -fsSL --retry 3 -o "$2" "$1"; }
 install_packages() {
   if command -v apt-get >/dev/null; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq curl ca-certificates git nftables iptables tar >/dev/null
+    # A fresh server often runs unattended-upgrades right after boot: wait for its
+    # dpkg lock (up to 10 minutes) instead of failing.
+    APT="apt-get -o DPkg::Lock::Timeout=600"
+    if command -v fuser >/dev/null && fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+      log "waiting for another package manager (unattended-upgrades?) to finish"
+    fi
+    $APT update -qq
+    $APT install -y -qq curl ca-certificates git nftables iptables tar >/dev/null
     # pg_dump/pg_restore are needed for state backups even with an external database.
-    if [ "$MODE" = server ] && [ -n "$DBURL" ]; then apt-get install -y -qq postgresql-client >/dev/null
-    elif [ "$MODE" = server ]; then apt-get install -y -qq postgresql >/dev/null; fi
+    if [ "$MODE" = server ] && [ -n "$DBURL" ]; then $APT install -y -qq postgresql-client >/dev/null
+    elif [ "$MODE" = server ]; then $APT install -y -qq postgresql >/dev/null; fi
   elif command -v dnf >/dev/null; then
     dnf install -y -q curl ca-certificates git nftables iptables tar
     if [ "$MODE" = server ] && [ -n "$DBURL" ]; then dnf install -y -q postgresql
