@@ -7,6 +7,7 @@
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import Loading from '../../components/Loading.svelte';
   import Icon from '../../components/Icon.svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   let channels = $state<Channel[] | null>(null);
   let events = $state<string[]>([]);
@@ -23,10 +24,10 @@
   const isAdmin = $derived(team ? can('admin', team.id) : false);
 
   async function load() {
-    const t = team;
-    if (!t) return;
+    const tm = team;
+    if (!tm) return;
     try {
-      const r = await api.channels(t.id);
+      const r = await api.channels(tm.id);
       channels = r.channels ?? [];
       events = r.events ?? [];
       error = '';
@@ -40,41 +41,42 @@
     load();
   });
 
-  const kinds: { id: ChannelKind; label: string; placeholder: string; hint: string }[] = [
-    { id: 'slack', label: 'Slack', placeholder: 'https://hooks.slack.com/services/…', hint: 'An incoming-webhook URL.' },
-    { id: 'discord', label: 'Discord', placeholder: 'https://discord.com/api/webhooks/…', hint: 'Channel settings → Integrations → Webhooks.' },
-    { id: 'telegram', label: 'Telegram', placeholder: '123456:ABC-DEF…:-1001234567890', hint: 'Format: <bot token>:<chat id>.' },
-    { id: 'webhook', label: 'Webhook', placeholder: 'https://example.com/hooks/paas', hint: 'Receives a JSON POST for each event.' },
-  ];
+  // The label is also the default channel name sent to the API: kept in English.
+  const kinds: { id: ChannelKind; label: string; placeholder: string; hint: string }[] = $derived([
+    { id: 'slack', label: 'Slack', placeholder: 'https://hooks.slack.com/services/…', hint: t('An incoming-webhook URL.') },
+    { id: 'discord', label: 'Discord', placeholder: 'https://discord.com/api/webhooks/…', hint: t('Channel settings → Integrations → Webhooks.') },
+    { id: 'telegram', label: 'Telegram', placeholder: '123456:ABC-DEF…:-1001234567890', hint: t('Format: <bot token>:<chat id>.') },
+    { id: 'webhook', label: 'Webhook', placeholder: 'https://example.com/hooks/paas', hint: t('Receives a JSON POST for each event.') },
+  ]);
   const kindInfo = $derived(kinds.find((k) => k.id === kind)!);
-  const eventLabels: Record<string, string> = {
-    'deploy.succeeded': 'Deploy succeeded',
-    'deploy.failed': 'Deploy failed',
-    'deploy.vulnerable': 'Vulnerabilities found in a deployed image',
-    'instance.crashloop': 'Instance crash-looping',
-    'instance.evicted': 'Instance evicted',
-    'node.offline': 'Node offline',
-    'backup.failed': 'Backup failed',
-    'job.failed': 'Cron job failed',
-    autoscale: 'Autoscaling changes',
-    'alert.firing': 'Alert firing',
-    'alert.resolved': 'Alert resolved',
-    'uptime.down': 'Uptime check down',
-    'uptime.up': 'Uptime check recovered',
-    'uptime.cert': 'TLS certificate expiring',
-    'update.available': 'New paas release available (admins)',
-    'update.failed': 'paas update stopped (admins)',
-  };
+  const eventLabels: Record<string, string> = $derived({
+    'deploy.succeeded': t('Deploy succeeded'),
+    'deploy.failed': t('Deploy failed'),
+    'deploy.vulnerable': t('Vulnerabilities found in a deployed image'),
+    'instance.crashloop': t('Instance crash-looping'),
+    'instance.evicted': t('Instance evicted'),
+    'node.offline': t('Node offline'),
+    'backup.failed': t('Backup failed'),
+    'job.failed': t('Cron job failed'),
+    autoscale: t('Autoscaling changes'),
+    'alert.firing': t('Alert firing'),
+    'alert.resolved': t('Alert resolved'),
+    'uptime.down': t('Uptime check down'),
+    'uptime.up': t('Uptime check recovered'),
+    'uptime.cert': t('TLS certificate expiring'),
+    'update.available': t('New paas release available (admins)'),
+    'update.failed': t('paas update stopped (admins)'),
+  });
 
   async function add(e: SubmitEvent) {
     e.preventDefault();
     if (!team) return;
     formError = '';
-    if (!picked.length) return void (formError = 'Pick at least one event');
+    if (!picked.length) return void (formError = t('Pick at least one event'));
     busy = 'add';
     try {
       await api.createChannel(team.id, { name: name.trim() || kindInfo.label, kind, target: target.trim(), events: picked });
-      toast.success('Channel added');
+      toast.success(t('Channel added'));
       name = '';
       target = '';
       await load();
@@ -89,7 +91,7 @@
     busy = c.id;
     try {
       await api.testChannel(team.id, c.id);
-      toast.success(`Test message sent to ${c.name}`);
+      toast.success(t('Test message sent to {name}', { name: c.name }));
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -98,10 +100,10 @@
   }
   async function remove(c: Channel) {
     if (!team) return;
-    if (!(await confirmDialog({ title: 'Delete channel', message: `Stop sending notifications to ${c.name}?`, confirmLabel: 'Delete', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('Delete channel'), message: t('Stop sending notifications to {name}?', { name: c.name }), confirmLabel: t('Delete'), danger: true }))) return;
     try {
       await api.deleteChannel(team.id, c.id);
-      toast.success('Channel deleted');
+      toast.success(t('Channel deleted'));
       await load();
     } catch (e) {
       toast.error(errorMessage(e));
@@ -112,8 +114,8 @@
 <div class="card">
   <div class="card-head">
     <div>
-      <h3>Notifications · {team?.name}</h3>
-      <p class="hint">Send deploy, crash, node, backup and job events to chat or a webhook.</p>
+      <h3>{t('Notifications')} · {team?.name}</h3>
+      <p class="hint">{t('Send deploy, crash, node, backup and job events to chat or a webhook.')}</p>
     </div>
   </div>
   {#if error}<div class="card-body"><ErrorMsg {error} onretry={load} /></div>{/if}
@@ -121,11 +123,11 @@
     <div class="card-body"><Loading /></div>
   {:else if channels}
     {#if channels.length === 0}
-      <div class="card-body muted small">No channels yet.</div>
+      <div class="card-body muted small">{t('No channels yet.')}</div>
     {:else}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Kind</th><th>Events</th><th class="hide-sm">Added</th><th class="right"></th></tr></thead>
+          <thead><tr><th>{t('Name')}</th><th>{t('Kind')}</th><th>{t('Events')}</th><th class="hide-sm">{t('Added')}</th><th class="right"></th></tr></thead>
           <tbody>
             {#each channels as c (c.id)}
               <tr>
@@ -134,8 +136,8 @@
                 <td class="evs">{#each c.events as ev (ev)}<span class="badge outline">{ev}</span>{/each}</td>
                 <td class="hide-sm faint small">{relTime(c.created_at)}</td>
                 <td class="right nowrap">
-                  <button class="sm" onclick={() => test(c)} disabled={busy === c.id}>{#if busy === c.id}<span class="spinner"></span>{/if}Test</button>
-                  {#if isAdmin}<button class="sm danger" onclick={() => remove(c)} aria-label="Delete {c.name}"><Icon name="trash" size={12} /></button>{/if}
+                  <button class="sm" onclick={() => test(c)} disabled={busy === c.id}>{#if busy === c.id}<span class="spinner"></span>{/if}{t('Test')}</button>
+                  {#if isAdmin}<button class="sm danger" onclick={() => remove(c)} aria-label={t('Delete {name}', { name: c.name })}><Icon name="trash" size={12} /></button>{/if}
                 </td>
               </tr>
             {/each}
@@ -145,24 +147,24 @@
     {/if}
     {#if isAdmin}
       <form class="card-body stack add" onsubmit={add}>
-        <h3>Add a channel</h3>
+        <h3>{t('Add a channel')}</h3>
         <div class="grid-3">
           <label class="field">
-            <span>Kind</span>
+            <span>{t('Kind')}</span>
             <select bind:value={kind}>{#each kinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}</select>
           </label>
           <label class="field">
-            <span>Name</span>
+            <span>{t('Name')}</span>
             <input bind:value={name} placeholder={kindInfo.label + ' #ops'} maxlength="64" />
           </label>
         </div>
         <label class="field">
-          <span>{kind === 'telegram' ? 'Bot token and chat id' : 'Webhook URL'}</span>
+          <span>{kind === 'telegram' ? t('Bot token and chat id') : t('Webhook URL')}</span>
           <input class="mono" type={kind === 'telegram' ? 'password' : 'url'} bind:value={target} required placeholder={kindInfo.placeholder} autocomplete="off" spellcheck="false" />
-          <span class="hint">{kindInfo.hint} Stored encrypted.</span>
+          <span class="hint">{kindInfo.hint} {t('Stored encrypted.')}</span>
         </label>
         <fieldset>
-          <legend class="label">Events</legend>
+          <legend class="label">{t('Events')}</legend>
           <div class="events">
             {#each events as ev (ev)}
               <label class="check small"><input type="checkbox" bind:group={picked} value={ev} />{eventLabels[ev] ?? ev}</label>
@@ -170,10 +172,10 @@
           </div>
         </fieldset>
         <ErrorMsg error={formError} />
-        <div><button class="primary" type="submit" disabled={busy === 'add' || !target.trim()}>{#if busy === 'add'}<span class="spinner"></span>{/if}Add channel</button></div>
+        <div><button class="primary" type="submit" disabled={busy === 'add' || !target.trim()}>{#if busy === 'add'}<span class="spinner"></span>{/if}{t('Add channel')}</button></div>
       </form>
     {:else}
-      <div class="card-body hint">Only team admins can add channels.</div>
+      <div class="card-body hint">{t('Only team admins can add channels.')}</div>
     {/if}
   {/if}
 </div>

@@ -4,6 +4,7 @@
   import { toast } from '../../lib/toast.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import Loading from '../../components/Loading.svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   // The current team's usage against its quota; administrators can override the quota here.
   let status = $state<TeamQuotaStatus | null>(null);
@@ -16,23 +17,23 @@
   const mib = (v: number) => (v >= 1024 ? `${+(v / 1024).toFixed(1)} GiB` : `${v} MiB`);
   const cpu = (v: number) => `${+(v / 1000).toFixed(2)} CPU`;
   const num = (v: number) => String(v);
-  const rows: { label: string; used: keyof TeamUsage; max: keyof TeamQuota; fmt: (v: number) => string; hint?: string }[] = [
-    { label: 'Projects', used: 'projects', max: 'max_projects', fmt: num },
-    { label: 'Services', used: 'services', max: 'max_services', fmt: num },
-    { label: 'Databases', used: 'databases', max: 'max_databases', fmt: num },
-    { label: 'Memory reserved', used: 'memory_mb', max: 'max_memory_mb', fmt: mib, hint: 'What instances reserve on the nodes (requests)' },
-    { label: 'Memory limits', used: 'memory_limit_mb', max: 'max_memory_limit_mb', fmt: mib, hint: 'If every instance used its limit' },
-    { label: 'CPU reserved', used: 'cpu_millis', max: 'max_cpu_millis', fmt: cpu },
-    { label: 'Database storage', used: 'disk_mb', max: 'max_disk_mb', fmt: mib },
-    { label: 'Preview deployments', used: 'previews', max: 'max_previews', fmt: num },
-    { label: 'Custom domains', used: 'domains', max: 'max_domains', fmt: num },
-  ];
+  const rows: { label: string; used: keyof TeamUsage; max: keyof TeamQuota; fmt: (v: number) => string; hint?: string }[] = $derived([
+    { label: t('Projects'), used: 'projects', max: 'max_projects', fmt: num },
+    { label: t('Services'), used: 'services', max: 'max_services', fmt: num },
+    { label: t('Databases'), used: 'databases', max: 'max_databases', fmt: num },
+    { label: t('Memory reserved'), used: 'memory_mb', max: 'max_memory_mb', fmt: mib, hint: t('What instances reserve on the nodes (requests)') },
+    { label: t('Memory limits'), used: 'memory_limit_mb', max: 'max_memory_limit_mb', fmt: mib, hint: t('If every instance used its limit') },
+    { label: t('CPU reserved'), used: 'cpu_millis', max: 'max_cpu_millis', fmt: cpu },
+    { label: t('Database storage'), used: 'disk_mb', max: 'max_disk_mb', fmt: mib },
+    { label: t('Preview deployments'), used: 'previews', max: 'max_previews', fmt: num },
+    { label: t('Custom domains'), used: 'domains', max: 'max_domains', fmt: num },
+  ]);
 
   async function load() {
-    const t = team;
-    if (!t) return;
+    const tm = team;
+    if (!tm) return;
     try {
-      status = await api.teamQuota(t.id);
+      status = await api.teamQuota(tm.id);
       edit = Object.fromEntries(rows.map((r) => [r.max, status!.override[r.max] ?? null]));
       error = '';
     } catch (e) {
@@ -59,7 +60,7 @@
         if (v !== null && v !== undefined && String(v) !== "") q[r.max] = Number(v);
       }
       status = await api.putTeamQuota(team.id, q);
-      toast.success('Quota saved');
+      toast.success(t('Quota saved'));
     } catch (err) {
       error = errorMessage(err);
     } finally {
@@ -72,8 +73,8 @@
   <div class="card">
     <div class="card-head">
       <div>
-        <h3>{team?.name ?? 'Team'} usage</h3>
-        <p class="hint">Stopped and sleeping services keep their share: they can start again at any time. Over a quota, nothing is stopped; the team just cannot grow.</p>
+        <h3>{t('{team} usage', { team: team?.name ?? t('Team') })}</h3>
+        <p class="hint">{t('Stopped and sleeping services keep their share: they can start again at any time. Over a quota, nothing is stopped; the team just cannot grow.')}</p>
       </div>
     </div>
     <div class="card-body">
@@ -88,7 +89,7 @@
                 <td style="width:40%">
                   {#if max > 0}<span class="bar {level(pct(used, max))}"><span style="width:{pct(used, max)}%"></span></span>{/if}
                 </td>
-                <td class="right small">{r.fmt(used)} / {max > 0 ? r.fmt(max) : 'unlimited'}</td>
+                <td class="right small">{r.fmt(used)} / {max > 0 ? r.fmt(max) : t('unlimited')}</td>
               </tr>
             {/each}
           </tbody>
@@ -101,8 +102,8 @@
     <form class="card" onsubmit={save}>
       <div class="card-head">
         <div>
-          <h3>Quota for this team</h3>
-          <p class="hint">Empty fields use the instance default (Settings → System). 0 = unlimited. Memory in MB, CPU in millicores.</p>
+          <h3>{t('Quota for this team')}</h3>
+          <p class="hint">{t('Empty fields use the instance default (Settings → System). 0 = unlimited. Memory in MB, CPU in millicores.')}</p>
         </div>
       </div>
       <div class="card-body stack">
@@ -110,11 +111,11 @@
           {#each rows as r (r.max)}
             <label class="field">
               <span>{r.label}</span>
-              <input type="number" min="0" bind:value={edit[r.max]} placeholder={`default: ${status.default[r.max] || 'unlimited'}`} />
+              <input type="number" min="0" bind:value={edit[r.max]} placeholder={t('default: {value}', { value: status.default[r.max] || t('unlimited') })} />
             </label>
           {/each}
         </div>
-        <div><button class="primary" type="submit" disabled={busy}>{#if busy}<span class="spinner"></span>{/if}Save</button></div>
+        <div><button class="primary" type="submit" disabled={busy}>{#if busy}<span class="spinner"></span>{/if}{t('Save')}</button></div>
       </div>
     </form>
   {/if}

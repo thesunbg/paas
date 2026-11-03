@@ -6,6 +6,7 @@
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import CopyField from '../../components/CopyField.svelte';
   import Icon from '../../components/Icon.svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   let setup = $state<TwoFactorSetup | null>(null);
   let code = $state('');
@@ -43,7 +44,7 @@
     error = '';
     try {
       await api.twoFactorEnable(code.trim());
-      toast.success('Two-factor authentication enabled');
+      toast.success(t('Two-factor authentication enabled'));
       setup = null;
       code = '';
       await loadMe();
@@ -59,7 +60,7 @@
     error = '';
     try {
       await api.twoFactorDisable(code.trim(), password);
-      toast.success('Two-factor authentication disabled');
+      toast.success(t('Two-factor authentication disabled'));
       code = '';
       password = '';
       await loadMe();
@@ -75,52 +76,52 @@
 <div class="card">
   <div class="card-head">
     <div>
-      <h3>Two-factor authentication</h3>
-      <p class="hint">Require a 6-digit code from an authenticator app (1Password, Authy, Google Authenticator…) when signing in.</p>
+      <h3>{t('Two-factor authentication')}</h3>
+      <p class="hint">{t('Require a 6-digit code from an authenticator app (1Password, Authy, Google Authenticator…) when signing in.')}</p>
     </div>
-    <span class="badge {enabled ? 'green' : ''}"><Icon name="shield" size={12} />{enabled ? 'enabled' : 'off'}</span>
+    <span class="badge {enabled ? 'green' : ''}"><Icon name="shield" size={12} />{enabled ? t('enabled') : t('off')}</span>
   </div>
   <div class="card-body stack">
     {#if enabled}
       <form class="stack narrow" onsubmit={disable}>
-        <p class="small muted">To turn it off, confirm with your password and a current code.</p>
-        <label class="field"><span>Password</span><input type="password" bind:value={password} required autocomplete="current-password" /></label>
+        <p class="small muted">{t('To turn it off, confirm with your password and a current code.')}</p>
+        <label class="field"><span>{t('Password')}</span><input type="password" bind:value={password} required autocomplete="current-password" /></label>
         <label class="field">
-          <span>Authentication code</span>
+          <span>{t('Authentication code')}</span>
           <input class="mono code" bind:value={code} inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]*" minlength="6" placeholder="123456" required />
         </label>
         <ErrorMsg {error} />
-        <div><button class="danger" type="submit" disabled={busy || !codeOK || !password}>{#if busy}<span class="spinner"></span>{/if}Disable two-factor</button></div>
+        <div><button class="danger" type="submit" disabled={busy || !codeOK || !password}>{#if busy}<span class="spinner"></span>{/if}{t('Disable two-factor')}</button></div>
       </form>
     {:else if !setup}
       <ErrorMsg {error} />
-      <div><button class="primary" onclick={start} disabled={busy}>{#if busy}<span class="spinner"></span>{/if}Set up two-factor</button></div>
+      <div><button class="primary" onclick={start} disabled={busy}>{#if busy}<span class="spinner"></span>{/if}{t('Set up two-factor')}</button></div>
     {:else}
       <div class="setup">
         {#if qr}
-          <svg class="qr" viewBox="0 0 {qr.size} {qr.size}" width="200" height="200" role="img" aria-label="QR code for the authenticator app" shape-rendering="crispEdges">
+          <svg class="qr" viewBox="0 0 {qr.size} {qr.size}" width="200" height="200" role="img" aria-label={t('QR code for the authenticator app')} shape-rendering="crispEdges">
             <rect width={qr.size} height={qr.size} fill="#fff" />
             <path d={qr.d} fill="#000" />
           </svg>
         {/if}
         <form class="stack" onsubmit={enable} style="flex:1;min-width:240px">
           <ol class="small muted steps">
-            <li>Scan the QR code with your authenticator app, or enter the secret manually.</li>
-            <li>Enter the 6-digit code it shows to finish.</li>
+            <li>{t('Scan the QR code with your authenticator app, or enter the secret manually.')}</li>
+            <li>{t('Enter the 6-digit code it shows to finish.')}</li>
           </ol>
-          <div class="field"><span>Secret</span><CopyField value={grouped} label="TOTP secret" /></div>
+          <div class="field"><span>{t('Secret')}</span><CopyField value={grouped} label={t('TOTP secret')} /></div>
           <details>
-            <summary class="small muted">otpauth:// link</summary>
+            <summary class="small muted">{t('otpauth:// link')}</summary>
             <div style="margin-top:6px"><CopyField value={setup.otpauth_url} label="otpauth URL" multiline /></div>
           </details>
           <label class="field">
-            <span>Authentication code</span>
+            <span>{t('Authentication code')}</span>
             <input class="mono code" bind:value={code} inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" required />
           </label>
           <ErrorMsg {error} />
           <div class="row">
-            <button class="primary" type="submit" disabled={busy || !codeOK}>{#if busy}<span class="spinner"></span>{/if}Enable</button>
-            <button type="button" class="ghost" onclick={() => ((setup = null), (error = ''))}>Cancel</button>
+            <button class="primary" type="submit" disabled={busy || !codeOK}>{#if busy}<span class="spinner"></span>{/if}{t('Enable')}</button>
+            <button type="button" class="ghost" onclick={() => ((setup = null), (error = ''))}>{t('Cancel')}</button>
           </div>
         </form>
       </div>
