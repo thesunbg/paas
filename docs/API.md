@@ -19,7 +19,7 @@ AI agents can also use the [MCP endpoint](MCP.md) at `POST /mcp` (same API token
 | POST | `/auth/register` | `{email, password, name}` | `{user, token}`. The first user becomes administrator; later signups need `allow_signup` |
 | POST | `/auth/login` | `{email, password}` | `{user, token}`. 403 `{error, sso}` when single sign-on is enforced for the email's domain |
 | POST | `/auth/logout` | | |
-| GET | `/me` | | `{user, teams: [{id, name, slug, role}], setup_pending?}`; `setup_pending` (administrators only) is true until the setup wizard is finished or skipped |
+| GET | `/me` | | `{user, teams: [{id, name, slug, role}], setup_pending?}`; `setup_pending` (administrators only) is true until the setup wizard is finished or skipped (an instance that already ran apps before the wizard existed starts with it skipped) |
 | POST | `/me/password` | `{current, new}` | |
 | GET/POST | `/tokens` | `{name}` | POST returns `{token, info}` once |
 | DELETE | `/tokens/{id}` | | |

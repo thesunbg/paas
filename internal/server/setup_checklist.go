@@ -164,6 +164,12 @@ func (s *Server) setupProgress(ctx context.Context) (setupProgress, error) {
 	var p setupProgress
 	v, err := s.store.GetSetting(ctx, settingSetupWizard)
 	if errors.Is(err, store.ErrNotFound) {
+		// No progress saved yet. An instance that already runs apps was set up before the
+		// wizard existed: don't push its admins into it after an upgrade (the checklist
+		// stays available under Settings → System).
+		if n, err := s.store.LiveServiceCount(ctx, s.systemProjectID); err == nil && n > 0 {
+			p.Dismissed = true
+		}
 		return p, nil
 	}
 	if err != nil {
