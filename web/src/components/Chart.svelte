@@ -6,6 +6,7 @@
 </script>
 
 <script lang="ts">
+  import { t, intlLocale } from '../lib/i18n.svelte';
   // Single-series time chart in plain SVG: area+line (or bars), recessive grid,
   // crosshair with tooltip on hover/touch, keyboard-steppable.
   let {
@@ -48,7 +49,7 @@
   });
   const innerW = $derived(Math.max(10, width - padL - padR));
   const innerH = $derived(height - padT - padB);
-  const x = (t: number) => padL + (t1 === t0 ? innerW / 2 : ((t - t0) / (t1 - t0)) * innerW);
+  const x = (ts: number) => padL + (t1 === t0 ? innerW / 2 : ((ts - t0) / (t1 - t0)) * innerW);
   const y = (v: number) => padT + innerH - (Math.min(v, vmax) / vmax) * innerH;
 
   function niceCeil(v: number): number {
@@ -70,21 +71,21 @@
     return Array.from({ length: n + 1 }, (_, i) => t0 + ((t1 - t0) * i) / n);
   });
   const spanH = $derived((t1 - t0) / 3.6e6);
-  const fmtTime = (t: number) => {
-    const d = new Date(t);
-    const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return spanH > 20 ? `${d.toLocaleDateString([], { weekday: 'short' })} ${hm}` : hm;
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts);
+    const hm = d.toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' });
+    return spanH > 20 ? `${d.toLocaleDateString(intlLocale(), { weekday: 'short' })} ${hm}` : hm;
   };
 
   function onmove(e: PointerEvent) {
     if (!points.length) return;
     const r = (e.currentTarget as SVGElement).getBoundingClientRect();
     const px = e.clientX - r.left;
-    const t = t0 + ((px - padL) / innerW) * (t1 - t0);
+    const at = t0 + ((px - padL) / innerW) * (t1 - t0);
     let best = 0;
     let bd = Infinity;
     for (let i = 0; i < points.length; i++) {
-      const d = Math.abs(points[i].t - t);
+      const d = Math.abs(points[i].t - at);
       if (d < bd) {
         bd = d;
         best = i;
@@ -111,7 +112,7 @@
   </figcaption>
   <div class="plot" bind:clientWidth={width}>
     {#if points.length < 2}
-      <div class="nodata faint small" style:height="{height}px">Not enough data yet</div>
+      <div class="nodata faint small" style:height="{height}px">{t('Not enough data yet')}</div>
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <svg
@@ -119,7 +120,7 @@
         {height}
         viewBox="0 0 {width} {height}"
         role="img"
-        aria-label="{title}: latest {latest != null ? format(latest) : 'n/a'}, peak {format(Math.max(...points.map((p) => p.v)))}"
+        aria-label={t('{title}: latest {latest}, peak {peak}', { title, latest: latest != null ? format(latest) : t('n/a'), peak: format(Math.max(...points.map((p) => p.v))) })}
         tabindex="0"
         onpointermove={onmove}
         onpointerdown={onmove}
@@ -152,7 +153,7 @@
       {#if hp}
         {@const left = Math.min(Math.max(x(hp.t), 70), width - 70)}
         <div class="tip" style:left="{left}px">
-          <div class="faint">{new Date(hp.t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+          <div class="faint">{new Date(hp.t).toLocaleString(intlLocale(), { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</div>
           <div><b>{format(hp.v)}</b></div>
         </div>
       {/if}

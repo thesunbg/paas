@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t, intlLocale } from '../lib/i18n.svelte';
   // Tiny single-series sparkline with a hover readout (no axes).
   let {
     values,
@@ -38,14 +39,14 @@
 
 <span class="spark">
   {#if values.length < 2}
-    <span class="faint small" style:width="{width}px" style:display="inline-block">no data</span>
+    <span class="faint small" style:width="{width}px" style:display="inline-block">{t('no data')}</span>
   {:else}
     <svg
       {width}
       {height}
       viewBox="0 0 {width} {height}"
       role="img"
-      aria-label="{label}: latest {last != null ? format(last) : 'n/a'}, peak {format(Math.max(...values))}"
+      aria-label={t('{title}: latest {latest}, peak {peak}', { title: label, latest: last != null ? format(last) : t('n/a'), peak: format(Math.max(...values)) })}
       onpointermove={onmove}
       onpointerleave={() => (hover = null)}
     >
@@ -58,7 +59,7 @@
   {/if}
   <span class="val small">
     {shown != null ? format(shown) : '—'}
-    {#if hover != null && times[hover]}<span class="faint">{new Date(times[hover]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>{/if}
+    {#if hover != null && times[hover]}<span class="faint">{new Date(times[hover]).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' })}</span>{/if}
   </span>
 </span>
 

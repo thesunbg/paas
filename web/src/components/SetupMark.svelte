@@ -1,10 +1,11 @@
 <script lang="ts">
   // Status of a setup checklist step: ok (✓), warning (!), failed (✕) or skipped (–).
   import type { SetupStatusLevel } from '../lib/api';
+  import { t } from '../lib/i18n.svelte';
   let { status, skipped = false, size = 20 }: { status: SetupStatusLevel | undefined; skipped?: boolean; size?: number } = $props();
   const kind = $derived(skipped && status !== 'ok' ? 'skipped' : (status ?? 'unknown'));
   const glyph: Record<string, string> = { ok: '✓', warn: '!', fail: '✕', skipped: '–', unknown: '…' };
-  const label: Record<string, string> = { ok: 'OK', warn: 'Needs attention', fail: 'Failed', skipped: 'Skipped', unknown: 'Not checked' };
+  const label = $derived<Record<string, string>>({ ok: t('OK'), warn: t('Needs attention'), fail: t('Failed'), skipped: t('Skipped'), unknown: t('Not checked') });
 </script>
 
 <span class="mark {kind}" style="width:{size}px;height:{size}px;font-size:{Math.round(size * 0.6)}px" role="img" aria-label={label[kind]} title={label[kind]}>{glyph[kind]}</span>

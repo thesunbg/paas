@@ -1,6 +1,8 @@
 <script lang="ts">
   import { api, ApiError, errorMessage, type SetupStatus } from '../lib/api';
   import ErrorMsg from '../components/ErrorMsg.svelte';
+  import LangSwitch from '../components/LangSwitch.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   let { setup, onauthed }: { setup: SetupStatus; onauthed: () => Promise<void> } = $props();
 
@@ -34,11 +36,11 @@
     e.preventDefault();
     error = '';
     if (mode === 'register' && password !== confirmPw) {
-      error = 'Passwords do not match';
+      error = t('Passwords do not match');
       return;
     }
     if (mode === 'register' && password.length < 8) {
-      error = 'Password must be at least 8 characters';
+      error = t('Password must be at least 8 characters');
       return;
     }
     busy = true;
@@ -65,52 +67,53 @@
 </script>
 
 <div class="wrap">
+  <div class="lang-corner"><LangSwitch /></div>
   <div class="box">
     <div class="brand">
       <span class="logo" aria-hidden="true"><svg viewBox="0 0 16 16" width="18" height="18"><path d="M2 13 8 2.5 14 13z" fill="currentColor" /></svg></span>
     </div>
     <h1>
-      {#if isSetup}Create the administrator account{:else if mode === 'register'}Create an account{:else}Sign in to PaaS{/if}
+      {#if isSetup}{t('Create the administrator account')}{:else if mode === 'register'}{t('Create an account')}{:else}{t('Sign in to PaaS')}{/if}
     </h1>
     <p class="muted sub">
       {#if isSetup}
-        This is a fresh installation. The first account becomes the platform administrator; a short setup wizard follows.
+        {t('This is a fresh installation. The first account becomes the platform administrator; a short setup wizard follows.')}
       {:else if mode === 'register'}
-        Sign up for an account on {setup.base_domain || 'this platform'}.
+        {setup.base_domain ? t('Sign up for an account on {domain}.', { domain: setup.base_domain }) : t('Sign up for an account on this platform.')}
       {:else}
-        Deploy and manage your apps{setup.base_domain ? ` on ${setup.base_domain}` : ''}.
+        {setup.base_domain ? t('Deploy and manage your apps on {domain}.', { domain: setup.base_domain }) : t('Deploy and manage your apps.')}
       {/if}
     </p>
 
     {#if !isSetup && setup.allow_signup}
       <div class="tabs" role="tablist">
-        <button type="button" role="tab" aria-selected={mode === 'login'} class:on={mode === 'login'} onclick={() => ((mode = 'login'), (error = ''))}>Sign in</button>
-        <button type="button" role="tab" aria-selected={mode === 'register'} class:on={mode === 'register'} onclick={() => ((mode = 'register'), (error = ''), (needCode = false))}>Create account</button>
+        <button type="button" role="tab" aria-selected={mode === 'login'} class:on={mode === 'login'} onclick={() => ((mode = 'login'), (error = ''))}>{t('Sign in')}</button>
+        <button type="button" role="tab" aria-selected={mode === 'register'} class:on={mode === 'register'} onclick={() => ((mode = 'register'), (error = ''), (needCode = false))}>{t('Create account')}</button>
       </div>
     {:else if wantsSignup && !isSetup}
-      <p class="alert">Sign-up is closed on this server. Ask an administrator to invite you.</p>
+      <p class="alert">{t('Sign-up is closed on this server. Ask an administrator to invite you.')}</p>
     {/if}
 
     <form class="stack card card-pad" onsubmit={submit}>
       {#if mode === 'register'}
         <label class="field">
-          <span>Name</span>
+          <span>{t('Name')}</span>
           <input bind:value={name} autocomplete="name" placeholder="Ada Lovelace" />
         </label>
       {/if}
       {#if !ghPending}
       <label class="field">
-        <span>Email</span>
+        <span>{t('Email')}</span>
         <input type="email" bind:value={email} required autocomplete="email" placeholder="you@example.com" readonly={needCode} />
       </label>
       <label class="field">
-        <span>Password</span>
+        <span>{t('Password')}</span>
         <input type="password" bind:value={password} required autocomplete={mode === 'login' ? 'current-password' : 'new-password'} minlength={mode === 'register' ? 8 : undefined} />
       </label>
       {/if}
       {#if needCode && mode === 'login'}
         <label class="field">
-          <span>Authentication code</span>
+          <span>{t('Authentication code')}</span>
           <input
             bind:this={codeInput}
             class="mono code"
@@ -122,34 +125,34 @@
             placeholder="123456"
             required
           />
-          <span class="hint">Two-factor authentication is on. Enter the 6-digit code from your authenticator app.</span>
+          <span class="hint">{t('Two-factor authentication is on. Enter the 6-digit code from your authenticator app.')}</span>
         </label>
       {/if}
       {#if mode === 'register'}
         <label class="field">
-          <span>Confirm password</span>
+          <span>{t('Confirm password')}</span>
           <input type="password" bind:value={confirmPw} required autocomplete="new-password" />
-          <span class="hint">At least 8 characters.</span>
+          <span class="hint">{t('At least 8 characters.')}</span>
         </label>
       {/if}
       <ErrorMsg {error} />
       <button class="primary" type="submit" disabled={busy}>
         {#if busy}<span class="spinner"></span>{/if}
-        {#if isSetup}Create administrator{:else if mode === 'register'}Create account{:else if needCode}Verify{:else}Sign in{/if}
+        {#if isSetup}{t('Create administrator')}{:else if mode === 'register'}{t('Create account')}{:else if needCode}{t('Verify')}{:else}{t('Sign in')}{/if}
       </button>
-      {#if needCode && !ghPending}<button type="button" class="ghost sm" onclick={() => ((needCode = false), (code = ''), (error = ''))}>Use a different account</button>{/if}
+      {#if needCode && !ghPending}<button type="button" class="ghost sm" onclick={() => ((needCode = false), (code = ''), (error = ''))}>{t('Use a different account')}</button>{/if}
       {#if (setup.github_login || sso.length) && !needCode}
-        <div class="or"><span>or</span></div>
+        <div class="or"><span>{t('or')}</span></div>
       {/if}
       {#if !needCode}
         {#each sso as p (p.slug)}
-          <a class="btn gh" href={`/api/v1/auth/oidc/${encodeURIComponent(p.slug)}`}>Sign in with {p.name}</a>
+          <a class="btn gh" href={`/api/v1/auth/oidc/${encodeURIComponent(p.slug)}`}>{t('Sign in with {name}', { name: p.name })}</a>
         {/each}
       {/if}
       {#if setup.github_login && !needCode}
         <a class="btn gh" href="/api/v1/auth/github">
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          Continue with GitHub
+          {t('Continue with GitHub')}
         </a>
       {/if}
     </form>
@@ -194,6 +197,12 @@
   .tabs button.on {
     background: var(--bg-hover);
     color: var(--text);
+  }
+  .lang-corner {
+    position: fixed;
+    top: 12px;
+    right: 16px;
+    z-index: 2;
   }
   .wrap {
     min-height: 100vh;

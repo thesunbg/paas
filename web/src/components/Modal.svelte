@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import Icon from './Icon.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   let {
     open = $bindable(false),
@@ -70,7 +71,7 @@
     <div class="panel" role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={panel} style:max-width="{width}px">
       <div class="head">
         <h2 id={titleId}>{title}</h2>
-        <button class="ghost icon sm" aria-label="Close dialog" onclick={close}><Icon name="x" /></button>
+        <button class="ghost icon sm" aria-label={t('Close dialog')} onclick={close}><Icon name="x" /></button>
       </div>
       <div class="body">
         {@render children()}

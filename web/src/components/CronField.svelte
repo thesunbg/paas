@@ -2,6 +2,7 @@
   // Cron schedule input with presets and a live "next runs" hint.
   import { parseCron, nextRuns, describeCron, cronPresets } from '../lib/cron';
   import { relTime } from '../lib/format';
+  import { t, intlLocale } from '../lib/i18n.svelte';
 
   let { value = $bindable('*/15 * * * *'), id = 'cron-' + Math.random().toString(36).slice(2, 7) }: { value: string; id?: string } = $props();
 
@@ -13,13 +14,14 @@
       return { ok: false as const, error: (e as Error).message };
     }
   });
+  const when = (d: Date) => d.toLocaleString(intlLocale(), { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 </script>
 
 <div class="field">
-  <label for={id} class="label">Schedule <span class="faint">(cron, UTC)</span></label>
+  <label for={id} class="label">{t('Schedule')} <span class="faint">(cron, UTC)</span></label>
   <input {id} class="mono" bind:value placeholder="*/15 * * * *" spellcheck="false" autocomplete="off" aria-describedby="{id}-hint" aria-invalid={!parsed.ok} />
-  <div class="presets" role="group" aria-label="Schedule presets">
-    {#each cronPresets as p (p.expr)}
+  <div class="presets" role="group" aria-label={t('Schedule presets')}>
+    {#each cronPresets() as p (p.expr)}
       <button type="button" class="sm" class:on={value.trim() === p.expr} onclick={() => (value = p.expr)}>{p.label}</button>
     {/each}
   </div>
@@ -27,9 +29,13 @@
     {#if parsed.ok}
       {#if parsed.desc}<b class="desc">{parsed.desc}.</b>{/if}
       {#if parsed.next.length}
-        Next run {relTime(parsed.next[0].toISOString())} ({parsed.next[0].toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} your time){#if parsed.next[1]}, then {parsed.next[1].toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}{/if}.
+        {#if parsed.next[1]}
+          {t('Next run {when} ({time} your time), then {next}.', { when: relTime(parsed.next[0].toISOString()), time: when(parsed.next[0]), next: when(parsed.next[1]) })}
+        {:else}
+          {t('Next run {when} ({time} your time).', { when: relTime(parsed.next[0].toISOString()), time: when(parsed.next[0]) })}
+        {/if}
       {:else}
-        This schedule never fires.
+        {t('This schedule never fires.')}
       {/if}
     {:else}
       <span class="err">{parsed.error}</span>

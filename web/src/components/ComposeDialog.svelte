@@ -4,6 +4,7 @@
   import Modal from './Modal.svelte';
   import ErrorMsg from './ErrorMsg.svelte';
   import Icon from './Icon.svelte';
+  import { t, tn } from '../lib/i18n.svelte';
 
   let { open = $bindable(false), projectId, ondone }: { open: boolean; projectId: string; ondone: () => void } = $props();
 
@@ -33,7 +34,7 @@
     try {
       const r = await api.importCompose(projectId, text);
       result = { services: r.services ?? [], warnings: r.warnings ?? [] };
-      toast.success(`Imported ${result.services.length} service${result.services.length === 1 ? '' : 's'}`);
+      toast.success(tn(result.services.length, 'Imported {n} service', 'Imported {n} services'));
       ondone();
       if (!result.warnings.length) open = false;
     } catch (err) {
@@ -44,15 +45,15 @@
   }
 </script>
 
-<Modal bind:open title="Import docker-compose" width={680}>
+<Modal bind:open title={t('Import docker-compose')} width={680}>
   {#if result}
     <div class="stack">
-      <div class="alert success">Created {result.services.map((s) => s.name).join(', ') || 'no services'}.</div>
+      <div class="alert success">{t('Created {names}.', { names: result.services.map((s) => s.name).join(', ') || t('no services') })}</div>
       {#if result.warnings.length}
         <div class="alert warn">
           <Icon name="activity" />
           <div>
-            <b>Warnings</b>
+            <b>{t('Warnings')}</b>
             <ul>{#each result.warnings as w, i (i)}<li class="small">{w}</li>{/each}</ul>
           </div>
         </div>
@@ -60,24 +61,24 @@
     </div>
   {:else}
     <form id="compose-form" class="stack" onsubmit={submit}>
-      <p class="muted small">Image-based services are imported (no <code>build:</code>). Named volumes are kept and services reach each other by their compose name.</p>
+      <p class="muted small">{t('Image-based services are imported (no')} <code>build:</code>{t('). Named volumes are kept and services reach each other by their compose name.')}</p>
       <label class="field">
         <span>docker-compose.yml</span>
         <textarea class="mono" rows="14" bind:value={text} spellcheck="false" placeholder={'services:\n  web:\n    image: nginx:alpine\n    ports: ["80:80"]\n  cache:\n    image: redis:7-alpine'}></textarea>
       </label>
       <div class="row">
         <input type="file" accept=".yml,.yaml,text/yaml" bind:this={fileInput} onchange={readFile} hidden />
-        <button type="button" class="sm" onclick={() => fileInput?.click()}><Icon name="upload" size={12} />Load file…</button>
+        <button type="button" class="sm" onclick={() => fileInput?.click()}><Icon name="upload" size={12} />{t('Load file…')}</button>
       </div>
       <ErrorMsg {error} />
     </form>
   {/if}
   {#snippet footer()}
     {#if result}
-      <button type="button" class="primary" onclick={() => (open = false)}>Done</button>
+      <button type="button" class="primary" onclick={() => (open = false)}>{t('Done')}</button>
     {:else}
-      <button type="button" onclick={() => (open = false)}>Cancel</button>
-      <button type="submit" form="compose-form" class="primary" disabled={busy || !text.trim()}>{#if busy}<span class="spinner"></span>{/if}Import</button>
+      <button type="button" onclick={() => (open = false)}>{t('Cancel')}</button>
+      <button type="submit" form="compose-form" class="primary" disabled={busy || !text.trim()}>{#if busy}<span class="spinner"></span>{/if}{t('Import')}</button>
     {/if}
   {/snippet}
 </Modal>

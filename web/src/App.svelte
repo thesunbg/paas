@@ -19,6 +19,7 @@
   import Setup from './pages/Setup.svelte';
   import NotFound from './pages/NotFound.svelte';
   import DeploymentRedirect from './pages/DeploymentRedirect.svelte';
+  import { t } from './lib/i18n.svelte';
 
   let setup = $state<SetupStatus | null>(null);
   let phase = $state<'loading' | 'auth' | 'app' | 'error'>('loading');
@@ -73,8 +74,8 @@
 
   $effect(() => {
     // Keep the document title in sync with the section.
-    const names: Record<string, string> = { setup: 'Setup', projects: 'Projects', nodes: 'Nodes', batches: 'Batches', settings: 'Settings', services: 'Service', databases: 'Database' };
-    document.title = phase === 'app' ? `${names[section] ?? 'Dashboard'} · PaaS` : 'Sign in · PaaS';
+    const names: Record<string, string> = { setup: t('Setup'), projects: t('Projects'), nodes: t('Nodes'), batches: t('Batches'), settings: t('Settings'), services: t('Service'), databases: t('Database') };
+    document.title = phase === 'app' ? `${names[section] ?? t('Dashboard')} · PaaS` : `${t('Sign in')} · PaaS`;
   });
 </script>
 
@@ -83,9 +84,9 @@
 {:else if phase === 'error'}
   <div class="boot">
     <div class="card card-pad stack" style="max-width:420px">
-      <h2>Cannot reach the control plane</h2>
+      <h2>{t('Cannot reach the control plane')}</h2>
       <p class="muted">{bootError}</p>
-      <button class="primary" onclick={boot}>Retry</button>
+      <button class="primary" onclick={boot}>{t('Retry')}</button>
     </div>
   </div>
 {:else if phase === 'auth' && setup}

@@ -2,6 +2,7 @@
   import type { ImageScan, ScanSeverity } from '../lib/api';
   import { relTime, absTime, shortId } from '../lib/format';
   import { href } from '../lib/router.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   // Severity counts and the findings table of one image scan.
   let { scan, limit = 50 }: { scan: ImageScan; limit?: number } = $props();
@@ -20,17 +21,18 @@
   const total = $derived(scan.critical + scan.high + scan.medium + scan.low + scan.unknown);
   const filtered = $derived(filter ? scan.findings.filter((f) => f.severity === filter) : scan.findings);
   const shown = $derived(showAll ? filtered : filtered.slice(0, limit));
+  const sevLabel = $derived<Record<ScanSeverity, string>>({ CRITICAL: t('critical'), HIGH: t('high'), MEDIUM: t('medium'), LOW: t('low'), UNKNOWN: t('unknown') });
   const safeURL = (u?: string) => (u && /^https:\/\//.test(u) ? u : '');
 </script>
 
 <div class="stack">
   <div class="row meta small muted">
-    <span>Deployment <a class="mono" href={href(`/services/${scan.service_id}/deployments/${scan.deployment_id}`)}>#{shortId(scan.deployment_id)}</a></span>
+    <span>{t('Deployment')} <a class="mono" href={href(`/services/${scan.service_id}/deployments/${scan.deployment_id}`)}>#{shortId(scan.deployment_id)}</a></span>
     <span class="mono truncate" title={scan.image}>{scan.image}</span>
-    <span title={absTime(scan.scanned_at)}>scanned {relTime(scan.scanned_at)}</span>
+    <span title={absTime(scan.scanned_at)}>{t('scanned {time}', { time: relTime(scan.scanned_at) })}</span>
     {#if scan.scanner_version}<span>trivy {scan.scanner_version}</span>{/if}
     {#if scan.db_updated_at}<span title={absTime(scan.db_updated_at)}>DB {relTime(scan.db_updated_at)}</span>{/if}
-    {#if scan.os}<span>base {scan.os}</span>{/if}
+    {#if scan.os}<span>{t('base {os}', { os: scan.os })}</span>{/if}
   </div>
 
   {#if scan.message}
@@ -38,7 +40,7 @@
   {/if}
 
   {#if scan.status === 'scanned'}
-    <div class="sev" role="group" aria-label="Findings by severity">
+    <div class="sev" role="group" aria-label={t('Findings by severity')}>
       {#each counts as [sev, n] (sev)}
         {#if sev !== 'UNKNOWN' || n > 0}
           <button
@@ -49,19 +51,19 @@
             onclick={() => (filter = filter === sev ? '' : sev)}
           >
             <span class="n {n > 0 ? sevBadge[sev] : ''}">{n}</span>
-            <span class="small muted">{sev.toLowerCase()}</span>
+            <span class="small muted">{sevLabel[sev]}</span>
           </button>
         {/if}
       {/each}
     </div>
 
     {#if total === 0}
-      <p class="muted small">No known vulnerabilities in this image.</p>
+      <p class="muted small">{t('No known vulnerabilities in this image.')}</p>
     {:else}
       <div class="card table-wrap">
         <table>
           <thead>
-            <tr><th>Severity</th><th>ID</th><th>Package</th><th>Installed</th><th>Fixed in</th><th>Title</th></tr>
+            <tr><th>{t('Severity')}</th><th>ID</th><th>{t('Package')}</th><th>{t('Installed')}</th><th>{t('Fixed in')}</th><th>{t('Title')}</th></tr>
           </thead>
           <tbody>
             {#each shown as f (f.id + f.pkg + f.installed)}
@@ -81,9 +83,9 @@
       </div>
       <div class="row small faint">
         <span>
-          {shown.length} of {filter ? filtered.length : total} shown{#if scan.findings.length < total && !filter}; the {scan.findings.length} most severe are stored{/if}
+          {#if scan.findings.length < total && !filter}{t('{shown} of {total} shown; the {n} most severe are stored', { shown: shown.length, total, n: scan.findings.length })}{:else}{t('{shown} of {total} shown', { shown: shown.length, total: filter ? filtered.length : total })}{/if}
         </span>
-        {#if !showAll && filtered.length > shown.length}<button class="sm" onclick={() => (showAll = true)}>Show all</button>{/if}
+        {#if !showAll && filtered.length > shown.length}<button class="sm" onclick={() => (showAll = true)}>{t('Show all')}</button>{/if}
       </div>
     {/if}
   {/if}

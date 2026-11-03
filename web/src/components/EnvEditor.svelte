@@ -2,6 +2,7 @@
   // Key/value rows with masking, add/remove and "paste .env" bulk import.
   import { parseDotEnv, mergeRows, type EnvRow } from '../lib/env';
   import Icon from './Icon.svelte';
+  import { t, tn } from '../lib/i18n.svelte';
 
   let { rows = $bindable([]), masked = false, disabled = false }: { rows: EnvRow[]; masked?: boolean; disabled?: boolean } = $props();
 
@@ -37,13 +38,13 @@
 
 <div class="env">
   {#if rows.length}
-    <div class="rows" role="table" aria-label="Environment variables">
+    <div class="rows" role="table" aria-label={t('Environment variables')}>
       {#each rows as row, i (i)}
         <div class="r" role="row">
           <input
             class="mono k"
             placeholder="KEY"
-            aria-label="Variable name {i + 1}"
+            aria-label={t('Variable name {n}', { n: i + 1 })}
             bind:value={row.key}
             {disabled}
             spellcheck="false"
@@ -52,8 +53,8 @@
           />
           <input
             class="mono v"
-            placeholder="value"
-            aria-label="Value of {row.key || 'variable ' + (i + 1)}"
+            placeholder={t('value')}
+            aria-label={row.key ? t('Value of {name}', { name: row.key }) : t('Value of variable {n}', { n: i + 1 })}
             type={masked && !revealAll && !revealed[i] ? 'password' : 'text'}
             bind:value={row.value}
             {disabled}
@@ -64,33 +65,33 @@
             <button
               type="button"
               class="icon"
-              aria-label={revealed[i] || revealAll ? 'Hide value' : 'Reveal value'}
+              aria-label={revealed[i] || revealAll ? t('Hide value') : t('Reveal value')}
               onclick={() => (revealed[i] = !revealed[i])}><Icon name={revealed[i] || revealAll ? 'eyeoff' : 'eye'} size={14} /></button
             >
           {/if}
-          <button type="button" class="icon ghost" aria-label="Remove {row.key || 'row'}" onclick={() => remove(i)} {disabled}><Icon name="trash" size={14} /></button>
+          <button type="button" class="icon ghost" aria-label={row.key ? t('Remove {name}', { name: row.key }) : t('Remove row')} onclick={() => remove(i)} {disabled}><Icon name="trash" size={14} /></button>
         </div>
       {/each}
     </div>
   {:else}
-    <p class="faint small">No variables.</p>
+    <p class="faint small">{t('No variables.')}</p>
   {/if}
   <div class="row">
-    <button type="button" class="sm" onclick={add} {disabled}><Icon name="plus" size={13} />Add variable</button>
-    <button type="button" class="sm" onclick={() => (pasteOpen = !pasteOpen)} aria-expanded={pasteOpen} {disabled}>Paste .env</button>
+    <button type="button" class="sm" onclick={add} {disabled}><Icon name="plus" size={13} />{t('Add variable')}</button>
+    <button type="button" class="sm" onclick={() => (pasteOpen = !pasteOpen)} aria-expanded={pasteOpen} {disabled}>{t('Paste .env')}</button>
     {#if masked && rows.length}
-      <button type="button" class="sm ghost" onclick={() => (revealAll = !revealAll)}>{revealAll ? 'Hide all' : 'Reveal all'}</button>
+      <button type="button" class="sm ghost" onclick={() => (revealAll = !revealAll)}>{revealAll ? t('Hide all') : t('Reveal all')}</button>
     {/if}
   </div>
   {#if pasteOpen}
     <div class="paste">
       <label class="field">
-        <span>Paste the contents of a .env file</span>
+        <span>{t('Paste the contents of a .env file')}</span>
         <textarea class="mono" rows="6" bind:value={pasteText} placeholder={'DATABASE_URL=postgres://…\nNODE_ENV=production\n# comments are ignored'}></textarea>
       </label>
       <div class="row">
-        <button type="button" class="sm primary" disabled={!parsedCount} onclick={importPaste}>Import {parsedCount || ''} variable{parsedCount === 1 ? '' : 's'}</button>
-        <button type="button" class="sm ghost" onclick={() => (pasteOpen = false)}>Cancel</button>
+        <button type="button" class="sm primary" disabled={!parsedCount} onclick={importPaste}>{parsedCount ? tn(parsedCount, 'Import {n} variable', 'Import {n} variables') : t('Import variables')}</button>
+        <button type="button" class="sm ghost" onclick={() => (pasteOpen = false)}>{t('Cancel')}</button>
       </div>
     </div>
   {/if}
