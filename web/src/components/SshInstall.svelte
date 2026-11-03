@@ -9,6 +9,7 @@
   import Icon from './Icon.svelte';
   import LogView from './LogView.svelte';
   import Status from './Status.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   let { ondone }: { ondone?: () => void } = $props();
 
@@ -67,7 +68,7 @@
     formError = '';
     hostKey = null;
     confirmed = false;
-    if (!host.trim()) return void (formError = 'Enter the host name or IP address');
+    if (!host.trim()) return void (formError = t('Enter the host name or IP address'));
     probing = true;
     try {
       hostKey = await api.sshHostKey(host.trim(), Number(port));
@@ -85,9 +86,9 @@
 
   async function start(preflightOnly: boolean) {
     formError = '';
-    if (!hostKey || !keyOK) return void (formError = 'Confirm the host key first');
-    if (!credsOK) return void (formError = auth === 'key' ? 'Paste the private key' : 'Enter the password');
-    if (roles.length === 0) return void (formError = 'Pick at least one role');
+    if (!hostKey || !keyOK) return void (formError = t('Confirm the host key first'));
+    if (!credsOK) return void (formError = auth === 'key' ? t('Paste the private key') : t('Enter the password'));
+    if (roles.length === 0) return void (formError = t('Pick at least one role'));
     starting = true;
     try {
       const inst = await api.createSSHInstall({
@@ -132,10 +133,10 @@
       es?.close();
       refresh().then(() => {
         if (current?.status === 'succeeded') {
-          if (current.preflight_only) toast.success('All checks passed');
-          else toast.success(`${current.node_name || current.host} joined the cluster`);
+          if (current.preflight_only) toast.success(t('All checks passed'));
+          else toast.success(t('{name} joined the cluster', { name: current.node_name || current.host }));
           ondone?.();
-        } else if (current?.status === 'failed') toast.error('Install failed');
+        } else if (current?.status === 'failed') toast.error(t('Install failed'));
         loadHistory();
       });
     });
@@ -169,13 +170,31 @@
     current = null;
   }
 
-  const steps: { id: SSHInstall['step']; label: string }[] = [
-    { id: 'connect', label: 'Connect' },
-    { id: 'preflight', label: 'Checks' },
-    { id: 'install', label: 'Install' },
-    { id: 'enroll', label: 'Join' },
-    { id: 'done', label: 'Online' },
-  ];
+  const steps: { id: SSHInstall['step']; label: string }[] = $derived([
+    { id: 'connect', label: t('Connect') },
+    { id: 'preflight', label: t('Checks') },
+    { id: 'install', label: t('Install') },
+    { id: 'enroll', label: t('Join') },
+    { id: 'done', label: t('Online') },
+  ]);
+  // Shown as text: attempt status (running, succeeded, failed), step (connect, preflight, install,
+  // enroll, done) and preflight check result (ok, warn, fail).
+  function stateText(s: string): string {
+    const labels: Record<string, string> = {
+      running: t('running'),
+      succeeded: t('succeeded'),
+      failed: t('failed'),
+      connect: t('connect'),
+      preflight: t('preflight'),
+      install: t('install'),
+      enroll: t('enroll'),
+      done: t('done'),
+      ok: t('ok'),
+      warn: t('warn'),
+      fail: t('fail'),
+    };
+    return labels[s] ?? s;
+  }
   const stepIndex = (s: SSHInstall['step']) => steps.findIndex((x) => x.id === s);
   const checkBadge = { ok: 'green', warn: 'yellow', fail: 'red' } as const;
 </script>
@@ -188,9 +207,9 @@
         <b>{current.user}@{current.host}:{current.port}</b>
         <span class="faint small">· {current.roles.join(', ')}{current.node_name ? ` · ${current.node_name}` : ''}</span>
       </div>
-      <Status status={current.status === 'succeeded' ? 'online' : current.status === 'running' ? 'deploying' : 'failed'} label={current.status} />
+      <Status status={current.status === 'succeeded' ? 'online' : current.status === 'running' ? 'deploying' : 'failed'} label={stateText(current.status)} />
     </div>
-    <ol class="steps" aria-label="Progress">
+    <ol class="steps" aria-label={t('Progress')}>
       {#each steps as s, i (s.id)}
         {#if !current.preflight_only || i <= 1}
           <li class:done={i < at || current.status === 'succeeded'} class:now={i === at && current.status === 'running'} class:bad={i === at && current.status === 'failed'}>{s.label}</li>
@@ -200,107 +219,107 @@
     {#if current.preflight?.checks?.length}
       <ul class="checks">
         {#each current.preflight.checks as c (c.id)}
-          <li><span class="badge {checkBadge[c.status]}">{c.status}</span><b>{c.title}</b><span class="muted">{c.detail}</span></li>
+          <li><span class="badge {checkBadge[c.status]}">{stateText(c.status)}</span><b>{c.title}</b><span class="muted">{c.detail}</span></li>
         {/each}
       </ul>
     {/if}
     {#if current.error}
       <div class="alert error">{current.error}</div>
     {/if}
-    <LogView {lines} height="320px" empty="Waiting for output…" />
-    <p class="hint">Host key {current.host_key_fingerprint}. The credentials were used for this install only and are not stored.</p>
+    <LogView {lines} height="320px" empty={t('Waiting for output…')} />
+    <p class="hint">{t('Host key {fingerprint}. The credentials were used for this install only and are not stored.', { fingerprint: current.host_key_fingerprint })}</p>
     <div class="row">
       {#if running}
-        <button class="danger" onclick={cancel}>Cancel</button>
+        <button class="danger" onclick={cancel}>{t('Cancel')}</button>
       {:else}
-        <button onclick={back}><Icon name="arrowleft" size={13} />{current.status === 'failed' ? 'Back to the form' : 'Install another'}</button>
+        <button onclick={back}><Icon name="arrowleft" size={13} />{current.status === 'failed' ? t('Back to the form') : t('Install another')}</button>
         {#if current.status === 'succeeded' && current.preflight_only}
-          <button class="primary" onclick={() => start(false)} disabled={starting}>Install now</button>
+          <button class="primary" onclick={() => start(false)} disabled={starting}>{t('Install now')}</button>
         {:else if current.status === 'failed' && hostKey && credsOK && current.host === host.trim()}
-          <button class="primary" onclick={() => start(current?.preflight_only ?? false)} disabled={starting}>Try again</button>
+          <button class="primary" onclick={() => start(current?.preflight_only ?? false)} disabled={starting}>{t('Try again')}</button>
         {/if}
       {/if}
-      {#if !running}<span class="faint small">finished {relTime(current.finished_at ?? current.created_at)}</span>{/if}
+      {#if !running}<span class="faint small">{t('finished {time}', { time: relTime(current.finished_at ?? current.created_at) })}</span>{/if}
     </div>
   </div>
 {:else}
   <form class="stack" onsubmit={(e) => (e.preventDefault(), start(false))}>
     <p class="small muted">
-      The control plane logs in to the machine over SSH, checks it, runs the installer with a single-use join token and waits until the node is online.
-      <b>The key or password is used for this install only and never stored.</b>
+      {t('The control plane logs in to the machine over SSH, checks it, runs the installer with a single-use join token and waits until the node is online.')}
+      <b>{t('The key or password is used for this install only and never stored.')}</b>
     </p>
     <div class="grid-3">
       <label class="field">
-        <span>Host</span>
+        <span>{t('Host')}</span>
         <input bind:value={host} placeholder="203.0.113.10" autocomplete="off" required oninput={() => (confirmed = false)} />
       </label>
       <label class="field">
-        <span>Port</span>
+        <span>{t('Port')}</span>
         <input type="number" min="1" max="65535" bind:value={port} />
       </label>
       <label class="field">
-        <span>User</span>
+        <span>{t('User')}</span>
         <input bind:value={user} autocomplete="off" />
-        <span class="hint">root, or a user with sudo</span>
+        <span class="hint">{t('root, or a user with sudo')}</span>
       </label>
     </div>
 
     <div class="hostkey">
       <div class="between">
-        <span class="label">Host key</span>
-        <button type="button" class="sm" onclick={probe} disabled={probing || !host.trim()}><Icon name="key" size={13} />{hostKey ? 'Read again' : 'Read host key'}</button>
+        <span class="label">{t('Host key')}</span>
+        <button type="button" class="sm" onclick={probe} disabled={probing || !host.trim()}><Icon name="key" size={13} />{hostKey ? t('Read again') : t('Read host key')}</button>
       </div>
       {#if hostKey && keyFor === target}
         <div class="mono small fp">{hostKey.key_type} {hostKey.fingerprint}</div>
         {#if hostKey.control_plane}
           <div class="alert warn small">
-            {host} is this control plane. Installing a node agent on it replaces its configuration.
-            <label class="check"><input type="checkbox" bind:checked={allowCP} />Install on it anyway</label>
+            {t('{host} is this control plane. Installing a node agent on it replaces its configuration.', { host })}
+            <label class="check"><input type="checkbox" bind:checked={allowCP} />{t('Install on it anyway')}</label>
           </div>
         {/if}
-        <label class="check"><input type="checkbox" bind:checked={confirmed} />This is the server's key (compare with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on its console)</label>
+        <label class="check"><input type="checkbox" bind:checked={confirmed} />{t("This is the server's key")} ({t('compare with')} <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> {t('on its console')})</label>
         <label class="field">
-          <span>…or paste the expected fingerprint</span>
+          <span>{t('…or paste the expected fingerprint')}</span>
           <input class="mono" bind:value={expected} placeholder="SHA256:…" autocomplete="off" />
-          {#if expectedMismatch}<span class="hint err">Does not match the key the server presented: do not continue.</span>{/if}
+          {#if expectedMismatch}<span class="hint err">{t('Does not match the key the server presented: do not continue.')}</span>{/if}
         </label>
       {:else}
-        <p class="hint">Read the server's SSH host key and confirm it before any credential is sent.</p>
+        <p class="hint">{t("Read the server's SSH host key and confirm it before any credential is sent.")}</p>
       {/if}
     </div>
 
     <div class="row">
-      <label class="check"><input type="radio" bind:group={auth} value="key" />Private key</label>
-      <label class="check"><input type="radio" bind:group={auth} value="password" />Password</label>
+      <label class="check"><input type="radio" bind:group={auth} value="key" />{t('Private key')}</label>
+      <label class="check"><input type="radio" bind:group={auth} value="password" />{t('Password')}</label>
     </div>
     {#if auth === 'key'}
       <label class="field">
-        <span>Private key</span>
+        <span>{t('Private key')}</span>
         <textarea class="mono" rows="5" bind:value={privateKey} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" autocomplete="off" spellcheck="false"></textarea>
       </label>
       <div class="grid-2">
         <label class="field">
-          <span>Key passphrase (if encrypted)</span>
+          <span>{t('Key passphrase (if encrypted)')}</span>
           <input type="password" bind:value={passphrase} autocomplete="off" />
         </label>
         {#if user.trim() !== 'root'}
           <label class="field">
-            <span>sudo password (if sudo asks for one)</span>
+            <span>{t('sudo password (if sudo asks for one)')}</span>
             <input type="password" bind:value={sudoPassword} autocomplete="off" />
           </label>
         {/if}
       </div>
     {:else}
       <label class="field">
-        <span>Password</span>
+        <span>{t('Password')}</span>
         <input type="password" bind:value={password} autocomplete="off" />
-        {#if user.trim() !== 'root'}<span class="hint">Also used for sudo.</span>{/if}
+        {#if user.trim() !== 'root'}<span class="hint">{t('Also used for sudo.')}</span>{/if}
       </label>
     {/if}
 
     <div class="grid-2">
       <div class="field">
-        <span>Roles</span>
+        <span>{t('Roles')}</span>
         <div class="row">
           {#each ['worker', 'build', 'edge'] as r (r)}
             <label class="check"><input type="checkbox" checked={roles.includes(r)} onchange={() => toggleRole(r)} />{r}</label>
@@ -308,33 +327,33 @@
         </div>
       </div>
       <label class="field">
-        <span>Node name (optional)</span>
-        <input bind:value={name} placeholder="its hostname" autocomplete="off" />
+        <span>{t('Node name (optional)')}</span>
+        <input bind:value={name} placeholder={t('its hostname')} autocomplete="off" />
       </label>
     </div>
-    <label class="check"><input type="checkbox" bind:checked={reinstall} />Reinstall if paasd is already installed</label>
+    <label class="check"><input type="checkbox" bind:checked={reinstall} />{t('Reinstall if paasd is already installed')}</label>
 
     <ErrorMsg error={formError} />
     <div class="row">
-      <button type="button" onclick={() => start(true)} disabled={starting || !keyOK || !credsOK}>Run checks only</button>
-      <button type="submit" class="primary" disabled={starting || !keyOK || !credsOK}>Install</button>
+      <button type="button" onclick={() => start(true)} disabled={starting || !keyOK || !credsOK}>{t('Run checks only')}</button>
+      <button type="submit" class="primary" disabled={starting || !keyOK || !credsOK}>{t('Install')}</button>
     </div>
   </form>
 {/if}
 
 {#if history.length}
   <details class="history">
-    <summary class="small muted">Recent SSH installs ({history.length})</summary>
+    <summary class="small muted">{t('Recent SSH installs ({n})', { n: history.length })}</summary>
     <table>
-      <thead><tr><th>Machine</th><th>Status</th><th>By</th><th>When</th><th></th></tr></thead>
+      <thead><tr><th>{t('Machine')}</th><th>{t('Status')}</th><th>{t('By')}</th><th>{t('When')}</th><th></th></tr></thead>
       <tbody>
         {#each history.slice(0, 10) as h (h.id)}
           <tr>
-            <td class="mono small">{h.user}@{h.host}:{h.port}<div class="faint">{h.roles.join(', ')}{h.preflight_only ? ' · checks only' : ''}</div></td>
-            <td><Status status={h.status === 'succeeded' ? 'online' : h.status === 'running' ? 'deploying' : 'failed'} label="{h.status} · {h.step}" />{#if h.error}<div class="faint small trunc" title={h.error}>{h.error}</div>{/if}</td>
+            <td class="mono small">{h.user}@{h.host}:{h.port}<div class="faint">{h.roles.join(', ')}{h.preflight_only ? ` · ${t('checks only')}` : ''}</div></td>
+            <td><Status status={h.status === 'succeeded' ? 'online' : h.status === 'running' ? 'deploying' : 'failed'} label="{stateText(h.status)} · {stateText(h.step)}" />{#if h.error}<div class="faint small trunc" title={h.error}>{h.error}</div>{/if}</td>
             <td class="small">{h.created_by_email}</td>
             <td class="small" title={absTime(h.created_at)}>{relTime(h.created_at)}</td>
-            <td class="right"><button class="sm" onclick={() => attach(h)}>Log</button></td>
+            <td class="right"><button class="sm" onclick={() => attach(h)}>{t('Log')}</button></td>
           </tr>
         {/each}
       </tbody>

@@ -6,6 +6,7 @@
   import { navigate } from '../lib/router.svelte';
   import Modal from './Modal.svelte';
   import ErrorMsg from './ErrorMsg.svelte';
+  import { t, tn } from '../lib/i18n.svelte';
 
   let { open = $bindable(false), projectId, services }: { open: boolean; projectId: string; services: ProjectService[] } = $props();
 
@@ -64,7 +65,7 @@
         env_name: envName.trim() || undefined,
         backup_schedule_hours: backupHours,
       });
-      toast.success(`Database ${db.name} is provisioning`);
+      toast.success(t('Database {name} is provisioning', { name: db.name }));
       open = false;
       navigate(`/databases/${db.id}`);
     } catch (err) {
@@ -75,15 +76,15 @@
   }
 </script>
 
-<Modal bind:open title="New database" width={560}>
+<Modal bind:open title={t('New database')} width={560}>
   <form id="new-db" class="stack" onsubmit={submit}>
     <div class="grid-2">
       <label class="field">
-        <span>Name</span>
+        <span>{t('Name')}</span>
         <input bind:value={name} required maxlength="40" />
       </label>
       <label class="field">
-        <span>Engine</span>
+        <span>{t('Engine')}</span>
         <select bind:value={engine}>
           {#each engines as e (e.id)}<option value={e.id}>{e.label}</option>{/each}
         </select>
@@ -91,37 +92,37 @@
     </div>
     {#if versions.length}
       <label class="field">
-        <span>Version</span>
+        <span>{t('Version')}</span>
         <select bind:value={version}>
-          {#each versionInfos as v (v.name)}<option value={v.name}>{v.name}{v.name === defaultVersion ? ' (recommended)' : ''}{v.status === 'ending' ? ` (end of life ${v.eol})` : ''}</option>{/each}
+          {#each versionInfos as v (v.name)}<option value={v.name}>{v.name}{v.name === defaultVersion ? ` (${t('recommended')})` : ''}{v.status === 'ending' ? ` (${t('end of life {date}', { date: v.eol })})` : ''}</option>{/each}
         </select>
-        <span class="hint">{engine === 'mariadb' ? 'MariaDB (MySQL-compatible). ' : ''}Shared databases of the same version share one server; minor updates are applied on restart.</span>
+        <span class="hint">{engine === 'mariadb' ? t('MariaDB (MySQL-compatible).') + ' ' : ''}{t('Shared databases of the same version share one server; minor updates are applied on restart.')}</span>
       </label>
     {/if}
     <fieldset class="field">
-      <legend class="label">Mode</legend>
+      <legend class="label">{t('Mode')}</legend>
       <div class="modes">
         <label class="opt" class:sel={mode === 'shared'} class:dis={!sharedOK}>
           <input type="radio" bind:group={mode} value="shared" disabled={!sharedOK} />
-          <span><b>Shared</b><br /><span class="faint small">A logical database on the cluster's shared server. Cheapest; upgrade later.</span></span>
+          <span><b>{t('Shared')}</b><br /><span class="faint small">{t("A logical database on the cluster's shared server. Cheapest; upgrade later.")}</span></span>
         </label>
         <label class="opt" class:sel={mode === 'dedicated'}>
           <input type="radio" bind:group={mode} value="dedicated" />
-          <span><b>Dedicated</b><br /><span class="faint small">Its own server container with reserved memory.</span></span>
+          <span><b>{t('Dedicated')}</b><br /><span class="faint small">{t('Its own server container with reserved memory.')}</span></span>
         </label>
       </div>
     </fieldset>
     {#if mode === 'dedicated'}
       <label class="field">
-        <span>Size</span>
+        <span>{t('Size')}</span>
         <select bind:value={size}>
-          {#each dbSizes as s (s.name)}<option value={s.name}>{s.name} — {mb(s.memory_mb)} RAM, {cpu(s.cpu_millis)}, {s.max_connections} connections</option>{/each}
+          {#each dbSizes as s (s.name)}<option value={s.name}>{s.name} — {mb(s.memory_mb)} RAM, {cpu(s.cpu_millis)}, {tn(s.max_connections, '{n} connection', '{n} connections')}</option>{/each}
         </select>
       </label>
     {/if}
     {#if services.length}
       <fieldset class="field">
-        <legend class="label">Link to services</legend>
+        <legend class="label">{t('Link to services')}</legend>
         <div class="row" style="gap:14px">
           {#each services as s (s.id)}
             <label class="check"><input type="checkbox" bind:group={link} value={s.id} />{s.name}</label>
@@ -131,21 +132,21 @@
     {/if}
     <div class="grid-2">
       <label class="field">
-        <span>Env variable name</span>
+        <span>{t('Env variable name')}</span>
         <input class="mono" bind:value={envName} placeholder={defaultEnvFor(engine, cat)} />
-        <span class="hint">Injected into linked services.</span>
+        <span class="hint">{t('Injected into linked services.')}</span>
       </label>
       <label class="field">
-        <span>Backup every (hours)</span>
+        <span>{t('Backup every (hours)')}</span>
         <input type="number" min="0" max="720" bind:value={backupHours} />
-        <span class="hint">0 disables scheduled backups.</span>
+        <span class="hint">{t('0 disables scheduled backups.')}</span>
       </label>
     </div>
     <ErrorMsg {error} />
   </form>
   {#snippet footer()}
-    <button type="button" onclick={() => (open = false)}>Cancel</button>
-    <button type="submit" form="new-db" class="primary" disabled={busy || !name.trim()}>{#if busy}<span class="spinner"></span>{/if}Create database</button>
+    <button type="button" onclick={() => (open = false)}>{t('Cancel')}</button>
+    <button type="submit" form="new-db" class="primary" disabled={busy || !name.trim()}>{#if busy}<span class="spinner"></span>{/if}{t('Create database')}</button>
   {/snippet}
 </Modal>
 

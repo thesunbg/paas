@@ -16,6 +16,7 @@
   import Sparkline from '../components/Sparkline.svelte';
   import SshInstall from '../components/SshInstall.svelte';
   import type { NodeMetricPoint } from '../lib/api';
+  import { t, tn } from '../lib/i18n.svelte';
 
   let data = $state<NodesResponse | null>(null);
   let error = $state('');
@@ -70,16 +71,16 @@
   async function setStatus(n: ClusterNode, status: 'online' | 'cordoned') {
     if (status === 'cordoned') {
       const ok = await confirmDialog({
-        title: 'Cordon node',
-        message: `No new instances will be scheduled on ${n.name}. Running instances keep running.`,
-        confirmLabel: 'Cordon',
+        title: t('Cordon node'),
+        message: t('No new instances will be scheduled on {name}. Running instances keep running.', { name: n.name }),
+        confirmLabel: t('Cordon'),
       });
       if (!ok) return;
     }
     busy = n.id;
     try {
       await api.updateNode(n.id, { status });
-      toast.success(`${n.name} ${status === 'cordoned' ? 'cordoned' : 'is schedulable again'}`);
+      toast.success(status === 'cordoned' ? t('{name} cordoned', { name: n.name }) : t('{name} is schedulable again', { name: n.name }));
       await load();
     } catch (e) {
       toast.error(errorMessage(e));
@@ -105,7 +106,7 @@
       stuckOpen = true;
       return;
     }
-    const ok = await confirmDialog({ title: 'Remove node', message: `Remove ${n.name} from the cluster? Its agent must already be stopped.`, confirmLabel: 'Remove', danger: true, requireText: n.name });
+    const ok = await confirmDialog({ title: t('Remove node'), message: t('Remove {name} from the cluster? Its agent must already be stopped.', { name: n.name }), confirmLabel: t('Remove'), danger: true, requireText: n.name });
     if (!ok) return;
     await doRemove(n, false);
   }
@@ -115,9 +116,9 @@
     if (!n) return;
     stuckOpen = false;
     const ok = await confirmDialog({
-      title: 'Remove node anyway',
-      message: `The ${stuck.length} item(s) listed keep their data on ${n.name}. Removing it starts them elsewhere with EMPTY data. Recover them first unless that data is truly gone.`,
-      confirmLabel: 'Remove anyway',
+      title: t('Remove node anyway'),
+      message: tn(stuck.length, 'The item listed keeps its data on {name}. Removing it starts it elsewhere with EMPTY data. Recover it first unless that data is truly gone.', 'The {n} items listed keep their data on {name}. Removing it starts them elsewhere with EMPTY data. Recover them first unless that data is truly gone.', { name: n.name }),
+      confirmLabel: t('Remove anyway'),
       danger: true,
       requireText: n.name,
     });
@@ -127,7 +128,7 @@
   async function doRemove(n: ClusterNode, force: boolean) {
     try {
       await api.deleteNode(n.id, force);
-      toast.success(`${n.name} removed`);
+      toast.success(t('{name} removed', { name: n.name }));
       await load();
     } catch (e) {
       toast.error(errorMessage(e));
@@ -153,21 +154,21 @@
 
   async function drain(n: ClusterNode, moveVolumes: boolean) {
     const ok = await confirmDialog({
-      title: moveVolumes ? `Drain ${n.name} and move its volumes` : `Drain ${n.name}`,
+      title: moveVolumes ? t('Drain {name} and move its volumes', { name: n.name }) : t('Drain {name}', { name: n.name }),
       message: moveVolumes
-        ? `${n.name} is cordoned, its stateless instances move without downtime, and each service with volumes moves to another node one at a time: it stops while its volumes are copied and checked, then starts on the new node. A failed move leaves it running on ${n.name}. Database servers stay.`
-        : `${n.name} is cordoned and its stateless instances move without downtime. Services with volumes stay on it.`,
-      confirmLabel: 'Drain',
+        ? t('{name} is cordoned, its stateless instances move without downtime, and each service with volumes moves to another node one at a time: it stops while its volumes are copied and checked, then starts on the new node. A failed move leaves it running on {name}. Database servers stay.', { name: n.name })
+        : t('{name} is cordoned and its stateless instances move without downtime. Services with volumes stay on it.', { name: n.name }),
+      confirmLabel: t('Drain'),
       danger: moveVolumes,
     });
     if (!ok) return;
     sfBusy = true;
     try {
       const r = await api.drainNode(n.id, moveVolumes);
-      const parts = [`${r.moving} instance(s) moving`];
-      if (r.moving_stateful.length) parts.push(`volumes moving: ${r.moving_stateful.join(', ')}`);
-      if (r.pinned_stateful.length) parts.push(`staying: ${r.pinned_stateful.join(', ')}`);
-      toast.success(`Draining ${n.name}: ${parts.join('; ')}`);
+      const parts = [tn(r.moving, '{n} instance moving', '{n} instances moving')];
+      if (r.moving_stateful.length) parts.push(t('volumes moving: {list}', { list: r.moving_stateful.join(', ') }));
+      if (r.pinned_stateful.length) parts.push(t('staying: {list}', { list: r.pinned_stateful.join(', ') }));
+      toast.success(t('Draining {name}: {details}', { name: n.name, details: parts.join('; ') }));
       sfOpen = false;
       await load();
     } catch (e) {
@@ -180,12 +181,14 @@
   async function recoverAll(n: ClusterNode) {
     const services = sfItems.filter((it) => it.kind === 'service');
     const ok = await confirmDialog({
-      title: `Restore the services of ${n.name}`,
+      title: t('Restore the services of {name}', { name: n.name }),
       message:
-        `Each of the ${services.length} service(s) with volumes is restored on another online node from its newest off-site backup, one at a time. ` +
-        `What it wrote after that backup is lost (the times are listed). Services without a backup are skipped. ` +
-        `Only do this if ${n.name} is not coming back; its old volumes are kept and removed 7 days after it is back.`,
-      confirmLabel: 'Restore',
+        tn(services.length, 'The service with volumes is restored on another online node from its newest off-site backup.', 'Each of the {n} services with volumes is restored on another online node from its newest off-site backup, one at a time.') +
+        ' ' +
+        t('What it wrote after that backup is lost (the times are listed). Services without a backup are skipped.') +
+        ' ' +
+        t('Only do this if {name} is not coming back; its old volumes are kept and removed 7 days after it is back.', { name: n.name }),
+      confirmLabel: t('Restore'),
       danger: true,
       requireText: n.name,
     });
@@ -193,8 +196,8 @@
     sfBusy = true;
     try {
       const r = await api.recoverNode(n.id, false);
-      const msg = [`${r.started.length} restore(s) started`];
-      if (r.skipped.length) msg.push(`skipped: ${r.skipped.map((x) => `${x.name} (${x.reason})`).join(', ')}`);
+      const msg = [tn(r.started.length, '{n} restore started', '{n} restores started')];
+      if (r.skipped.length) msg.push(t('skipped: {list}', { list: r.skipped.map((x) => `${x.name} (${x.reason})`).join(', ') }));
       if (r.skipped.length) toast.error(msg.join('; '));
       else toast.success(msg.join('; '));
       sfOpen = false;
@@ -205,7 +208,9 @@
     }
   }
 
-  const stuckLabel: Record<StuckItem['kind'], string> = { service: 'Service volumes', database: 'Database', 'shared-database': 'Database on a shared server' };
+  const stuckLabel = $derived<Record<StuckItem['kind'], string>>({ service: t('Service volumes'), database: t('Database'), 'shared-database': t('Database on a shared server') });
+  // Node status shown as text (values: online, cordoned, offline; unreachable when its agent stopped reporting).
+  const statusText = (s: string) => ({ online: t('online'), cordoned: t('cordoned'), offline: t('offline'), unreachable: t('unreachable') })[s] ?? s;
 
   function edit(n: ClusterNode) {
     editing = n;
@@ -219,11 +224,11 @@
   async function saveEdit(e: SubmitEvent) {
     e.preventDefault();
     if (!editing) return;
-    if (ocMem < 1 || ocMem > 4) return void (editError = 'Memory overcommit must be between 1 and 4');
-    if (ocCpu < 1 || ocCpu > 16) return void (editError = 'CPU overcommit must be between 1 and 16');
+    if (ocMem < 1 || ocMem > 4) return void (editError = t('Memory overcommit must be between 1 and 4'));
+    if (ocCpu < 1 || ocCpu > 16) return void (editError = t('CPU overcommit must be between 1 and 16'));
     try {
       await api.updateNode(editing.id, { overcommit_memory: Number(ocMem), overcommit_cpu: Number(ocCpu), reserved_mb: Number(reserved) });
-      toast.success(`${editing.name} updated`);
+      toast.success(t('{name} updated', { name: editing.name }));
       editOpen = false;
       await load();
     } catch (err) {
@@ -253,24 +258,24 @@
 <div class="page wide">
   <div class="page-head">
     <div>
-      <h1>Nodes</h1>
-      <p class="sub">Machines in the cluster and how densely they are packed.</p>
+      <h1>{t('Nodes')}</h1>
+      <p class="sub">{t('Machines in the cluster and how densely they are packed.')}</p>
     </div>
-    <button class="primary" onclick={openJoin} aria-expanded={joinOpen}><Icon name="plus" />Add node</button>
+    <button class="primary" onclick={openJoin} aria-expanded={joinOpen}><Icon name="plus" />{t('Add node')}</button>
   </div>
 
   {#if !session.me?.user.is_admin}
-    <div class="alert error">Administrator only.</div>
+    <div class="alert error">{t('Administrator only.')}</div>
   {:else}
     {#if joinOpen}
       <div class="card join">
         <div class="card-head">
-          <h3>Add a node</h3>
-          <div class="tabs-inline" role="tablist" aria-label="How to add the node">
-            <button type="button" role="tab" class="ghost sm" class:on={joinTab === 'command'} aria-selected={joinTab === 'command'} onclick={() => (joinTab = 'command')}>Run a command</button>
-            <button type="button" role="tab" class="ghost sm" class:on={joinTab === 'ssh'} aria-selected={joinTab === 'ssh'} onclick={() => (joinTab = 'ssh')}><Icon name="terminal" size={13} />Install over SSH</button>
+          <h3>{t('Add a node')}</h3>
+          <div class="tabs-inline" role="tablist" aria-label={t('How to add the node')}>
+            <button type="button" role="tab" class="ghost sm" class:on={joinTab === 'command'} aria-selected={joinTab === 'command'} onclick={() => (joinTab = 'command')}>{t('Run a command')}</button>
+            <button type="button" role="tab" class="ghost sm" class:on={joinTab === 'ssh'} aria-selected={joinTab === 'ssh'} onclick={() => (joinTab = 'ssh')}><Icon name="terminal" size={13} />{t('Install over SSH')}</button>
           </div>
-          <button class="ghost icon sm" aria-label="Close" onclick={() => (joinOpen = false)}><Icon name="x" /></button>
+          <button class="ghost icon sm" aria-label={t('Close')} onclick={() => (joinOpen = false)}><Icon name="x" /></button>
         </div>
         <div class="card-body stack">
           {#if joinTab === 'ssh'}
@@ -278,12 +283,12 @@
           {:else}
           <ErrorMsg error={joinError} />
           {#if join}
-            <p class="small muted">Run this on a fresh Linux machine (Debian/Ubuntu, systemd, cgroup v2 recommended). It installs the agent and joins the cluster as a worker. Change <code>--roles</code> to <code>worker,build</code> or <code>edge</code> as needed.</p>
+            <p class="small muted">{t('Run this on a fresh Linux machine (Debian/Ubuntu, systemd, cgroup v2 recommended). It installs the agent and joins the cluster as a worker.')} {t('Change')} <code>--roles</code> {t('to')} <code>worker,build</code> {t('or')} <code>edge</code> {t('as needed.')}</p>
             <div class="cmd">
               <pre class="log">{join.command}</pre>
-              <div class="copy"><CopyButton text={join.command} label="Copy command" small /></div>
+              <div class="copy"><CopyButton text={join.command} label={t('Copy command')} small /></div>
             </div>
-            <p class="hint">The token is single-use and expires at {new Date(join.expires_at).toLocaleString()}. The node appears below within a few seconds of starting.</p>
+            <p class="hint">{t('The token is single-use and expires at {time}. The node appears below within a few seconds of starting.', { time: absTime(join.expires_at) })}</p>
           {:else if !joinError}
             <Loading />
           {/if}
@@ -298,39 +303,39 @@
       <Loading rows={3} />
     {:else if data}
       <div class="stats">
-        <div class="stat card"><span class="lbl">Nodes</span><span class="val">{data.nodes.length}</span></div>
-        <div class="stat card"><span class="lbl">CPU cores</span><span class="val">{totals.cores}</span></div>
-        <div class="stat card"><span class="lbl">Memory</span><span class="val">{mb(totals.mem)}</span></div>
+        <div class="stat card"><span class="lbl">{t('Nodes')}</span><span class="val">{data.nodes.length}</span></div>
+        <div class="stat card"><span class="lbl">{t('CPU cores')}</span><span class="val">{totals.cores}</span></div>
+        <div class="stat card"><span class="lbl">{t('Memory')}</span><span class="val">{mb(totals.mem)}</span></div>
         <div class="stat card">
-          <span class="lbl">Committed / capacity</span><span class="val">{pct(ratio(totals.committed, totals.capacity))}</span>
+          <span class="lbl">{t('Committed / capacity')}</span><span class="val">{pct(ratio(totals.committed, totals.capacity))}</span>
           <span class="bar {level(ratio(totals.committed, totals.capacity))}"><span style="width:{Math.min(100, ratio(totals.committed, totals.capacity) * 100)}%"></span></span>
         </div>
-        <div class="stat card"><span class="lbl">Instances</span><span class="val">{totals.instances}</span></div>
-        <div class="stat card"><span class="lbl">Sleeping services</span><span class="val purple">{data.sleeping_services}</span><span class="faint small">0 MB while asleep</span></div>
+        <div class="stat card"><span class="lbl">{t('Instances')}</span><span class="val">{totals.instances}</span></div>
+        <div class="stat card"><span class="lbl">{t('Sleeping services')}</span><span class="val purple">{data.sleeping_services}</span><span class="faint small">{t('0 MB while asleep')}</span></div>
       </div>
 
       {#if data.nodes.length === 0}
         <div class="card empty">
           <Icon name="server" size={28} />
-          <p>No nodes have joined yet.</p>
-          <button class="primary" onclick={openJoin}>Show join command</button>
+          <p>{t('No nodes have joined yet.')}</p>
+          <button class="primary" onclick={openJoin}>{t('Show join command')}</button>
         </div>
       {:else}
         <div class="card table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Node</th>
-                <th>Status</th>
+                <th>{t('Node')}</th>
+                <th>{t('Status')}</th>
                 <th>CPU <span class="faint">· 24h</span></th>
-                <th>Memory</th>
-                <th style="min-width:180px">Committed / capacity <span class="faint">· 24h</span></th>
-                <th class="right">Used by apps</th>
-                <th class="right">Overcommit</th>
-                <th class="right">Instances</th>
-                <th>Network <span class="faint">· 24h</span></th>
-                <th>Disk</th>
-                <th class="right">Actions</th>
+                <th>{t('Memory')}</th>
+                <th style="min-width:180px">{t('Committed / capacity')} <span class="faint">· 24h</span></th>
+                <th class="right">{t('Used by apps')}</th>
+                <th class="right">{t('Overcommit')}</th>
+                <th class="right">{t('Instances')}</th>
+                <th>{t('Network')} <span class="faint">· 24h</span></th>
+                <th>{t('Disk')}</th>
+                <th class="right">{t('Actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -347,60 +352,60 @@
                     </div>
                   </td>
                   <td>
-                    <Status status={stale(n) && n.status === 'online' ? 'offline' : n.status} label={stale(n) && n.status === 'online' ? 'unreachable' : n.status} />
+                    <Status status={stale(n) && n.status === 'online' ? 'offline' : n.status} label={statusText(stale(n) && n.status === 'online' ? 'unreachable' : n.status)} />
                     <div class="faint small nowrap" title={Object.entries(n.capabilities ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')}>v{n.version}{n.capabilities?.oci_runtime ? ` · ${n.capabilities.oci_runtime}` : ''}</div>
-                    <div class="faint small nowrap" title={absTime(n.last_seen_at)}>seen {relTime(n.last_seen_at)}</div>
+                    <div class="faint small nowrap" title={absTime(n.last_seen_at)}>{t('seen {time}', { time: relTime(n.last_seen_at) })}</div>
                   </td>
                   <td class="nowrap">
-                    <div>{n.cpu_cores} cores · {n.usage.cpu_percent.toFixed(1)}%</div>
-                    <div class="faint small">load {n.usage.load1.toFixed(2)}</div>
+                    <div>{tn(n.cpu_cores, '{n} core', '{n} cores')} · {n.usage.cpu_percent.toFixed(1)}%</div>
+                    <div class="faint small">{t('load {n}', { n: n.usage.load1.toFixed(2) })}</div>
                     {#if metrics[n.id]}
                       {@const m = metrics[n.id]}
-                      <div class="trend" title="CPU %, last 24 h">
-                        <Sparkline values={m.map((p) => p.cpu_percent)} times={m.map((p) => Date.parse(p.ts))} label="{n.name} CPU, 24 h" max={100} width={96} format={(v) => `${v.toFixed(0)}%`} />
+                      <div class="trend" title={t('CPU %, last 24 h')}>
+                        <Sparkline values={m.map((p) => p.cpu_percent)} times={m.map((p) => Date.parse(p.ts))} label={t('{name} CPU, 24 h', { name: n.name })} max={100} width={96} format={(v) => `${v.toFixed(0)}%`} />
                       </div>
                     {/if}
                   </td>
                   <td class="nowrap">
                     <div>{mb(n.memory_mb)}</div>
-                    <div class="faint small">{mb(n.usage.memory_used_mb)} used</div>
-                    <div class="faint small">{mb(n.reserved_mb)} reserved</div>
+                    <div class="faint small">{t('{size} used', { size: mb(n.usage.memory_used_mb) })}</div>
+                    <div class="faint small">{t('{size} reserved', { size: mb(n.reserved_mb) })}</div>
                   </td>
                   <td>
                     <div class="dens">
                       <div class="between small nowrap"><span>RAM {mb(n.committed_memory_mb)} / {mb(n.capacity_memory_mb)}</span><span class="faint">{pct(memR)}</span></div>
-                      <span class="bar {level(memR)}" title="Committed memory requests vs schedulable capacity">
+                      <span class="bar {level(memR)}" title={t('Committed memory requests vs schedulable capacity')}>
                         <span style="width:{Math.min(100, memR * 100)}%"></span>
                       </span>
                       <div class="between small nowrap"><span>CPU {cpu(n.committed_cpu_millis)} / {cpu(n.capacity_cpu_millis)}</span><span class="faint">{pct(cpuR)}</span></div>
                       <span class="bar {level(cpuR)}"><span style="width:{Math.min(100, cpuR * 100)}%"></span></span>
                       {#if metrics[n.id]}
                         {@const m = metrics[n.id]}
-                        <div class="trend" title="Committed memory, last 24 h">
-                          <Sparkline values={m.map((p) => p.memory_committed_mb)} times={m.map((p) => Date.parse(p.ts))} label="{n.name} committed memory, 24 h" width={110} format={(v) => mb(v)} />
+                        <div class="trend" title={t('Committed memory, last 24 h')}>
+                          <Sparkline values={m.map((p) => p.memory_committed_mb)} times={m.map((p) => Date.parse(p.ts))} label={t('{name} committed memory, 24 h', { name: n.name })} width={110} format={(v) => mb(v)} />
                         </div>
                       {/if}
                     </div>
                   </td>
                   <td class="right nowrap">
                     {mb(n.used_by_apps_mb)}
-                    <div class="faint small">{n.committed_memory_mb ? pct(ratio(n.used_by_apps_mb, n.committed_memory_mb)) + ' of committed' : ''}</div>
+                    <div class="faint small">{n.committed_memory_mb ? t('{pct} of committed', { pct: pct(ratio(n.used_by_apps_mb, n.committed_memory_mb)) }) : ''}</div>
                   </td>
                   <td class="right nowrap">
-                    <div title="Committed memory / (physical − reserved)">{n.overcommit_ratio.toFixed(2)}×</div>
-                    <div class="faint small">max {n.overcommit_memory}× mem</div>
-                    <div class="faint small">max {n.overcommit_cpu}× cpu</div>
+                    <div title={t('Committed memory / (physical − reserved)')}>{n.overcommit_ratio.toFixed(2)}×</div>
+                    <div class="faint small">{t('max {n}× mem', { n: n.overcommit_memory })}</div>
+                    <div class="faint small">{t('max {n}× cpu', { n: n.overcommit_cpu })}</div>
                   </td>
                   <td class="right">{n.instances}</td>
                   <td class="nowrap">
-                    <div class="small" title="Physical interfaces, now">↓ {rate(n.usage.net_rx_bps ?? 0)} · ↑ {rate(n.usage.net_tx_bps ?? 0)}</div>
+                    <div class="small" title={t('Physical interfaces, now')}>↓ {rate(n.usage.net_rx_bps ?? 0)} · ↑ {rate(n.usage.net_tx_bps ?? 0)}</div>
                     {#if n.traffic}
-                      <div class="faint small" title="Received / sent{n.traffic.since ? ` since ${n.traffic.since}` : ' in the last 30 days'} (UTC days)">30 d: ↓ {bytes(n.traffic.rx_30d)} ↑ {bytes(n.traffic.tx_30d)}</div>
+                      <div class="faint small" title={n.traffic.since ? t('Received / sent since {date} (UTC days)', { date: n.traffic.since }) : t('Received / sent in the last 30 days (UTC days)')}>{t('30 d')}: ↓ {bytes(n.traffic.rx_30d)} ↑ {bytes(n.traffic.tx_30d)}</div>
                     {/if}
                     {#if metrics[n.id]}
                       {@const m = metrics[n.id]}
-                      <div class="trend" title="Traffic (in + out) per minute, last 24 h">
-                        <Sparkline values={m.map((p) => ((p.net_rx_bytes ?? 0) + (p.net_tx_bytes ?? 0)) / 60)} times={m.map((p) => Date.parse(p.ts))} label="{n.name} network, 24 h" width={96} format={(v) => rate(v)} />
+                      <div class="trend" title={t('Traffic (in + out) per minute, last 24 h')}>
+                        <Sparkline values={m.map((p) => ((p.net_rx_bytes ?? 0) + (p.net_tx_bytes ?? 0)) / 60)} times={m.map((p) => Date.parse(p.ts))} label={t('{name} network, 24 h', { name: n.name })} width={96} format={(v) => rate(v)} />
                       </div>
                     {/if}
                   </td>
@@ -411,14 +416,14 @@
                   <td class="right nowrap">
                     <div class="acts">
                     {#if n.status === 'online'}
-                      <button class="sm" onclick={() => setStatus(n, 'cordoned')} disabled={busy === n.id}>Cordon</button>
+                      <button class="sm" onclick={() => setStatus(n, 'cordoned')} disabled={busy === n.id}>{t('Cordon')}</button>
                     {:else}
-                      <button class="sm" onclick={() => setStatus(n, 'online')} disabled={busy === n.id}>Uncordon</button>
+                      <button class="sm" onclick={() => setStatus(n, 'online')} disabled={busy === n.id}>{t('Uncordon')}</button>
                     {/if}
-                    <button class="sm" onclick={() => openStateful(n)} title="Services with volumes on this node: drain them, or restore them elsewhere if the node is lost">{alive(n) ? 'Drain…' : 'Recover…'}</button>
-                    <button class="sm" onclick={() => edit(n)}>Edit</button>
+                    <button class="sm" onclick={() => openStateful(n)} title={t('Services with volumes on this node: drain them, or restore them elsewhere if the node is lost')}>{alive(n) ? t('Drain…') : t('Recover…')}</button>
+                    <button class="sm" onclick={() => edit(n)}>{t('Edit')}</button>
                     {#if n.status !== 'online'}
-                      <button class="sm danger" aria-label="Remove {n.name}" onclick={() => remove(n)}><Icon name="trash" size={12} />Remove</button>
+                      <button class="sm danger" aria-label={t('Remove {name}', { name: n.name })} onclick={() => remove(n)}><Icon name="trash" size={12} />{t('Remove')}</button>
                     {/if}
                     </div>
                   </td>
@@ -428,18 +433,18 @@
           </table>
         </div>
         <p class="hint" style="margin-top:8px">
-          Capacity = (memory − reserved) × memory overcommit for burstable workloads. Committed is the sum of instance memory requests; “used by apps” is actual usage.
+          {t('Capacity = (memory − reserved) × memory overcommit for burstable workloads. Committed is the sum of instance memory requests; “used by apps” is actual usage.')}
         </p>
       {/if}
     {/if}
   {/if}
 </div>
 
-<Modal bind:open={stuckOpen} title="Data still on {stuckNode?.name ?? 'this node'}" width={560}>
+<Modal bind:open={stuckOpen} title={stuckNode ? t('Data still on {name}', { name: stuckNode.name }) : t('Data still on this node')} width={560}>
   <div class="stack small">
-    <p>These keep their data on this node. Recover each one on another node first (from its newest off-site backup), then remove the node.</p>
+    <p>{t('These keep their data on this node. Recover each one on another node first (from its newest off-site backup), then remove the node.')}</p>
     <table>
-      <thead><tr><th>What</th><th>Project</th><th>Newest off-site backup</th></tr></thead>
+      <thead><tr><th>{t('What')}</th><th>{t('Project')}</th><th>{t('Newest off-site backup')}</th></tr></thead>
       <tbody>
         {#each stuck as it (it.kind + it.id)}
           <tr>
@@ -448,30 +453,30 @@
               <div class="faint">{stuckLabel[it.kind]}</div>
             </td>
             <td>{it.project ?? ''}</td>
-            <td>{#if it.backup}<span title={absTime(it.backup)}>{relTime(it.backup)}</span>{:else}<span class="badge red">none</span>{/if}</td>
+            <td>{#if it.backup}<span title={absTime(it.backup)}>{relTime(it.backup)}</span>{:else}<span class="badge red">{t('none')}</span>{/if}</td>
           </tr>
         {/each}
       </tbody>
     </table>
   </div>
   {#snippet footer()}
-    <button type="button" onclick={() => (stuckOpen = false)}>Cancel</button>
-    <button type="button" class="danger" onclick={forceRemove}>Remove anyway…</button>
+    <button type="button" onclick={() => (stuckOpen = false)}>{t('Cancel')}</button>
+    <button type="button" class="danger" onclick={forceRemove}>{t('Remove anyway…')}</button>
   {/snippet}
 </Modal>
 
-<Modal bind:open={sfOpen} title="Stateful services on {sfNode?.name ?? 'this node'}" width={600}>
+<Modal bind:open={sfOpen} title={sfNode ? t('Stateful services on {name}', { name: sfNode.name }) : t('Stateful services on this node')} width={600}>
   <div class="stack small">
     {#if sfNode && alive(sfNode)}
-      <p>These keep their data on this node. A drain moves stateless instances only, unless you also move the volumes (each service is down while its volumes are copied).</p>
+      <p>{t('These keep their data on this node. A drain moves stateless instances only, unless you also move the volumes (each service is down while its volumes are copied).')}</p>
     {:else}
-      <p><span class="badge red">unreachable</span> If this node is not coming back, restore its services on other nodes from their newest off-site backups. Databases have their own recovery (open each one).</p>
+      <p><span class="badge red">{t('unreachable')}</span> {t('If this node is not coming back, restore its services on other nodes from their newest off-site backups. Databases have their own recovery (open each one).')}</p>
     {/if}
     {#if sfItems.length === 0}
-      <p class="muted">Nothing keeps its data only on this node.</p>
+      <p class="muted">{t('Nothing keeps its data only on this node.')}</p>
     {:else}
       <table>
-        <thead><tr><th>What</th><th>Project</th><th>Newest off-site backup</th></tr></thead>
+        <thead><tr><th>{t('What')}</th><th>{t('Project')}</th><th>{t('Newest off-site backup')}</th></tr></thead>
         <tbody>
           {#each sfItems as it (it.kind + it.id)}
             <tr>
@@ -480,7 +485,7 @@
                 <div class="faint">{stuckLabel[it.kind]}</div>
               </td>
               <td>{it.project ?? ''}</td>
-              <td>{#if it.backup}<span title={absTime(it.backup)}>{relTime(it.backup)}</span>{:else}<span class="badge red">none</span>{/if}</td>
+              <td>{#if it.backup}<span title={absTime(it.backup)}>{relTime(it.backup)}</span>{:else}<span class="badge red">{t('none')}</span>{/if}</td>
             </tr>
           {/each}
         </tbody>
@@ -488,44 +493,44 @@
     {/if}
   </div>
   {#snippet footer()}
-    <button type="button" onclick={() => (sfOpen = false)}>Cancel</button>
+    <button type="button" onclick={() => (sfOpen = false)}>{t('Cancel')}</button>
     {#if sfNode && alive(sfNode)}
-      <button type="button" onclick={() => sfNode && drain(sfNode, false)} disabled={sfBusy}>Drain</button>
-      <button type="button" class="danger" onclick={() => sfNode && drain(sfNode, true)} disabled={sfBusy || !sfItems.some((it) => it.kind === 'service')}>Drain and move volumes</button>
+      <button type="button" onclick={() => sfNode && drain(sfNode, false)} disabled={sfBusy}>{t('Drain')}</button>
+      <button type="button" class="danger" onclick={() => sfNode && drain(sfNode, true)} disabled={sfBusy || !sfItems.some((it) => it.kind === 'service')}>{t('Drain and move volumes')}</button>
     {:else}
-      <button type="button" class="danger" onclick={() => sfNode && recoverAll(sfNode)} disabled={sfBusy || !sfItems.some((it) => it.kind === 'service')}>Restore on other nodes…</button>
+      <button type="button" class="danger" onclick={() => sfNode && recoverAll(sfNode)} disabled={sfBusy || !sfItems.some((it) => it.kind === 'service')}>{t('Restore on other nodes…')}</button>
     {/if}
   {/snippet}
 </Modal>
 
-<Modal bind:open={editOpen} title="Edit {editing?.name ?? 'node'}" width={460}>
+<Modal bind:open={editOpen} title={editing ? t('Edit {name}', { name: editing.name }) : t('Edit node')} width={460}>
   <form id="node-edit" class="stack" onsubmit={saveEdit}>
     <div class="grid-2">
       <label class="field">
-        <span>Memory overcommit</span>
+        <span>{t('Memory overcommit')}</span>
         <input type="number" min="1" max="4" step="0.1" bind:value={ocMem} />
         <span class="hint">1 – 4×</span>
       </label>
       <label class="field">
-        <span>CPU overcommit</span>
+        <span>{t('CPU overcommit')}</span>
         <input type="number" min="1" max="16" step="0.5" bind:value={ocCpu} />
         <span class="hint">1 – 16×</span>
       </label>
     </div>
     <label class="field">
-      <span>Reserved memory (MB)</span>
+      <span>{t('Reserved memory (MB)')}</span>
       <input type="number" min="0" step="64" bind:value={reserved} />
-      <span class="hint">Kept free for the OS and agent; never scheduled.</span>
+      <span class="hint">{t('Kept free for the OS and agent; never scheduled.')}</span>
     </label>
     {#if editing}
       {@const cap = Math.round((editing.memory_mb - reserved) * ocMem)}
-      <p class="small muted">Resulting memory capacity: <b>{mb(cap)}</b> (currently {mb(editing.capacity_memory_mb)}, committed {mb(editing.committed_memory_mb)}).</p>
+      <p class="small muted">{t('Resulting memory capacity:')} <b>{mb(cap)}</b> ({t('currently {current}, committed {committed}', { current: mb(editing.capacity_memory_mb), committed: mb(editing.committed_memory_mb) })}).</p>
     {/if}
     <ErrorMsg error={editError} />
   </form>
   {#snippet footer()}
-    <button type="button" onclick={() => (editOpen = false)}>Cancel</button>
-    <button type="submit" form="node-edit" class="primary">Save</button>
+    <button type="button" onclick={() => (editOpen = false)}>{t('Cancel')}</button>
+    <button type="submit" form="node-edit" class="primary">{t('Save')}</button>
   {/snippet}
 </Modal>
 
