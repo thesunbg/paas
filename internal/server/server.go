@@ -100,7 +100,8 @@ type Server struct {
 
 	uptime uptimeRunner // uptime checks in flight (uptime.go)
 
-	setup setupState // first-run setup checklist: probes and cached results (setup_checklist.go)
+	setup setupState   // first-run setup checklist: probes and cached results (setup_checklist.go)
+	ssh   sshInstaller // nodes being installed over SSH (ssh_install.go)
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.
@@ -217,6 +218,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	s.loadStorageSettings(ctx)
+	go s.resumeSSHInstalls(ctx)
 	go s.storageLoop(ctx)
 	go s.leaderLoop(ctx)
 	go func() {

@@ -26,6 +26,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	committed, _ := s.store.NodeCommitted(r.Context())
 	instances, _ := s.store.AllInstances(r.Context())
+	hostKeys, _ := s.store.NodeSSHHostKeys(r.Context())
 	type nodeOut struct {
 		store.Node
 		CommittedMemoryMB int            `json:"committed_memory_mb"`
@@ -36,6 +37,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		UsedByAppsMB      int            `json:"used_by_apps_mb"`
 		OvercommitRatio   float64        `json:"overcommit_ratio"`
 		Traffic           trafficSummary `json:"traffic"`
+		SSHHostKey        string         `json:"ssh_host_key,omitempty"` // accepted when it was installed over SSH
 	}
 	sleeping := 0
 	services, _ := s.store.AllServices(r.Context())
@@ -48,7 +50,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	for _, n := range nodes {
 		memCap, cpuCap := scheduler.Capacity(&n, model.QoSBurstable)
 		no := nodeOut{Node: n, CommittedMemoryMB: committed[n.ID][0], CommittedCPU: committed[n.ID][1], CapacityMemoryMB: memCap, CapacityCPU: cpuCap,
-			Traffic: s.trafficSummary(r.Context(), "node_traffic_daily", "node_id", n.ID)}
+			Traffic: s.trafficSummary(r.Context(), "node_traffic_daily", "node_id", n.ID), SSHHostKey: hostKeys[n.ID]}
 		for _, in := range instances {
 			if in.NodeID == n.ID && in.Status == model.InstRunning {
 				no.Instances++

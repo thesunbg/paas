@@ -745,6 +745,7 @@ export interface ClusterNode {
   used_by_apps_mb: number;
   overcommit_ratio: number;
   traffic?: TrafficSummary;
+  ssh_host_key?: string; // accepted when it was installed over SSH
 }
 
 export interface NodesResponse {
@@ -764,6 +765,62 @@ export interface JoinToken {
   token: string;
   expires_at: string;
   command: string;
+}
+
+export interface SSHHostKey {
+  address: string;
+  ips: string[] | null;
+  key_type: string;
+  fingerprint: string;
+  host_key: string;
+  control_plane: boolean;
+}
+
+export interface PreflightCheck {
+  id: string;
+  title: string;
+  status: 'ok' | 'warn' | 'fail';
+  detail: string;
+}
+
+export interface SSHInstallRequest {
+  host: string;
+  port: number;
+  user: string;
+  auth: 'key' | 'password';
+  private_key?: string;
+  passphrase?: string;
+  password?: string;
+  roles: string[];
+  name?: string;
+  fingerprint: string;
+  reinstall?: boolean;
+  preflight_only?: boolean;
+  allow_control_plane?: boolean;
+}
+
+export interface SSHInstall {
+  id: string;
+  host: string;
+  port: number;
+  user: string;
+  auth_method: 'key' | 'password';
+  roles: string[];
+  node_name: string;
+  host_key: string;
+  host_key_fingerprint: string;
+  reinstall: boolean;
+  preflight_only: boolean;
+  status: 'running' | 'succeeded' | 'failed';
+  step: 'connect' | 'preflight' | 'install' | 'enroll' | 'done';
+  preflight: { checks?: PreflightCheck[]; hostname?: string; os?: string; arch?: string; memory_mb?: number; disk_free_mb?: number };
+  error: string;
+  node_id: string | null;
+  server_name: string;
+  created_by_email: string;
+  created_at: string;
+  finished_at: string | null;
+  log_tail?: string[];
 }
 
 export interface Size {
@@ -1567,6 +1624,12 @@ export const api = {
     post<RecoverNodeResult>(`/nodes/${e(id)}/recover`, { allow_empty: allowEmpty, node, confirm_data_loss: true }),
   nodeMetrics: (id: string) => get<NodeMetricPoint[] | null>(`/nodes/${e(id)}/metrics`),
   createJoinToken: (roles: string[]) => post<JoinToken>('/cluster/join-tokens', { roles }),
+  sshHostKey: (host: string, port: number) => post<SSHHostKey>('/cluster/ssh-host-key', { host, port }),
+  sshInstalls: () => get<SSHInstall[]>('/cluster/ssh-installs'),
+  sshInstall: (id: string) => get<SSHInstall>(`/cluster/ssh-installs/${e(id)}`),
+  createSSHInstall: (req: SSHInstallRequest) => post<SSHInstall>('/cluster/ssh-installs', req),
+  cancelSSHInstall: (id: string) => post<{ status: string }>(`/cluster/ssh-installs/${e(id)}/cancel`),
+  sshInstallLogStreamURL: (id: string) => `${BASE}/cluster/ssh-installs/${e(id)}/logs/stream`,
   sizes: () => get<SizesResponse>('/sizes'),
 };
 

@@ -188,13 +188,20 @@ Database `status`: `provisioning`, `ready`, `failed`, `upgrading`, `deleting`.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/nodes` | `{nodes: [node + legacy (still on the shared cluster token), committed_memory_mb, capacity_memory_mb, instances, used_by_apps_mb, overcommit_ratio], sleeping_services}` |
+| GET | `/nodes` | `{nodes: [node + legacy (still on the shared cluster token), ssh_host_key (when installed over SSH), committed_memory_mb, capacity_memory_mb, instances, used_by_apps_mb, overcommit_ratio], sleeping_services}` |
 | PATCH | `/nodes/{id}` | `{status: online|cordoned, overcommit_memory, overcommit_cpu, reserved_mb, labels}` |
 | DELETE | `/nodes/{id}` | offline/cordoned nodes only. 409 with `stuck` when services or databases still keep data there; `?force=true` removes it anyway (they restart empty) |
 | GET | `/nodes/{id}/stuck` | `[{kind: service|database|shared-database, id, name, project, backup}]` data that lives only on this node, with its newest off-site backup |
 | POST | `/nodes/{id}/drain` | `{move_volumes?}` cordons the node and moves its stateless instances without downtime. With `move_volumes`, every service with volumes on it is also moved (as `POST /services/{id}/move`, one at a time); database servers stay. 202 `{status, moving, pinned_stateful, moving_stateful}` |
 | POST | `/nodes/{id}/recover` | `{node?, allow_empty, confirm_data_loss: true}` node unreachable (as above): restores every service with volumes of the node on other nodes from its newest off-site volume backup (as `POST /services/{id}/recover`, one at a time). 202 `{started: [{service, id, move, node, rpo_at}], skipped: [{kind, name, id, reason}]}`; databases are skipped (they have `POST /databases/{id}/recover`), so are services without a backup unless `allow_empty` |
 | POST | `/cluster/join-tokens` | `{roles: [worker,build,edge]}` (default `worker`) -> `{token, expires_at, command}`. Single-use token. 409 when `PAAS_PUBLIC_URL` is not https |
+| POST | `/cluster/ssh-host-key` | `{host, port}` -> `{address, ips, key_type, fingerprint (SHA256:...), host_key (authorized_keys line), control_plane}`. Reads the SSH host key without logging in, for the administrator to confirm. 30 per 15 min per administrator |
+| POST | `/cluster/ssh-installs` | `{host, port (22), user (root), auth: key|password, private_key?, passphrase?, password? (login password, or the sudo password with a key), roles, name?, fingerprint (required: the confirmed host key), reinstall?, preflight_only?, allow_control_plane?}` -> 202 attempt. Installs a node over SSH in the background: connect (host key must match `fingerprint`, checked before authentication), preflight, `install.sh join` with a fresh single-use join token, wait until the node is online (steps `connect, preflight, install, enroll, done`). Credentials are used for this attempt only and never stored; they are masked in the log. 400 when the host is this control plane unless `allow_control_plane`; 409 when `PAAS_PUBLIC_URL` is not https; 429 after 10 starts per 15 min per administrator or 5 running per control plane |
+| GET | `/cluster/ssh-installs` | the 50 latest attempts: `{id, host, port, user, auth_method, roles, node_name, host_key, host_key_fingerprint, status: running|succeeded|failed, step, preflight: {checks: [{id, title, status: ok|warn|fail, detail}], hostname, os, arch, memory_mb, disk_free_mb, ips}, error, node_id, server_name, created_by_email, created_at, finished_at}` |
+| GET | `/cluster/ssh-installs/{id}` | one attempt plus `log_tail` (last 30 lines) |
+| GET | `/cluster/ssh-installs/{id}/logs` | `?after=ID` -> `[{id, ts, line}]` |
+| GET | `/cluster/ssh-installs/{id}/logs/stream` | SSE: `log` events (with ids; `Last-Event-ID` resumes), then `done` with the final status |
+| POST | `/cluster/ssh-installs/{id}/cancel` | stops a running attempt (on the control plane running it); its unused join token is revoked |
 | POST | `/cluster/enroll` | no login, the join token is the credential. `{token, name, nkey}` -> node identity, bus URL and CA. Called by the agent |
 | GET | `/sizes` | instance size presets |
 

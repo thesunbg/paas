@@ -20,6 +20,7 @@
 #   --roles ROLES        comma separated: worker,build,edge (join; default worker)
 #   --url URL            dashboard URL of the control plane, https only (join)
 #   --token TOKEN        single-use join token from the dashboard (join)
+#   --name NAME          node name (join; default: hostname)
 #   --binary URL|PATH    paasd binary to install (default: $URL/download/paasd in join, else latest GitHub release)
 #   --mirror HOST        Docker Hub pull-through mirror (e.g. mirror.gcr.io)
 #   --no-zram            do not configure compressed swap in RAM
@@ -32,7 +33,7 @@ set -eu
 
 MODE="${1:-server}"; [ $# -gt 0 ] && shift
 DOMAIN=""; DASH=""; EMAIL=""; HTTPS=0; ROLES=""; URL=""; TOKEN=""; BINARY=""; MIRROR=""; ZRAM=1
-DBURL=""; KEYFILE=""; SNAME=""; ROUTES=""; TRIVY=1
+DBURL=""; KEYFILE=""; SNAME=""; ROUTES=""; TRIVY=1; NNAME=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN="$2"; shift 2;;
@@ -42,6 +43,7 @@ while [ $# -gt 0 ]; do
     --roles) ROLES="$2"; shift 2;;
     --url) URL="${2%/}"; shift 2;;
     --token) TOKEN="$2"; shift 2;;
+    --name) NNAME="$2"; shift 2;;
     --binary) BINARY="$2"; shift 2;;
     --mirror) MIRROR="$2"; shift 2;;
     --no-zram) ZRAM=0; shift;;
@@ -329,6 +331,7 @@ PAAS_JOIN_TOKEN=${TOKEN}
 PAAS_ROLES=${ROLES}
 PAAS_ACME_EMAIL=${EMAIL}
 EOF
+    [ -z "$NNAME" ] || echo "PAAS_NODE_NAME=${NNAME}" >> /etc/paas/paasd.env
     ARGS=agent
   fi
   chmod 600 /etc/paas/paasd.env

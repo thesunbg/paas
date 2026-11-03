@@ -14,6 +14,7 @@
   import CopyButton from '../components/CopyButton.svelte';
   import Modal from '../components/Modal.svelte';
   import Sparkline from '../components/Sparkline.svelte';
+  import SshInstall from '../components/SshInstall.svelte';
   import type { NodeMetricPoint } from '../lib/api';
 
   let data = $state<NodesResponse | null>(null);
@@ -22,6 +23,7 @@
   let join = $state<JoinToken | null>(null);
   let joinOpen = $state(false);
   let joinError = $state('');
+  let joinTab = $state<'command' | 'ssh'>('command');
 
   let editing = $state<ClusterNode | null>(null);
   let editOpen = $state(false);
@@ -264,9 +266,16 @@
       <div class="card join">
         <div class="card-head">
           <h3>Add a node</h3>
+          <div class="tabs-inline" role="tablist" aria-label="How to add the node">
+            <button type="button" role="tab" class="ghost sm" class:on={joinTab === 'command'} aria-selected={joinTab === 'command'} onclick={() => (joinTab = 'command')}>Run a command</button>
+            <button type="button" role="tab" class="ghost sm" class:on={joinTab === 'ssh'} aria-selected={joinTab === 'ssh'} onclick={() => (joinTab = 'ssh')}><Icon name="terminal" size={13} />Install over SSH</button>
+          </div>
           <button class="ghost icon sm" aria-label="Close" onclick={() => (joinOpen = false)}><Icon name="x" /></button>
         </div>
         <div class="card-body stack">
+          {#if joinTab === 'ssh'}
+            <SshInstall ondone={load} />
+          {:else}
           <ErrorMsg error={joinError} />
           {#if join}
             <p class="small muted">Run this on a fresh Linux machine (Debian/Ubuntu, systemd, cgroup v2 recommended). It installs the agent and joins the cluster as a worker. Change <code>--roles</code> to <code>worker,build</code> or <code>edge</code> as needed.</p>
@@ -277,6 +286,7 @@
             <p class="hint">The token is single-use and expires at {new Date(join.expires_at).toLocaleString()}. The node appears below within a few seconds of starting.</p>
           {:else if !joinError}
             <Loading />
+          {/if}
           {/if}
         </div>
       </div>
@@ -525,6 +535,16 @@
   }
   .join {
     margin-bottom: 20px;
+  }
+  .tabs-inline {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+    margin-right: 8px;
+  }
+  .tabs-inline .on {
+    background: var(--bg-hover);
+    color: var(--text);
   }
   .cmd {
     position: relative;

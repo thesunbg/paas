@@ -212,6 +212,16 @@ Usage:
   paas restore-volume --node <lost-node> [--to <node>] [--allow-empty] --yes
                                        Same for every service with volumes of a lost node (admin)
   paas join-command [--roles r1,r2]    Print a single-use command to add a node (admin; roles default to worker)
+  paas node add <user@host[:port]> [--identity KEY | --password] [--roles worker,build] [--name N]
+                [--fingerprint SHA256:...] [--yes] [--reinstall] [--preflight-only]
+                                       Install a node over SSH from the control plane (admin): it checks
+                                       the machine, runs the installer and waits until the node is online.
+                                       The key or password is used for this install only, never stored
+  paas node installs                   Recent SSH installs
+  paas install --ssh <user@host[:port]> --domain D (--email E | --https) [--dashboard-domain D]
+               [--identity KEY | --password | --ssh-agent] [--fingerprint SHA256:...] [--installer-url URL]
+               [-- extra install.sh flags]
+                                       Install a control plane on a fresh server from this machine
   paas quota [show]                    The team's usage against its quota
   paas doctor [--refresh] [-v]         First-run setup checklist: DNS, HTTPS, ports, Git, backups,
                                        notifications (admin; exits 1 when a step fails)
@@ -287,7 +297,13 @@ func main() {
 	case "templates":
 		err = cmdTemplates()
 	case "install":
-		err = cmdInstall(rest)
+		if hasSSHFlag(rest) {
+			err = cmdInstallSSH(rest)
+		} else {
+			err = cmdInstall(rest)
+		}
+	case "node":
+		err = cmdNode(rest)
 	case "compose":
 		err = cmdCompose(rest)
 	case "drain":
@@ -362,6 +378,19 @@ func cmdQuota(args []string) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t\n", r.label, r.format(out.Usage[r.used]), limit)
 	}
 	return tw.Flush()
+}
+
+// hasSSHFlag tells paas install --ssh (a control plane on a server) from paas install <template>.
+func hasSSHFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--ssh" || a == "-ssh" || strings.HasPrefix(a, "--ssh=") || strings.HasPrefix(a, "-ssh=") {
+			return true
+		}
+	}
+	return false
 }
 
 func cmdJoinCommand(args []string) error {

@@ -196,6 +196,10 @@ func (s *Store) EnrollNode(ctx context.Context, hash []byte, name, nkey string, 
 		if err != nil {
 			return err
 		}
+		// Remember which node the token enrolled (an SSH install waits on it).
+		if _, err := tx.Exec(ctx, `UPDATE join_tokens SET node_id=$2 WHERE hash=$1`, hash, n.ID); err != nil {
+			return err
+		}
 		n, err = allocNetIndex(ctx, tx, n, maxNodes)
 		return err
 	})
