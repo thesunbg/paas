@@ -61,7 +61,7 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := context.WithoutCancel(r.Context())
-	created, dbs, err := s.installTemplate(ctx, p, tpl, in.Name, in.Domain, in.Env)
+	created, dbs, err := s.installTemplate(ctx, p, tpl, in.Name, in.Domain, in.Env, model.SleepPolicy{})
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -74,7 +74,9 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 // installTemplate installs a built-in template in a project: name replaces its main
 // name ("" keeps it; taken names get a -2, -3… suffix), env holds the values of
 // its inputs by service.
-func (s *Server) installTemplate(ctx context.Context, p *store.Project, tpl *templates.Template, name, domain string, env map[string]map[string]string) ([]*store.Service, []*store.Database, error) {
+// sleep, when enabled, is given to the plan's public web services (batches); a
+// private service or a worker could not be woken by a request, so they never sleep.
+func (s *Server) installTemplate(ctx context.Context, p *store.Project, tpl *templates.Template, name, domain string, env map[string]map[string]string, sleep model.SleepPolicy) ([]*store.Service, []*store.Database, error) {
 	// Copy the services: the catalogue is shared, the values are this install's.
 	svcs := make([]templates.Service, len(tpl.Services))
 	for i, ts := range tpl.Services {
@@ -95,7 +97,7 @@ func (s *Server) installTemplate(ctx context.Context, p *store.Project, tpl *tem
 		ts.Env = vars
 		svcs[i] = ts
 	}
-	opts := templateOpts{Domain: domain, Rename: map[string]string{}}
+	opts := templateOpts{Domain: domain, Rename: map[string]string{}, Sleep: sleep}
 	if tpl.Repo != "" {
 		opts.Repo = &model.ServiceSource{Kind: "git", Repo: tpl.Repo, Branch: firstNonEmpty(tpl.Branch, "main")}
 	}
@@ -263,6 +265,7 @@ type templateOpts struct {
 	Domain      string               // custom domain of the first public service
 	Repo        *model.ServiceSource // repository of services with a build section
 	GitTokenEnc string
+	Sleep       model.SleepPolicy // public web services get it (batches)
 }
 
 // freeNames renames the plan's services and databases whose name is already taken in the
@@ -456,6 +459,9 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 			size, _ = resources.SizeByName("small")
 		}
 		resources.Apply(&spec, size, model.QoSBurstable)
+		if opts.Sleep.Enabled && typ == model.TypeWeb && host != "" {
+			spec.Sleep = opts.Sleep
+		}
 		if err := resources.Normalize(typ, &spec); err != nil {
 			return out, fmt.Errorf("%s: %w", ts.Name, err)
 		}

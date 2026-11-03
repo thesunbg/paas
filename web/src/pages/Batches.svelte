@@ -37,7 +37,7 @@
   // New batch form.
   let creating = $state(false);
   let templates = $state<Template[]>([]);
-  let form = $state({ name: '', template: 'n8n', mode: 'instances' as 'instances' | 'accounts', count: 30, learners: '', prefix: '' });
+  let form = $state({ name: '', template: 'n8n', mode: 'instances' as 'instances' | 'accounts', count: 30, learners: '', prefix: '', parallel: 2, sleep: true, idle: 30 });
   let env = $state<Record<string, Record<string, string>>>({});
   let estimate = $state<BatchEstimate | null>(null);
   let formError = $state('');
@@ -79,12 +79,12 @@
 
   let estTimer: ReturnType<typeof setTimeout>;
   $effect(() => {
-    const t = form.template, n = count;
+    const t = form.template, n = count, par = form.parallel, sl = form.sleep;
     clearTimeout(estTimer);
     if (!creating || !t || !n || n < 1) return;
     estTimer = setTimeout(async () => {
       try {
-        estimate = await api.batchEstimate(t, n);
+        estimate = await api.batchEstimate(t, n, par, sl);
       } catch {
         estimate = null;
       }
@@ -106,6 +106,9 @@
         team_id: currentTeam()?.id,
         env: inputs.length ? env : undefined,
         force,
+        parallel: form.parallel,
+        sleep: form.sleep,
+        idle_minutes: form.sleep ? form.idle : undefined,
       });
       toast.success(`Creating ${r.items} copies of ${tpl?.title ?? form.template}`);
       creating = false;
@@ -113,7 +116,7 @@
       navigate(`/batches/${r.id}`);
     } catch (err) {
       formError = errorMessage(err);
-      needForce = err instanceof ApiError && err.status === 409 && !!err.data?.estimate;
+      needForce = err instanceof ApiError && err.status === 409 && !!err.data?.estimate && !(err.data.estimate as BatchEstimate).blocked;
     } finally {
       busy = false;
     }
@@ -252,10 +255,29 @@
               <span class="hint">{i.hint ?? ''} The same value is used for every copy.</span>
             </label>
           {/each}
+          <div class="grid-2">
+            <label class="field">
+              <span>Start at the same time</span>
+              <input type="number" min="1" max="10" bind:value={form.parallel} />
+              <span class="hint">Copies start {form.parallel} at a time; the next ones wait until these are up. Lower is gentler on a small server.</span>
+            </label>
+            <div class="field">
+              <label class="check"><input type="checkbox" bind:checked={form.sleep} />Sleep when unused</label>
+              {#if form.sleep}
+                <label class="row small" style="gap:6px">after <input type="number" min="1" max="1440" bind:value={form.idle} style="width:80px" /> minutes without a visit</label>
+              {/if}
+              <span class="hint">Each copy goes to sleep once it is up and wakes in a couple of seconds on its first visit, so only the copies in use take memory.</span>
+            </div>
+          </div>
           {#if estimate}
-            <div class="alert {estimate.warning ? (estimate.fits ? 'warn' : 'error') : 'info'} small">
+            <div class="alert {estimate.blocked || !estimate.fits ? 'error' : estimate.warning ? 'warn' : 'info'} small">
               <div>
-                {count} × {mb(estimate.per_copy_request_mb)} reserved = <b>{mb(estimate.need_request_mb)}</b> of {mb(estimate.free_schedulable_mb)} free on the workers · up to {mb(estimate.need_limit_mb)} if all are busy ({mb(estimate.free_memory_mb)} of memory free now).
+                {#if estimate.sleep}
+                  Asleep the copies reserve <b>{mb(estimate.need_request_mb)}</b> (databases and the {estimate.parallel} starting) of {mb(estimate.free_schedulable_mb)} free on the workers{#if estimate.max_awake !== undefined} · about {estimate.max_awake} can be awake at once{/if}.
+                {:else}
+                  {count} × {mb(estimate.per_copy_request_mb)} reserved = <b>{mb(estimate.need_request_mb)}</b> of {mb(estimate.free_schedulable_mb)} free on the workers · up to {mb(estimate.need_limit_mb)} if all are busy.
+                {/if}
+                Start-up peak {mb(estimate.startup_peak_mb)} · {mb(estimate.free_memory_mb)} of memory free now.
                 {#if estimate.warning}<div style="margin-top:4px">{estimate.warning}</div>{/if}
               </div>
             </div>

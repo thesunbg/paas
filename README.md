@@ -132,6 +132,20 @@ Settings → System → Updates shows the version of every control plane and nod
 
 Each machine downloads the release binary, checks it against the release's `SHA256SUMS` (it refuses a missing or wrong checksum; `PAAS_UPDATE_ALLOW_UNVERIFIED=true` skips the check and is unsafe), swaps it in atomically keeping the old one as `/usr/local/bin/paasd.prev`, and restarts under systemd; containers keep running. A machine that does not come back healthy with the new version within 10 minutes is rolled back to `paasd.prev` and the update stops; a local systemd timer does the same if the new binary cannot even start. Updates can be paused, resumed and aborted, and any node can be rolled back by hand. Only binaries are rolled back, never the database: migrations are additive, so the previous version keeps working on the newer schema, and downgrades are refused. If a release's notes say a migration is not additive, the way back is the state backup taken in step 1 (`paasd restore-state`). Development builds (anything but a `vX.Y.Z` tag) are never told a release is newer.
 
+### Protecting the control plane from running out of memory
+
+`paasd` runs with `OOMScoreAdjust=-900`, and installs from this version on give the control plane's local PostgreSQL the same (its backends are reset to 0, so a runaway query can still be killed and PostgreSQL recovers). When a node runs out of memory the kernel then kills an app, never the platform. Re-running the install script applies it to an existing server; or by hand:
+
+```bash
+for u in postgresql.service postgresql@.service; do sudo mkdir -p /etc/systemd/system/$u.d; printf '[Service]\nOOMScoreAdjust=-900\nEnvironment=PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj\nEnvironment=PG_OOM_ADJUST_VALUE=0\n' | sudo tee /etc/systemd/system/$u.d/paas-oom.conf >/dev/null; done
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart postgresql paasd
+```
+
+Batches (one template for a whole class) start their copies two at a time and put each to sleep once it is up, so creating 30 copies no longer boots 30 apps at once, and only the copies in use hold memory. A batch that would run the nodes out of memory is refused, even with "Create anyway".
+
 ## Configuration
 
 `paasd` is configured through environment variables (`/etc/paas/paasd.env`):

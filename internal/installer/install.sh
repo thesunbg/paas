@@ -286,9 +286,30 @@ install_paasd() {
   chmod 700 /var/lib/paas
 }
 
+# The control plane's PostgreSQL holds all of paas's state: when the machine runs out
+# of memory the kernel must pick an app, never this. The postmaster gets a low OOM
+# score; its backends are put back to 0 (PG_OOM_ADJUST_*), so a runaway query can
+# still be killed and PostgreSQL recovers on its own. Debian runs the server as
+# postgresql@<version>-<cluster>.service, Fedora/RHEL as postgresql.service.
+protect_postgres() {
+  for unit in postgresql.service postgresql@.service; do
+    mkdir -p "/etc/systemd/system/${unit}.d"
+    cat > "/etc/systemd/system/${unit}.d/paas-oom.conf" <<'EOF'
+[Service]
+OOMScoreAdjust=-900
+Environment=PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj
+Environment=PG_OOM_ADJUST_VALUE=0
+EOF
+  done
+  systemctl daemon-reload
+}
+
 setup_postgres() {
   log "configuring PostgreSQL for the control plane"
+  protect_postgres
   systemctl enable --now postgresql >/dev/null 2>&1 || true
+  # Restart so the OOM settings above apply to a server that was already running.
+  systemctl restart postgresql >/dev/null 2>&1 || true
   PGPASS=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
   su - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='paas'\"" | grep -q 1 || \
     su - postgres -c "psql -c \"CREATE ROLE paas LOGIN PASSWORD '$PGPASS'\"" >/dev/null

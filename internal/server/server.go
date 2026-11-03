@@ -501,6 +501,7 @@ func (s *Server) leaderLoop(ctx context.Context) {
 		go s.deployWorker(lctx)
 		go s.resumeProvisioning(lctx)
 		go s.resumeVolumeMoves(lctx)
+		go s.resumeBatches(lctx)
 		go s.syncBaseDomain(lctx)
 		go s.cronLoop(lctx)
 		go s.metricsLoop(lctx)

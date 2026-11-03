@@ -940,9 +940,14 @@ export interface BatchEstimate {
   per_copy_limit_mb: number;
   need_request_mb: number;
   need_limit_mb: number;
+  startup_peak_mb: number;
   free_schedulable_mb: number;
   free_memory_mb: number;
+  parallel: number;
+  sleep: boolean;
+  max_awake?: number;
   fits: boolean;
+  blocked: boolean;
   warning?: string;
 }
 
@@ -980,6 +985,9 @@ export interface BatchInput {
   prefix?: string;
   env?: Record<string, Record<string, string>>;
   force?: boolean;
+  parallel?: number;
+  sleep?: boolean;
+  idle_minutes?: number;
 }
 
 export interface InstallResponse {
@@ -1554,7 +1562,8 @@ export const api = {
   templates: () => get<Template[] | null>('/templates'),
   batches: () => get<Batch[]>('/batches'),
   batch: (id: string) => get<Batch>(`/batches/${e(id)}`),
-  batchEstimate: (template: string, count: number) => get<BatchEstimate>(`/batches/estimate?template=${e(template)}&count=${count}`),
+  batchEstimate: (template: string, count: number, parallel: number, sleep: boolean) =>
+    get<BatchEstimate>(`/batches/estimate?template=${e(template)}&count=${count}&parallel=${parallel}&sleep=${sleep}`),
   createBatch: (input: BatchInput) => post<{ id: string; items: number; estimate: BatchEstimate }>('/batches', input),
   deleteBatch: (id: string) => del(`/batches/${e(id)}`),
   batchCSVURL: (id: string) => `${BASE}/batches/${e(id)}/csv`,

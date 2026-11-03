@@ -3,12 +3,15 @@ package server
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/mail"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -30,10 +33,25 @@ import (
 //     password) owning a project with their copy. They see and manage only
 //     theirs.
 //
-// Copies are created one after another in the background; deleting a batch
-// removes everything it created (in accounts mode, the accounts too).
+// Copies are created in the background a few at a time: each group starts only
+// once the previous copies are up (or failed), so a class of 30 does not boot 30
+// apps, 30 databases and 30 first-run migrations at once. With sleep (the
+// default) every copy goes to sleep as soon as it is up and wakes on its first
+// request, so only the copies in use hold memory. Deleting a batch removes
+// everything it created (in accounts mode, the accounts too).
 
-const batchMax = 200
+const (
+	batchMax         = 200
+	batchParallelMax = 10
+	batchParallelDef = 2
+	batchIdleDef     = 30              // minutes without a request before a copy sleeps
+	batchStaleAfter  = 2 * time.Minute // a creating batch whose runner went quiet this long is resumed
+)
+
+var (
+	batchCopyTimeout = 15 * time.Minute // a copy that is not up by then no longer holds the next ones back
+	batchPoll        = 2 * time.Second  // tests shorten both
+)
 
 type batchLearner struct {
 	Name  string `json:"name"`
@@ -51,37 +69,56 @@ type batchInput struct {
 	Prefix    string                       `json:"prefix"`     // name of the copies (default: the template's)
 	Env       map[string]map[string]string `json:"env"`
 	Force     bool                         `json:"force"` // create even when capacity looks short
+	// Pacing. Parallel copies start at the same time (default 2, at most 10).
+	// Sleep (default on) puts each copy to sleep once it is up and after
+	// IdleMinutes (default 30) without a request; it wakes on the next request.
+	Parallel    int   `json:"parallel"`
+	Sleep       *bool `json:"sleep"`
+	IdleMinutes int   `json:"idle_minutes"`
+}
+
+// pacing returns the batch's start concurrency and sleep policy, with defaults applied.
+func (in *batchInput) pacing() (int, model.SleepPolicy) {
+	parallel := in.Parallel
+	if parallel <= 0 {
+		parallel = batchParallelDef
+	}
+	if parallel > batchParallelMax {
+		parallel = batchParallelMax
+	}
+	sl := model.SleepPolicy{Enabled: in.Sleep == nil || *in.Sleep}
+	if sl.Enabled {
+		sl.IdleMinutes = in.IdleMinutes
+		if sl.IdleMinutes <= 0 {
+			sl.IdleMinutes = batchIdleDef
+		}
+	}
+	return parallel, sl
 }
 
 // batchEstimate is what N copies need against what the cluster has free.
 type batchEstimate struct {
-	PerCopyRequestMB int    `json:"per_copy_request_mb"` // reserved by the scheduler
-	PerCopyLimitMB   int    `json:"per_copy_limit_mb"`   // worst case
-	NeedRequestMB    int    `json:"need_request_mb"`
-	NeedLimitMB      int    `json:"need_limit_mb"`
-	FreeScheduleMB   int    `json:"free_schedulable_mb"` // capacity minus committed, online workers
-	FreeMemoryMB     int    `json:"free_memory_mb"`      // physical memory available now
-	Fits             bool   `json:"fits"`
-	Warning          string `json:"warning,omitempty"`
+	PerCopyRequestMB int  `json:"per_copy_request_mb"` // reserved by the scheduler
+	PerCopyLimitMB   int  `json:"per_copy_limit_mb"`   // worst case
+	NeedRequestMB    int  `json:"need_request_mb"`     // reserved once created (sleep: databases + the copies starting at once)
+	NeedLimitMB      int  `json:"need_limit_mb"`       // worst case with every copy awake and busy
+	StartupPeakMB    int  `json:"startup_peak_mb"`     // the copies starting at once at their limit, on top of the rest
+	FreeScheduleMB   int  `json:"free_schedulable_mb"` // capacity minus committed, online workers
+	FreeMemoryMB     int  `json:"free_memory_mb"`      // physical memory available now (0: not reported yet)
+	Parallel         int  `json:"parallel"`
+	Sleep            bool `json:"sleep"`
+	MaxAwake         int  `json:"max_awake,omitempty"` // sleep: copies that can be awake at the same time
+	Fits             bool `json:"fits"`
+	// Blocked: even force is refused, because the memory the copies reserve plus their
+	// start-up peak is more than the nodes physically have free: creating them would
+	// push the node out of memory (the kernel then kills apps, or the control plane's
+	// database). Turn sleep on, create fewer copies, or add a node.
+	Blocked bool   `json:"blocked"`
+	Warning string `json:"warning,omitempty"`
 }
 
-func (s *Server) estimateBatch(ctx context.Context, tpl *templates.Template, n int) batchEstimate {
-	var e batchEstimate
-	for _, ts := range tpl.Services {
-		size, ok := resources.SizeByName(firstNonEmpty(ts.Size, "small"))
-		if !ok {
-			size, _ = resources.SizeByName("small")
-		}
-		e.PerCopyRequestMB += size.MemoryRequestMB
-		e.PerCopyLimitMB += size.MemoryLimitMB
-	}
-	for _, d := range tpl.Databases {
-		if d.Mode == "dedicated" {
-			e.PerCopyRequestMB += 96 // a micro server
-			e.PerCopyLimitMB += 256
-		}
-	}
-	e.NeedRequestMB, e.NeedLimitMB = e.PerCopyRequestMB*n, e.PerCopyLimitMB*n
+func (s *Server) estimateBatch(ctx context.Context, tpl *templates.Template, n, parallel int, sleep bool) batchEstimate {
+	freeSchedule, freeMemory := 0, 0
 	committed, _ := s.store.NodeCommitted(ctx)
 	nodes, _ := s.store.Nodes(ctx)
 	for i := range nodes {
@@ -91,15 +128,56 @@ func (s *Server) estimateBatch(ctx context.Context, tpl *templates.Template, n i
 		}
 		capMB, _ := scheduler.Capacity(node, model.QoSBurstable)
 		if free := capMB - committed[node.ID][0]; free > 0 {
-			e.FreeScheduleMB += free
+			freeSchedule += free
 		}
-		e.FreeMemoryMB += node.Usage.MemoryAvailableMB
+		freeMemory += node.Usage.MemoryAvailableMB
 	}
+	return computeBatchEstimate(tpl, n, parallel, sleep, freeSchedule, freeMemory)
+}
+
+// computeBatchEstimate is the arithmetic of estimateBatch, given what the workers have free.
+func computeBatchEstimate(tpl *templates.Template, n, parallel int, sleep bool, freeSchedule, freeMemory int) batchEstimate {
+	e := batchEstimate{Parallel: parallel, Sleep: sleep, FreeScheduleMB: freeSchedule, FreeMemoryMB: freeMemory}
+	svcReq, svcLim, dbReq, dbLim := 0, 0, 0, 0
+	for _, ts := range tpl.Services {
+		size, ok := resources.SizeByName(firstNonEmpty(ts.Size, "small"))
+		if !ok {
+			size, _ = resources.SizeByName("small")
+		}
+		svcReq += size.MemoryRequestMB
+		svcLim += size.MemoryLimitMB
+	}
+	for _, d := range tpl.Databases {
+		if d.Mode == "dedicated" {
+			dbReq += 96 // a micro server
+			dbLim += 256
+		}
+	}
+	e.PerCopyRequestMB, e.PerCopyLimitMB = svcReq+dbReq, svcLim+dbLim
+	starting := min(parallel, n)
+	e.StartupPeakMB = starting * (svcLim - svcReq)
+	if sleep {
+		// Asleep, a copy holds only its databases; the ones starting hold their services too.
+		e.NeedRequestMB = dbReq*n + svcReq*starting
+	} else {
+		e.NeedRequestMB = e.PerCopyRequestMB * n
+	}
+	e.NeedLimitMB = e.PerCopyLimitMB * n
 	e.Fits = e.NeedRequestMB <= e.FreeScheduleMB
+	if sleep && svcReq > 0 {
+		e.MaxAwake = min(n, max(0, (e.FreeScheduleMB-dbReq*n)/svcReq))
+	}
+	// Physical memory is only known once the agents report it; without it, keep to the reservation check.
+	e.Blocked = e.FreeMemoryMB > 0 && e.NeedRequestMB+e.StartupPeakMB > e.FreeMemoryMB
 	switch {
+	case e.Blocked:
+		e.Warning = fmt.Sprintf("%d copies reserve %s and need up to %s more while %d start at once, but the nodes have only %s of memory free: this would run them out of memory. Turn sleep on, create fewer copies, or add a node",
+			n, mbStr(e.NeedRequestMB), mbStr(e.StartupPeakMB), starting, mbStr(e.FreeMemoryMB))
 	case !e.Fits:
 		e.Warning = fmt.Sprintf("%d copies reserve %s but only %s is free on the worker nodes: some would not start", n, mbStr(e.NeedRequestMB), mbStr(e.FreeScheduleMB))
-	case e.NeedLimitMB > e.FreeMemoryMB:
+	case sleep && e.MaxAwake < n:
+		e.Warning = fmt.Sprintf("The copies sleep when unused; about %d of the %d can be awake at the same time, a copy that cannot wake says so", e.MaxAwake, n)
+	case !sleep && e.NeedLimitMB > e.FreeMemoryMB:
 		e.Warning = fmt.Sprintf("They fit, but if every copy is busy at once they may use up to %s and the nodes have %s free: fine for a class, tight for heavy use", mbStr(e.NeedLimitMB), mbStr(e.FreeMemoryMB))
 	}
 	return e
@@ -120,7 +198,14 @@ func (s *Server) handleBatchEstimate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, fmt.Sprintf("count must be 1 to %d", batchMax))
 		return
 	}
-	writeJSON(w, 200, s.estimateBatch(r.Context(), tpl, n))
+	in := batchInput{IdleMinutes: 0}
+	in.Parallel, _ = strconv.Atoi(r.URL.Query().Get("parallel"))
+	if v := r.URL.Query().Get("sleep"); v != "" {
+		b := v == "true" || v == "1"
+		in.Sleep = &b
+	}
+	parallel, sl := in.pacing()
+	writeJSON(w, 200, s.estimateBatch(r.Context(), tpl, n, parallel, sl.Enabled))
 }
 
 // POST /api/v1/batches (platform administrators)
@@ -197,7 +282,20 @@ func (s *Server) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	est := s.estimateBatch(ctx, tpl, len(labels))
+	if in.Parallel < 0 || in.Parallel > batchParallelMax {
+		writeError(w, 400, fmt.Sprintf("parallel must be 1 to %d", batchParallelMax))
+		return
+	}
+	if in.IdleMinutes < 0 || in.IdleMinutes > 24*60 {
+		writeError(w, 400, "idle_minutes must be 0 to 1440")
+		return
+	}
+	parallel, sleep := in.pacing()
+	est := s.estimateBatch(ctx, tpl, len(labels), parallel, sleep.Enabled)
+	if est.Blocked {
+		writeJSON(w, 409, map[string]any{"error": est.Warning, "estimate": est})
+		return
+	}
 	if !est.Fits && !in.Force {
 		writeJSON(w, 409, map[string]any{"error": est.Warning, "estimate": est})
 		return
@@ -246,8 +344,11 @@ func (s *Server) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 		projectID = &p.ID
 	}
 	var id string
-	if err := s.store.Q(ctx).QueryRow(ctx, `INSERT INTO batches (name, template, mode, project_id, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-		in.Name, tpl.ID, in.Mode, projectID, u.ID).Scan(&id); err != nil {
+	// The input is kept (encrypted: it holds the template inputs) so another control
+	// plane can finish the batch if this one stops half way.
+	optsJSON, _ := json.Marshal(in)
+	if err := s.store.Q(ctx).QueryRow(ctx, `INSERT INTO batches (name, template, mode, project_id, created_by, options_enc) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+		in.Name, tpl.ID, in.Mode, projectID, u.ID, s.box.MustEncrypt(string(optsJSON))).Scan(&id); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -270,21 +371,43 @@ func (s *Server) firstTeam(ctx context.Context, userID string) string {
 	return teams[0].ID
 }
 
-// runBatch creates the copies one after another. Each copy deploys on its own
-// once its database is ready, so this only takes seconds per copy.
+// runBatch creates the copies that are not created yet, `parallel` at a time: a
+// slot is freed when its copy is up (asleep with sleep on), failed, or past
+// batchCopyTimeout. It stops when the batch is being deleted, and keeps the batch's
+// heartbeat fresh so that a stale "creating" batch can be told apart and resumed.
 func (s *Server) runBatch(ctx context.Context, id string, tpl *templates.Template, in batchInput) {
-	rows, err := s.store.Q(ctx).Query(ctx, `SELECT idx, label, email FROM batch_items WHERE batch_id=$1 ORDER BY idx`, id)
+	parallel, sleep := in.pacing()
+	stopBeat := make(chan struct{})
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopBeat:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batches SET heartbeat_at=now() WHERE id=$1`, id)
+			}
+		}
+	}()
+	defer close(stopBeat)
+
+	rows, err := s.store.Q(ctx).Query(ctx, `SELECT idx, label, email, user_id, project_id FROM batch_items
+		WHERE batch_id=$1 AND service_id IS NULL AND error='' ORDER BY idx`, id)
 	if err != nil {
 		return
 	}
 	type item struct {
-		idx          int
-		label, email string
+		idx           int
+		label, email  string
+		user, project *string
 	}
 	var items []item
 	for rows.Next() {
 		var it item
-		if rows.Scan(&it.idx, &it.label, &it.email) == nil {
+		if rows.Scan(&it.idx, &it.label, &it.email, &it.user, &it.project) == nil {
 			items = append(items, it)
 		}
 	}
@@ -294,28 +417,50 @@ func (s *Server) runBatch(ctx context.Context, id string, tpl *templates.Templat
 		var pid string
 		_ = s.store.Q(ctx).QueryRow(ctx, `SELECT project_id FROM batches WHERE id=$1`, id).Scan(&pid)
 		if shared, err = s.store.ProjectByID(ctx, pid); err != nil {
-			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET error='the project is gone' WHERE batch_id=$1`, id)
-			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batches SET status='ready' WHERE id=$1`, id)
+			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET error='the project is gone' WHERE batch_id=$1 AND service_id IS NULL AND error=''`, id)
+			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batches SET status='ready' WHERE id=$1 AND status='creating'`, id)
 			return
 		}
 	}
+	slots := make(chan struct{}, parallel)
+	var wg sync.WaitGroup
 	for _, it := range items {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		if !s.batchCreating(ctx, id) {
+			<-slots
+			break
+		}
 		fail := func(err error) {
 			slog.Warn("batch item", "batch", id, "item", it.label, "err", err)
 			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET error=$3 WHERE batch_id=$1 AND idx=$2`, id, it.idx, err.Error())
+			<-slots
 		}
 		p, name := shared, it.label
 		if in.Mode == "accounts" {
-			uid, pass, proj, err := s.createLearner(ctx, it.label, it.email, in.Name)
-			if err != nil {
-				fail(err)
-				continue
+			if it.user != nil && it.project != nil { // resumed: the account was made before the stop
+				if p, err = s.store.ProjectByID(ctx, *it.project); err != nil {
+					fail(errors.New("the learner's project is gone"))
+					continue
+				}
+			} else {
+				uid, pass, proj, err := s.createLearner(ctx, it.label, it.email, in.Name)
+				if err != nil {
+					fail(err)
+					continue
+				}
+				_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET user_id=$3, project_id=$4, password_enc=$5 WHERE batch_id=$1 AND idx=$2`,
+					id, it.idx, uid, proj.ID, s.box.MustEncrypt(pass))
+				p = proj
 			}
-			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET user_id=$3, project_id=$4, password_enc=$5 WHERE batch_id=$1 AND idx=$2`,
-				id, it.idx, uid, proj.ID, s.box.MustEncrypt(pass))
-			p, name = proj, ""
+			name = ""
 		}
-		svcs, dbs, err := s.installTemplate(ctx, p, tpl, name, "", in.Env)
+		svcs, dbs, err := s.installTemplate(ctx, p, tpl, name, "", in.Env, sleep)
 		if err != nil {
 			fail(err)
 			continue
@@ -330,8 +475,118 @@ func (s *Server) runBatch(ctx context.Context, id string, tpl *templates.Templat
 		}
 		_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET service_id=$3, database_ids=$4, project_id=COALESCE(project_id, $5) WHERE batch_id=$1 AND idx=$2`,
 			id, it.idx, svcID, dbIDs, p.ID)
+		wg.Add(1)
+		go func(svcs []*store.Service) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			s.settleCopy(ctx, id, svcs, sleep.Enabled, batchCopyTimeout)
+		}(svcs)
 	}
+	wg.Wait()
 	_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batches SET status='ready' WHERE id=$1 AND status='creating'`, id)
+}
+
+// batchCreating reports whether the batch is still being created (not deleted meanwhile).
+func (s *Server) batchCreating(ctx context.Context, id string) bool {
+	var status string
+	err := s.store.Q(ctx).QueryRow(ctx, `SELECT status FROM batches WHERE id=$1`, id).Scan(&status)
+	return err == nil && status == "creating"
+}
+
+// settleCopy waits until every service of a copy has come up, failed or stopped,
+// or the timeout passes. With sleep it then puts the copy's sleep-enabled services
+// to sleep right away: a copy nobody opened yet holds no memory, and the next
+// copies start into the room it leaves.
+func (s *Server) settleCopy(ctx context.Context, batchID string, svcs []*store.Service, sleep bool, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for _, svc := range svcs {
+		for time.Now().Before(deadline) && ctx.Err() == nil {
+			cur, err := s.store.ServiceByID(ctx, svc.ID)
+			if err != nil || copySettled(cur) {
+				break
+			}
+			if !s.batchCreating(ctx, batchID) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(batchPoll):
+			}
+		}
+	}
+	if !sleep {
+		return
+	}
+	for _, svc := range svcs {
+		cur, err := s.store.ServiceByID(ctx, svc.ID)
+		if err != nil || !cur.Spec.Sleep.Enabled || cur.Type != model.TypeWeb || cur.Status != model.StatusRunning {
+			continue
+		}
+		if unlock, ok := s.tryLock(cur.ID); ok {
+			s.putToSleep(ctx, cur.ID, unlock)
+		}
+	}
+}
+
+// copySettled: the service no longer needs its start-up room.
+func copySettled(svc *store.Service) bool {
+	switch svc.Status {
+	case model.StatusRunning:
+		return svc.CurrentDeploymentID != nil
+	case model.StatusFailed, model.StatusStopped, model.StatusSleeping:
+		return true
+	}
+	return false
+}
+
+// resumeBatches finishes batches whose runner stopped (its control plane restarted
+// or lost leadership). A "creating" batch with a stale heartbeat is claimed by
+// moving the heartbeat in the same statement, so only one control plane resumes it.
+func (s *Server) resumeBatches(ctx context.Context) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		s.resumeStaleBatches(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+func (s *Server) resumeStaleBatches(ctx context.Context) {
+	rows, err := s.store.Q(ctx).Query(ctx, `UPDATE batches SET heartbeat_at=now()
+		WHERE status='creating' AND heartbeat_at < now() - make_interval(secs => $1)
+		RETURNING id, template, options_enc`, batchStaleAfter.Seconds())
+	if err != nil {
+		return
+	}
+	type stale struct{ id, template, opts string }
+	var list []stale
+	for rows.Next() {
+		var b stale
+		if rows.Scan(&b.id, &b.template, &b.opts) == nil {
+			list = append(list, b)
+		}
+	}
+	rows.Close()
+	for _, b := range list {
+		tpl, ok := templates.ByID(b.template)
+		var in batchInput
+		var plain string
+		if b.opts != "" {
+			plain, err = s.box.Decrypt(b.opts)
+		}
+		if !ok || b.opts == "" || err != nil || json.Unmarshal([]byte(plain), &in) != nil {
+			// Created before batches kept their input: nothing to resume with.
+			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET error='interrupted by a control plane restart' WHERE batch_id=$1 AND service_id IS NULL AND error=''`, b.id)
+			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batches SET status='ready' WHERE id=$1 AND status='creating'`, b.id)
+			continue
+		}
+		slog.Info("resuming batch", "batch", b.id)
+		go s.runBatch(ctx, b.id, tpl, in)
+	}
 }
 
 // createLearner makes a dashboard account with its own team and a project in it.
