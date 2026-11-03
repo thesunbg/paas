@@ -5,6 +5,7 @@
   import { api, errorMessage, type StudioState } from '../lib/api';
   import { href } from '../lib/router.svelte';
   import Icon from '../components/Icon.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   let { projectId }: { projectId: string } = $props();
   const db = new URLSearchParams(location.hash.split('?')[1] ?? '').get('db') ?? undefined;
@@ -38,11 +39,11 @@
     return () => (stopped = true);
   });
 
-  const steps: Record<string, string> = {
-    building: 'Building the DB studio (the first time takes a few minutes)…',
-    starting: 'Starting the DB studio…',
-    ready: 'Opening…',
-  };
+  const steps: Record<string, string> = $derived({
+    building: t('Building the DB studio (the first time takes a few minutes)…'),
+    starting: t('Starting the DB studio…'),
+    ready: t('Opening…'),
+  });
 </script>
 
 <div class="page narrow">
@@ -51,18 +52,18 @@
     <h1>DB studio</h1>
     {#if error}
       <p class="error">{error}</p>
-      <p class="hint">Retrying…</p>
+      <p class="hint">{t('Retrying…')}</p>
     {:else if st?.status === 'failed'}
-      <p class="error">The DB studio could not be built: {st.deployment?.error || 'see the deployment log'}.</p>
+      <p class="error">{t('The DB studio could not be built: {reason}.', { reason: st.deployment?.error || t('see the deployment log') })}</p>
       {#if st.deployment}
-        <a class="btn" href={href(`/services/${st.service_id}/deployments/${st.deployment.id}`)}>Open the deployment log</a>
+        <a class="btn" href={href(`/services/${st.service_id}/deployments/${st.deployment.id}`)}>{t('Open the deployment log')}</a>
       {/if}
     {:else}
       <p><span class="spinner"></span> {steps[st?.status ?? 'starting'] ?? steps.starting}</p>
       {#if st?.status === 'building' && st.deployment}
-        <a class="small" href={href(`/services/${st.service_id}/deployments/${st.deployment.id}`)}>Follow the build log</a>
+        <a class="small" href={href(`/services/${st.service_id}/deployments/${st.deployment.id}`)}>{t('Follow the build log')}</a>
       {/if}
-      <p class="hint">dbweb runs next to this project's databases and is only reachable through this dashboard. It goes to sleep after 20 minutes without use.</p>
+      <p class="hint">{t("dbweb runs next to this project's databases and is only reachable through this dashboard. It goes to sleep after 20 minutes without use.")}</p>
     {/if}
   </div>
 </div>

@@ -3,6 +3,7 @@
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
+  import { t } from '../lib/i18n.svelte';
 
   // An interactive shell in a container, over GET /services/{id}/terminal (WebSocket):
   // binary frames are keystrokes and output, text frames JSON control messages.
@@ -55,7 +56,7 @@
           try {
             const m = JSON.parse(ev.data) as { exit?: number; error?: string };
             if (m.error) note = m.error;
-            else if (m.exit !== undefined) note = `Process exited with code ${m.exit}`;
+            else if (m.exit !== undefined) note = t('Process exited with code {code}', { code: m.exit });
           } catch {
             /* ignore */
           }
@@ -66,7 +67,7 @@
       sock.onclose = () => {
         if (ws === sock) {
           st = 'closed';
-          if (!note) note = 'Disconnected';
+          if (!note) note = t('Disconnected');
         }
       };
     }
@@ -110,9 +111,9 @@
 <div class="wrap">
   <div class="tbar small">
     <span class="led {st}"></span>
-    <span class="muted">{st === 'open' ? 'Connected' : st === 'connecting' ? 'Connecting…' : note}</span>
+    <span class="muted">{st === 'open' ? t('Connected') : st === 'connecting' ? t('Connecting…') : note}</span>
     {#if st === 'closed'}
-      <button class="sm" onclick={() => reconnect()}>Reconnect</button>
+      <button class="sm" onclick={() => reconnect()}>{t('Reconnect')}</button>
     {/if}
   </div>
   <div class="term" bind:this={el}></div>

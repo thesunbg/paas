@@ -1,6 +1,8 @@
 // Typed client for the PaaS REST API (/api/v1). Field names mirror the Go JSON tags.
 
 export type ServiceType = 'web' | 'worker' | 'static' | 'cron';
+import { t } from './i18n.svelte';
+
 export type ServiceStatus = 'created' | 'deploying' | 'running' | 'sleeping' | 'stopped' | 'failed';
 export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'active' | 'superseded' | 'failed' | 'cancelled';
 export type DatabaseStatus = 'provisioning' | 'ready' | 'failed' | 'upgrading' | 'deleting' | 'importing';
@@ -1181,7 +1183,7 @@ async function request<T>(method: string, path: string, body?: unknown, headers:
   try {
     res = await fetch(BASE + path, init);
   } catch {
-    throw new ApiError(0, 'network error: the server is unreachable');
+    throw new ApiError(0, t('network error: the server is unreachable'));
   }
   const text = await res.text();
   let data: unknown = null;
@@ -1197,8 +1199,8 @@ async function request<T>(method: string, path: string, body?: unknown, headers:
       data && typeof data === 'object' && 'error' in data
         ? String((data as { error: unknown }).error)
         : res.status >= 502
-          ? `The control plane is unavailable (HTTP ${res.status}); try again shortly`
-          : `${res.statusText || 'Request failed'} (HTTP ${res.status})`;
+          ? t('The control plane is unavailable (HTTP {status}); try again shortly', { status: res.status })
+          : `${res.statusText || t('Request failed')} (HTTP ${res.status})`;
     if (res.status === 401 && !path.startsWith('/auth/') && onUnauthorized) onUnauthorized();
     throw new ApiError(res.status, msg, data && typeof data === 'object' ? (data as Record<string, unknown>) : null);
   }

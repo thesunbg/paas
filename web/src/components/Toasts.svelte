@@ -1,14 +1,15 @@
 <script lang="ts">
   import { toasts, dismiss } from '../lib/toast.svelte';
   import Icon from './Icon.svelte';
+  import { t } from '../lib/i18n.svelte';
 </script>
 
 <div class="toasts" role="status" aria-live="polite">
-  {#each toasts as t (t.id)}
-    <div class="toast {t.kind}">
-      <span class="ic"><Icon name={t.kind === 'error' ? 'x' : t.kind === 'success' ? 'check' : 'activity'} size={14} /></span>
-      <span class="txt">{t.text}</span>
-      <button class="ghost icon sm" aria-label="Dismiss" onclick={() => dismiss(t.id)}><Icon name="x" size={12} /></button>
+  {#each toasts as tm (tm.id)}
+    <div class="toast {tm.kind}">
+      <span class="ic"><Icon name={tm.kind === 'error' ? 'x' : tm.kind === 'success' ? 'check' : 'activity'} size={14} /></span>
+      <span class="txt">{tm.text}</span>
+      <button class="ghost icon sm" aria-label={t('Dismiss')} onclick={() => dismiss(tm.id)}><Icon name="x" size={12} /></button>
     </div>
   {/each}
 </div>

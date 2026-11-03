@@ -2,13 +2,14 @@
   // Masked value with reveal toggle and copy button.
   import Icon from './Icon.svelte';
   import CopyButton from './CopyButton.svelte';
+  import { t } from '../lib/i18n.svelte';
   let { value, copyable = true }: { value: string; copyable?: boolean } = $props();
   let shown = $state(false);
 </script>
 
 <span class="secret">
   <code class="val" class:masked={!shown}>{shown ? value : '•'.repeat(Math.min(Math.max(value.length, 8), 24))}</code>
-  <button type="button" class="sm icon" aria-label={shown ? 'Hide value' : 'Reveal value'} aria-pressed={shown} onclick={() => (shown = !shown)}>
+  <button type="button" class="sm icon" aria-label={shown ? t('Hide value') : t('Reveal value')} aria-pressed={shown} onclick={() => (shown = !shown)}>
     <Icon name={shown ? 'eyeoff' : 'eye'} size={13} />
   </button>
   {#if copyable}<CopyButton text={value} />{/if}

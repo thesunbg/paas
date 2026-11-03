@@ -1,4 +1,5 @@
 // Port of internal/cron: parses 5-field cron expressions (UTC) for client-side hints.
+import { t } from './i18n.svelte';
 
 const aliases: Record<string, string> = {
   '@yearly': '0 0 1 1 *',
@@ -25,7 +26,7 @@ export interface Schedule {
 
 function value(s: string, names?: Record<string, number>): number {
   if (names && s in names) return names[s];
-  if (!/^\d+$/.test(s)) throw new Error(`bad value "${s}"`);
+  if (!/^\d+$/.test(s)) throw new Error(t('bad value "{value}"', { value: s }));
   return Number(s);
 }
 
@@ -36,7 +37,7 @@ function field(s: string, lo: number, hi: number, names?: Record<string, number>
     const slash = part.indexOf('/');
     if (slash >= 0) {
       const n = Number(part.slice(slash + 1));
-      if (!Number.isInteger(n) || n <= 0) throw new Error(`bad step in "${part}"`);
+      if (!Number.isInteger(n) || n <= 0) throw new Error(t('bad step in "{part}"', { part }));
       step = n;
       part = part.slice(0, slash);
     }
@@ -52,7 +53,7 @@ function field(s: string, lo: number, hi: number, names?: Record<string, number>
       start = end = value(part, names);
       if (step > 1) end = hi;
     }
-    if (start < lo || end > hi || start > end) throw new Error(`"${part}" out of range ${lo}-${hi}`);
+    if (start < lo || end > hi || start > end) throw new Error(t('"{part}" out of range {lo}-{hi}', { part, lo, hi }));
     for (let v = start; v <= end; v += step) out.add(v);
   }
   return out;
@@ -62,7 +63,7 @@ export function parseCron(expr: string): Schedule {
   let e = expr.trim().toLowerCase();
   if (aliases[e]) e = aliases[e];
   const f = e.split(/\s+/).filter(Boolean);
-  if (f.length !== 5) throw new Error(`cron expression needs 5 fields, got ${f.length}`);
+  if (f.length !== 5) throw new Error(t('cron expression needs 5 fields, got {n}', { n: f.length }));
   const wrap = (name: string, fn: () => Set<number>) => {
     try {
       return fn();
@@ -71,11 +72,11 @@ export function parseCron(expr: string): Schedule {
     }
   };
   const s: Schedule = {
-    minute: wrap('minute', () => field(f[0], 0, 59)),
-    hour: wrap('hour', () => field(f[1], 0, 23)),
-    dom: wrap('day of month', () => field(f[2], 1, 31)),
-    month: wrap('month', () => field(f[3], 1, 12, monthNames)),
-    dow: wrap('day of week', () => field(f[4], 0, 7, dayNames)),
+    minute: wrap(t('minute'), () => field(f[0], 0, 59)),
+    hour: wrap(t('hour'), () => field(f[1], 0, 23)),
+    dom: wrap(t('day of month'), () => field(f[2], 1, 31)),
+    month: wrap(t('month'), () => field(f[3], 1, 12, monthNames)),
+    dow: wrap(t('day of week'), () => field(f[4], 0, 7, dayNames)),
     domStar: f[2] === '*',
     dowStar: f[4] === '*',
     fields: f,
@@ -84,10 +85,10 @@ export function parseCron(expr: string): Schedule {
   return s;
 }
 
-function matches(s: Schedule, t: Date): boolean {
-  if (!s.minute.has(t.getUTCMinutes()) || !s.hour.has(t.getUTCHours()) || !s.month.has(t.getUTCMonth() + 1)) return false;
-  const domOK = s.dom.has(t.getUTCDate());
-  const dowOK = s.dow.has(t.getUTCDay());
+function matches(s: Schedule, d: Date): boolean {
+  if (!s.minute.has(d.getUTCMinutes()) || !s.hour.has(d.getUTCHours()) || !s.month.has(d.getUTCMonth() + 1)) return false;
+  const domOK = s.dom.has(d.getUTCDate());
+  const dowOK = s.dow.has(d.getUTCDay());
   if (s.domStar && s.dowStar) return true;
   if (s.domStar) return dowOK;
   if (s.dowStar) return domOK;
@@ -97,39 +98,50 @@ function matches(s: Schedule, t: Date): boolean {
 /** The next `count` scheduled times strictly after `from`. */
 export function nextRuns(s: Schedule, count = 3, from = new Date()): Date[] {
   const out: Date[] = [];
-  const t = new Date(from.getTime());
-  t.setUTCSeconds(0, 0);
-  t.setUTCMinutes(t.getUTCMinutes() + 1);
+  const d = new Date(from.getTime());
+  d.setUTCSeconds(0, 0);
+  d.setUTCMinutes(d.getUTCMinutes() + 1);
   // Skip whole hours/days quickly when they cannot match.
   for (let i = 0; i < 4 * 366 * 24 * 60 && out.length < count; i++) {
-    if (!s.month.has(t.getUTCMonth() + 1) || !(s.domStar && s.dowStar ? true : matchesDay(s, t))) {
-      t.setUTCHours(0, 0, 0, 0);
-      t.setUTCDate(t.getUTCDate() + 1);
+    if (!s.month.has(d.getUTCMonth() + 1) || !(s.domStar && s.dowStar ? true : matchesDay(s, d))) {
+      d.setUTCHours(0, 0, 0, 0);
+      d.setUTCDate(d.getUTCDate() + 1);
       continue;
     }
-    if (!s.hour.has(t.getUTCHours())) {
-      t.setUTCMinutes(0);
-      t.setUTCHours(t.getUTCHours() + 1);
+    if (!s.hour.has(d.getUTCHours())) {
+      d.setUTCMinutes(0);
+      d.setUTCHours(d.getUTCHours() + 1);
       continue;
     }
-    if (matches(s, t)) out.push(new Date(t.getTime()));
-    t.setUTCMinutes(t.getUTCMinutes() + 1);
+    if (matches(s, d)) out.push(new Date(d.getTime()));
+    d.setUTCMinutes(d.getUTCMinutes() + 1);
   }
   return out;
 }
 
-function matchesDay(s: Schedule, t: Date): boolean {
-  const domOK = s.dom.has(t.getUTCDate());
-  const dowOK = s.dow.has(t.getUTCDay());
+function matchesDay(s: Schedule, d: Date): boolean {
+  const domOK = s.dom.has(d.getUTCDate());
+  const dowOK = s.dow.has(d.getUTCDay());
   if (s.domStar) return dowOK;
   if (s.dowStar) return domOK;
   return domOK || dowOK;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
-const dayFull = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// "Every <weekday> at <time>", one full sentence per day so translations can reorder it.
+function everyWeekday(day: number, at: string): string {
+  switch (day) {
+    case 0: return t('Every Sunday at {time}', { time: at });
+    case 1: return t('Every Monday at {time}', { time: at });
+    case 2: return t('Every Tuesday at {time}', { time: at });
+    case 3: return t('Every Wednesday at {time}', { time: at });
+    case 4: return t('Every Thursday at {time}', { time: at });
+    case 5: return t('Every Friday at {time}', { time: at });
+    default: return t('Every Saturday at {time}', { time: at });
+  }
+}
 
-/** A short English description for common shapes; falls back to the expression. */
+/** A short description (in the current language) for common shapes; empty otherwise. */
 export function describeCron(expr: string): string {
   let s: Schedule;
   try {
@@ -140,26 +152,27 @@ export function describeCron(expr: string): string {
   const [mi, h, dom, mo, dow] = s.fields;
   const everyN = (f: string) => /^\*\/(\d+)$/.exec(f)?.[1];
   const num = (f: string) => (/^\d+$/.test(f) ? Number(f) : null);
-  if (mi === '*' && h === '*' && dom === '*' && mo === '*' && dow === '*') return 'Every minute';
-  if (everyN(mi) && h === '*' && dom === '*' && mo === '*' && dow === '*') return `Every ${everyN(mi)} minutes`;
-  if (num(mi) !== null && h === '*' && dom === '*' && mo === '*' && dow === '*') return `Every hour at minute ${num(mi)}`;
-  if (num(mi) !== null && everyN(h) && dom === '*' && mo === '*' && dow === '*') return `Every ${everyN(h)} hours at minute ${num(mi)}`;
+  if (mi === '*' && h === '*' && dom === '*' && mo === '*' && dow === '*') return t('Every minute');
+  if (everyN(mi) && h === '*' && dom === '*' && mo === '*' && dow === '*') return t('Every {n} minutes', { n: everyN(mi) });
+  if (num(mi) !== null && h === '*' && dom === '*' && mo === '*' && dow === '*') return t('Every hour at minute {m}', { m: num(mi) });
+  if (num(mi) !== null && everyN(h) && dom === '*' && mo === '*' && dow === '*') return t('Every {n} hours at minute {m}', { n: everyN(h), m: num(mi) });
   if (num(mi) !== null && num(h) !== null && mo === '*') {
     const at = `${pad(num(h)!)}:${pad(num(mi)!)} UTC`;
-    if (dom === '*' && dow === '*') return `Every day at ${at}`;
-    if (dom === '*' && dow === '1-5') return `Weekdays at ${at}`;
-    if (dom === '*' && num(dow) !== null) return `Every ${dayFull[num(dow)! % 7]} at ${at}`;
-    if (num(dom) !== null && dow === '*') return `On day ${num(dom)} of every month at ${at}`;
+    if (dom === '*' && dow === '*') return t('Every day at {time}', { time: at });
+    if (dom === '*' && dow === '1-5') return t('Weekdays at {time}', { time: at });
+    if (dom === '*' && num(dow) !== null) return everyWeekday(num(dow)! % 7, at);
+    if (num(dom) !== null && dow === '*') return t('On day {d} of every month at {time}', { d: num(dom), time: at });
   }
   return '';
 }
 
-export const cronPresets = [
-  { label: 'Every 5 min', expr: '*/5 * * * *' },
-  { label: 'Every 15 min', expr: '*/15 * * * *' },
-  { label: 'Hourly', expr: '@hourly' },
-  { label: 'Daily 03:00', expr: '0 3 * * *' },
-  { label: 'Weekdays 09:00', expr: '0 9 * * 1-5' },
-  { label: 'Weekly (Sun)', expr: '@weekly' },
-  { label: 'Monthly', expr: '@monthly' },
+/** Preset schedules; a function so the labels follow the current language. */
+export const cronPresets = () => [
+  { label: t('Every 5 min'), expr: '*/5 * * * *' },
+  { label: t('Every 15 min'), expr: '*/15 * * * *' },
+  { label: t('Hourly'), expr: '@hourly' },
+  { label: t('Daily 03:00'), expr: '0 3 * * *' },
+  { label: t('Weekdays 09:00'), expr: '0 9 * * 1-5' },
+  { label: t('Weekly (Sun)'), expr: '@weekly' },
+  { label: t('Monthly'), expr: '@monthly' },
 ];

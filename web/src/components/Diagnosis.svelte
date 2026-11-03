@@ -4,6 +4,7 @@
   import { relTime, absTime } from '../lib/format';
   import ErrorMsg from './ErrorMsg.svelte';
   import Icon from './Icon.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   // AI explanation of a failed deployment. Hidden unless an administrator set
   // up a provider (or an earlier answer is cached).
@@ -41,31 +42,31 @@
   <div class="card">
     <div class="card-head">
       <div>
-        <h3>AI diagnosis</h3>
-        <p class="hint">Suggestions from a language model, based on the redacted logs. Nothing is changed automatically.</p>
+        <h3>{t('AI diagnosis')}</h3>
+        <p class="hint">{t('Suggestions from a language model, based on the redacted logs. Nothing is changed automatically.')}</p>
       </div>
       {#if enabled && canEdit}
         <button class="sm {result ? '' : 'primary'}" onclick={() => explain(!!result)} disabled={busy}>
           {#if busy}<span class="spinner"></span>{:else}<Icon name={result ? 'refresh' : 'zap'} size={12} />{/if}
-          {result ? 'Ask again' : 'Explain this failure'}
+          {result ? t('Ask again') : t('Explain this failure')}
         </button>
       {/if}
     </div>
     {#if error || result || busy}
       <div class="card-body stack">
         <ErrorMsg {error} />
-        {#if busy && !result}<p class="muted small">Asking the model, this can take up to a minute…</p>{/if}
+        {#if busy && !result}<p class="muted small">{t('Asking the model, this can take up to a minute…')}</p>{/if}
         {#if result}
           <p>{result.summary}</p>
           {#if result.likely_cause}
             <div>
-              <div class="label">Likely cause</div>
+              <div class="label">{t('Likely cause')}</div>
               <p>{result.likely_cause}</p>
             </div>
           {/if}
           {#if result.suggested_fixes.length}
             <div>
-              <div class="label">Suggested fixes</div>
+              <div class="label">{t('Suggested fixes')}</div>
               <ol>
                 {#each result.suggested_fixes as fix, i (i)}<li>{fix}</li>{/each}
               </ol>

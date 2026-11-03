@@ -1,11 +1,12 @@
 <script lang="ts">
   // Monospace log viewer that sticks to the bottom unless the user scrolls up.
   import { tick } from 'svelte';
+  import { t } from '../lib/i18n.svelte';
 
   let {
     lines,
     height = '460px',
-    empty = 'No output yet.',
+    empty,
     filter = '',
   }: { lines: string[]; height?: string; empty?: string; filter?: string } = $props();
 
@@ -47,9 +48,9 @@
 
 <div class="wrap">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (focusable so the log can be scrolled with the keyboard) -->
-  <pre class="log" bind:this={el} {onscroll} style:height tabindex="0" aria-label="Log output">{#if shown.length === 0}<span class="faint">{filter && lines.length ? 'No lines match the filter.' : empty}</span>{:else}{#each shown as l, i (i)}<span class="ln {classify(l)}">{l}</span>{/each}{/if}</pre>
+  <pre class="log" bind:this={el} {onscroll} style:height tabindex="0" aria-label={t('Log output')}>{#if shown.length === 0}<span class="faint">{filter && lines.length ? t('No lines match the filter.') : (empty ?? t('No output yet.'))}</span>{:else}{#each shown as l, i (i)}<span class="ln {classify(l)}">{l}</span>{/each}{/if}</pre>
   {#if !stick}
-    <button class="sm jump" onclick={scrollToBottom}>↓ Jump to latest</button>
+    <button class="sm jump" onclick={scrollToBottom}>↓ {t('Jump to latest')}</button>
   {/if}
 </div>
 
