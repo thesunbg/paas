@@ -1,3 +1,4 @@
+import { t } from './i18n.svelte';
 // Parsing helpers for .env text.
 
 export interface EnvRow {
@@ -61,11 +62,11 @@ export function validateRows(rows: EnvRow[]): string {
   for (const r of rows) {
     const k = r.key.trim();
     if (!k) {
-      if (r.value) return 'A variable has a value but no name';
+      if (r.value) return t('A variable has a value but no name');
       continue;
     }
-    if (!validEnvKey(k)) return `Invalid variable name "${k}" (letters, digits and _; must not start with a digit)`;
-    if (seen.has(k)) return `Duplicate variable "${k}"`;
+    if (!validEnvKey(k)) return t('Invalid variable name "{name}" (letters, digits and _; must not start with a digit)', { name: k });
+    if (seen.has(k)) return t('Duplicate variable "{name}"', { name: k });
     seen.add(k);
   }
   return '';

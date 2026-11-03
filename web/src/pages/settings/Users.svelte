@@ -127,7 +127,7 @@
     {:else}
       <div class="table-wrap" style="border-top:1px solid var(--border)">
         <table>
-          <thead><tr><th>{t('User')}</th><th>{t('Sign-in')}</th><th>{t('Teams')}</th><th>{t('Created')}</th><th class="right"></th></tr></thead>
+          <thead><tr><th>{t('User')}</th><th>{t('Sign-in')}</th><th>{t('Teams')}</th><th>{t('Created at')}</th><th class="right"></th></tr></thead>
           <tbody>
             {#each filtered as u (u.id)}
               <tr>

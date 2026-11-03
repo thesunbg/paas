@@ -37,7 +37,7 @@ Thiết kế và lộ trình: [docs/PLAN.md](docs/PLAN.md). REST API: [docs/API.
 | Bảo mật | Session + API token, xác thực hai lớp TOTP, đăng nhập một lần qua OpenID Connect (Google Workspace, Entra ID, Keycloak, Authentik…: PKCE, liên kết tài khoản an toàn, tự tạo tài khoản khi đăng nhập lần đầu, map group → vai trò trong team, bắt buộc SSO theo domain email nhưng owner vẫn giữ đăng nhập mật khẩu dự phòng), phân quyền theo team (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, giới hạn request theo IP ở edge, quét lỗ hổng image với chính sách theo project (off / warn / block theo ngưỡng mức độ) |
 | Thông báo | Kênh webhook, Slack, Discord và Telegram cho: deploy, crash, node mất kết nối, backup và job thất bại, cảnh báo bật và tắt, uptime check down và phục hồi, chứng chỉ TLS sắp hết hạn |
 | AI / MCP | Endpoint MCP (`/mcp`) để AI agent như Claude Code xem, deploy, rollback, restart và scale app bằng API token, theo đúng quyền của token đó; nút "Explain this failure" (giải thích lỗi) trên deployment thất bại (dùng Anthropic hoặc bất kỳ model tương thích OpenAI / tự host, secret được che, tắt mặc định) |
-| Giao diện | Dashboard web (app Svelte nhúng sẵn), CLI `paas`, REST API, MCP server cho AI agent ([docs/MCP.md](docs/MCP.md)) |
+| Giao diện | Dashboard web (app Svelte nhúng sẵn, tiếng Anh và tiếng Việt: nút chuyển EN/VI, mặc định theo ngôn ngữ trình duyệt), CLI `paas`, REST API, MCP server cho AI agent ([docs/MCP.md](docs/MCP.md)) |
 
 ## Hiệu năng và dung lượng
 

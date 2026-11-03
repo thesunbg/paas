@@ -99,7 +99,7 @@
         <p class="hint">{t("An S3-compatible bucket (AWS, Cloudflare R2, Backblaze B2, MinIO…) outside this cluster. Database dumps, volume backups, static sites and the platform's own state are copied there, so they survive the loss of a node.")}</p>
       </div>
       {#if storage}
-        <span class="badge {storage.enabled ? 'green' : 'yellow'}">{storage.enabled ? t('on') : t('off')}</span>
+        <span class="badge {storage.enabled ? 'green' : 'yellow'}">{storage.enabled ? t('enabled') : t('disabled')}</span>
       {/if}
     </div>
     <div class="card-body stack">

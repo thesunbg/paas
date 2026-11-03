@@ -37,7 +37,7 @@ See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap, and [docs/API.md](d
 | Security | Sessions + API tokens, TOTP two-factor auth, single sign-on with OpenID Connect (Google Workspace, Entra ID, Keycloak, Authentik…: PKCE, safe account linking, just-in-time accounts, group → team role mapping, enforced SSO per email domain with an owner break-glass login), team RBAC (owner/admin/developer/viewer), audit log, seccomp, no-new-privileges, per-IP rate limiting at the edge, image vulnerability scanning with a per-project policy (off / warn / block at a severity threshold) |
 | Notify | Webhook, Slack, Discord and Telegram channels for deploys, crashes, node outages, failed backups and jobs, alerts firing and resolved, uptime checks down and recovered, expiring TLS certificates |
 | AI / MCP | MCP endpoint (`/mcp`) so AI agents such as Claude Code can inspect, deploy, roll back, restart and scale apps with an API token and its RBAC; optional "Explain this failure" on failed deployments (Anthropic or any OpenAI-compatible / self-hosted model, secrets redacted, off by default) |
-| Interfaces | Web dashboard (embedded Svelte app), `paas` CLI, REST API, MCP server for AI agents ([docs/MCP.md](docs/MCP.md)) |
+| Interfaces | Web dashboard (embedded Svelte app, English and Vietnamese: EN/VI switch, follows the browser language), `paas` CLI, REST API, MCP server for AI agents ([docs/MCP.md](docs/MCP.md)) |
 
 ## Performance and capacity
 

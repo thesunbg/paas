@@ -36,5 +36,8 @@
   "preview": "bản preview",
   "previews": "bản preview",
   "database": "database",
-  "databases": "database"
+  "databases": "database",
+  "A variable has a value but no name": "Có biến có giá trị nhưng chưa có tên",
+  "Invalid variable name \"{name}\" (letters, digits and _; must not start with a digit)": "Tên biến \"{name}\" không hợp lệ (chỉ gồm chữ, số và _; không bắt đầu bằng số)",
+  "Duplicate variable \"{name}\"": "Biến \"{name}\" bị trùng"
 }

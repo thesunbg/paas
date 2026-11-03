@@ -67,7 +67,7 @@
           {t("The tail of the build log, the app's output and the error are sent to the model with secrets redacted; it only suggests fixes. Off until a provider is set.")}
         </p>
       </div>
-      {#if settings}<span class="badge {settings.enabled ? 'green' : 'yellow'}">{settings.enabled ? t('on') : t('off')}</span>{/if}
+      {#if settings}<span class="badge {settings.enabled ? 'green' : 'yellow'}">{settings.enabled ? t('enabled') : t('disabled')}</span>{/if}
     </div>
     <div class="card-body stack">
       {#if !settings}

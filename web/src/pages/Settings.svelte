@@ -222,7 +222,7 @@
           {:else if tokens}
             <div class="table-wrap" style="border-top:1px solid var(--border)">
               <table>
-                <thead><tr><th>{t('Name')}</th><th>{t('Created')}</th><th>{t('Last used')}</th><th class="right"></th></tr></thead>
+                <thead><tr><th>{t('Name')}</th><th>{t('Created at')}</th><th>{t('Last used')}</th><th class="right"></th></tr></thead>
                 <tbody>
                   {#each tokens as tok (tok.id)}
                     <tr>
