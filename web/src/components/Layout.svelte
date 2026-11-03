@@ -5,6 +5,8 @@
   import { href, navigate } from '../lib/router.svelte';
   import { toast } from '../lib/toast.svelte';
   import Icon from './Icon.svelte';
+  import LangSwitch from './LangSwitch.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   let { section, onlogout, children }: { section: string; onlogout: () => void; children: Snippet } = $props();
 
@@ -19,14 +21,14 @@
 
   const nav = $derived(
     [
-      { id: 'projects', label: 'Projects', icon: 'folder', path: '/' },
+      { id: 'projects', label: t('Projects'), icon: 'folder', path: '/' },
       ...(isAdmin
         ? [
-            { id: 'nodes', label: 'Nodes', icon: 'server', path: '/nodes' },
-            { id: 'batches', label: 'Batches', icon: 'layers', path: '/batches' },
+            { id: 'nodes', label: t('Nodes'), icon: 'server', path: '/nodes' },
+            { id: 'batches', label: t('Batches'), icon: 'layers', path: '/batches' },
           ]
         : []),
-      { id: 'settings', label: 'Settings', icon: 'settings', path: '/settings' },
+      { id: 'settings', label: t('Settings'), icon: 'settings', path: '/settings' },
     ],
   );
 
@@ -38,7 +40,7 @@
       /* ignore */
     }
     session.me = null;
-    toast.info('Signed out');
+    toast.info(t('Signed out'));
     location.hash = '#/';
     onlogout();
   }
@@ -50,8 +52,8 @@
   }
 
   function closeMenus(e: MouseEvent) {
-    const t = e.target as HTMLElement;
-    if (!t.closest('.menu-root')) {
+    const el = e.target as HTMLElement;
+    if (!el.closest('.menu-root')) {
       userOpen = false;
       teamOpen = false;
     }
@@ -81,7 +83,7 @@
       <span class="logo" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 13 8 2.5 14 13z" fill="currentColor" /></svg></span>
       <span>PaaS</span>
     </a>
-    <nav aria-label="Main">
+    <nav aria-label={t('Main')}>
       {#each nav as n (n.id)}
         <a class="nav" class:active={active === n.id} href={href(n.path)} aria-current={active === n.id ? 'page' : undefined}>
           <Icon name={n.icon} />{n.label}
@@ -99,35 +101,37 @@
 
   <div class="main">
     <header class="topbar">
-      <button class="ghost icon burger" aria-label="Open navigation" aria-expanded={navOpen} onclick={() => (navOpen = !navOpen)}><Icon name="menu" /></button>
+      <button class="ghost icon burger" aria-label={t('Open navigation')} aria-expanded={navOpen} onclick={() => (navOpen = !navOpen)}><Icon name="menu" /></button>
 
       <div class="menu-root">
         <button class="ghost team-btn" aria-haspopup="menu" aria-expanded={teamOpen} onclick={() => ((teamOpen = !teamOpen), (userOpen = false))}>
           <span class="team-av" aria-hidden="true">{(team?.name ?? '?').slice(0, 1).toUpperCase()}</span>
-          <span class="truncate team-name">{team?.name ?? 'No team'}</span>
-          {#if team?.role}<span class="badge outline hide-sm">{team.role}</span>{/if}
+          <span class="truncate team-name">{team?.name ?? t('No team')}</span>
+          {#if team?.role}<span class="badge outline hide-sm">{t(team.role)}</span>{/if}
           <Icon name="chevdown" size={14} />
         </button>
         {#if teamOpen}
-          <div class="menu" role="menu" aria-label="Switch team">
-            <div class="menu-label">Teams</div>
-            {#each me.teams as t (t.id)}
-              <button role="menuitemradio" aria-checked={t.id === team?.id} class="item" onclick={() => pickTeam(t.id)}>
-                <span class="team-av sm" aria-hidden="true">{t.name.slice(0, 1).toUpperCase()}</span>
-                <span class="truncate" style="flex:1">{t.name}</span>
-                {#if t.id === team?.id}<Icon name="check" size={14} />{/if}
+          <div class="menu" role="menu" aria-label={t('Switch team')}>
+            <div class="menu-label">{t('Teams')}</div>
+            {#each me.teams as tm (tm.id)}
+              <button role="menuitemradio" aria-checked={tm.id === team?.id} class="item" onclick={() => pickTeam(tm.id)}>
+                <span class="team-av sm" aria-hidden="true">{tm.name.slice(0, 1).toUpperCase()}</span>
+                <span class="truncate" style="flex:1">{tm.name}</span>
+                {#if tm.id === team?.id}<Icon name="check" size={14} />{/if}
               </button>
             {/each}
             <div class="sep"></div>
-            <a class="item" role="menuitem" href={href('/settings/members')} onclick={() => (teamOpen = false)}><Icon name="user" size={14} />Manage members</a>
+            <a class="item" role="menuitem" href={href('/settings/members')} onclick={() => (teamOpen = false)}><Icon name="user" size={14} />{t('Manage members')}</a>
           </div>
         {/if}
       </div>
 
       <div class="spacer"></div>
 
+      <LangSwitch />
+
       <div class="menu-root">
-        <button class="ghost user-btn" aria-haspopup="menu" aria-expanded={userOpen} aria-label="User menu" onclick={() => ((userOpen = !userOpen), (teamOpen = false))}>
+        <button class="ghost user-btn" aria-haspopup="menu" aria-expanded={userOpen} aria-label={t('User menu')} onclick={() => ((userOpen = !userOpen), (teamOpen = false))}>
           <span class="avatar" aria-hidden="true">{initials}</span>
           <span class="hide-sm truncate" style="max-width:180px">{me.user.email}</span>
           <Icon name="chevdown" size={14} />
@@ -137,13 +141,13 @@
             <div class="menu-head">
               <div style="font-weight:500">{me.user.name}</div>
               <div class="faint small truncate">{me.user.email}</div>
-              {#if me.user.is_admin}<span class="badge blue" style="margin-top:6px">administrator</span>{/if}
+              {#if me.user.is_admin}<span class="badge blue" style="margin-top:6px">{t('administrator')}</span>{/if}
             </div>
             <div class="sep"></div>
-            <a class="item" role="menuitem" href={href('/settings/tokens')} onclick={() => (userOpen = false)}><Icon name="key" size={14} />API tokens</a>
-            <a class="item" role="menuitem" href={href('/settings/password')} onclick={() => (userOpen = false)}><Icon name="settings" size={14} />Change password</a>
+            <a class="item" role="menuitem" href={href('/settings/tokens')} onclick={() => (userOpen = false)}><Icon name="key" size={14} />{t('API tokens')}</a>
+            <a class="item" role="menuitem" href={href('/settings/password')} onclick={() => (userOpen = false)}><Icon name="settings" size={14} />{t('Change password')}</a>
             <div class="sep"></div>
-            <button class="item" role="menuitem" onclick={logout}><Icon name="logout" size={14} />Log out</button>
+            <button class="item" role="menuitem" onclick={logout}><Icon name="logout" size={14} />{t('Log out')}</button>
           </div>
         {/if}
       </div>

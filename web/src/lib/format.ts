@@ -1,15 +1,23 @@
 // Formatting helpers for times, sizes and durations.
+import { i18n, intlLocale, t } from './i18n.svelte';
 
-const rtf = typeof Intl !== 'undefined' && 'RelativeTimeFormat' in Intl ? new Intl.RelativeTimeFormat('en', { numeric: 'auto' }) : null;
+const rtfs: Record<string, Intl.RelativeTimeFormat | null> = {};
+function rtf(): Intl.RelativeTimeFormat | null {
+  const l = i18n.locale;
+  if (!(l in rtfs)) {
+    rtfs[l] = typeof Intl !== 'undefined' && 'RelativeTimeFormat' in Intl ? new Intl.RelativeTimeFormat(intlLocale(), { numeric: 'auto' }) : null;
+  }
+  return rtfs[l];
+}
 
 /** "3 min ago", "in 2 h", "just now". */
 export function relTime(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return '—';
-  const t = Date.parse(iso);
-  if (Number.isNaN(t) || t <= 0) return '—';
-  const s = Math.round((t - now) / 1000);
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts) || ts <= 0) return '—';
+  const s = Math.round((ts - now) / 1000);
   const a = Math.abs(s);
-  if (a < 10) return 'just now';
+  if (a < 10) return t('just now');
   const units: [number, Intl.RelativeTimeFormatUnit, string][] = [
     [60, 'second', 's'],
     [3600, 'minute', 'min'],
@@ -22,18 +30,19 @@ export function relTime(iso: string | null | undefined, now = Date.now()): strin
   for (let i = 0; i < units.length; i++) {
     if (a < units[i][0]) {
       const v = Math.round(s / div[i]);
-      if (i === 0) return s < 0 ? `${a}s ago` : `in ${a}s`;
+      if (i === 0) return s < 0 ? t('{n}s ago', { n: a }) : t('in {n}s', { n: a });
       const short = units[i][2];
-      return s < 0 ? `${Math.abs(v)} ${short} ago` : rtf ? rtf.format(v, units[i][1]) : `in ${v} ${short}`;
+      const f = rtf();
+      return s < 0 ? t('{n} {unit} ago', { n: Math.abs(v), unit: t(short) }) : f ? f.format(v, units[i][1]) : t('in {n} {unit}', { n: v, unit: t(short) });
     }
   }
-  return new Date(t).toLocaleString();
+  return new Date(ts).toLocaleString(intlLocale());
 }
 
 export function absTime(iso: string | null | undefined): string {
   if (!iso) return '';
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(intlLocale());
 }
 
 /** Milliseconds → "1m 12s", "850ms", "2h 3m". */
@@ -105,8 +114,9 @@ export function shortId(id: string | null | undefined, n = 8): string {
   return id ? id.slice(0, n) : '';
 }
 
+/** "1 service", "3 services"; the chosen English word is translated ("3 dịch vụ"). */
 export function plural(n: number, word: string, pluralWord = word + 's'): string {
-  return `${n} ${n === 1 ? word : pluralWord}`;
+  return `${n} ${t(n === 1 ? word : pluralWord)}`;
 }
 
 /** A rate in bytes per second, e.g. "1.2 MB/s". */
