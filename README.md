@@ -1,5 +1,7 @@
 # paas
 
+**English** · [Tiếng Việt](README.vi.md)
+
 A fast, lightweight, self-hosted PaaS, similar to Coolify, Heroku and Vercel. Push to GitHub and your app is live on its own domain with HTTPS in seconds. It handles frontends (static sites, React, Vue, Next.js…), backends (Node.js, Go, Python, PHP, Ruby, Rust, Java, Deno) and managed databases (PostgreSQL, MySQL/MariaDB, Redis, MongoDB). Servers can be added to the cluster with one command.
 
 - **One binary** (`paasd`, about 37 MB) contains the control plane, node agent, edge proxy and an embedded NATS bus. Running everything on one node uses about 40 MB of RAM.
