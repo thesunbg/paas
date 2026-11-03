@@ -1351,6 +1351,57 @@ export interface SystemSettings {
   quota: TeamQuota;
 }
 
+export interface ReleaseInfo {
+  tag: string;
+  name: string;
+  notes: string;
+  url: string;
+  published_at: string;
+}
+
+export type RolloutStatus = 'running' | 'paused' | 'failed' | 'aborted' | 'done';
+export type RolloutStepStatus = 'pending' | 'starting' | 'updating' | 'rolling_back' | 'done' | 'skipped' | 'failed' | 'rolled_back';
+
+export interface RolloutStep {
+  kind: 'backup' | 'control_plane' | 'node';
+  id?: string;
+  name: string;
+  roles?: string[];
+  leader?: boolean;
+  from_version?: string;
+  status: RolloutStepStatus;
+  message?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface Rollout {
+  id: string;
+  version: string;
+  status: RolloutStatus;
+  message: string;
+  steps: RolloutStep[];
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+  finished_at?: string | null;
+}
+
+/** GET /admin/update: versions of every machine, the latest release and the rolling update. */
+export interface UpdateStatus {
+  version: string;
+  development: boolean;
+  check_enabled: boolean;
+  allow_unverified: boolean;
+  latest: ReleaseInfo | null;
+  checked_at: string | null;
+  check_error?: string;
+  update_available: boolean;
+  control_planes: { name: string; version: string; arch: string; node_id: string | null; leader: boolean; online: boolean; last_seen_at: string }[];
+  nodes: { id: string; name: string; version: string; arch: string; roles: string[]; status: string; online: boolean; pinned: boolean; control_plane?: string }[];
+  rollout: Rollout | null;
+}
+
 /** A team's budget; 0 = unlimited. Memory and CPU count what instances reserve (requests). */
 export interface TeamQuota {
   max_projects: number;
@@ -1442,6 +1493,11 @@ export const api = {
   deleteOIDCProvider: (id: string) => del(`/admin/oidc/${e(id)}`),
   systemSettings: () => get<SystemSettings>('/admin/settings'),
   putSystemSettings: (s: Partial<SystemSettings>) => put<SystemSettings>('/admin/settings', s),
+  updateStatus: () => get<UpdateStatus>('/admin/update'),
+  checkUpdate: () => post<UpdateStatus>('/admin/update/check'),
+  startUpdate: (version: string) => post<Rollout>('/admin/update', { version, confirm: true }),
+  updateAction: (action: 'pause' | 'resume' | 'abort') => post<Rollout>(`/admin/update/${action}`),
+  rollbackNodeBinary: (id: string) => post<{ status: string }>(`/nodes/${e(id)}/rollback-binary`),
   // GitHub App
   githubApp: () => get<GitHubAppStatus>('/github/app'),
   githubManifest: (organization?: string) => post<{ action_url: string; manifest: string }>('/github/app/manifest', organization ? { organization } : {}),

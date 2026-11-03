@@ -30,9 +30,13 @@ import (
 	"github.com/thesunbg/paas/internal/proxy"
 	rt "github.com/thesunbg/paas/internal/runtime"
 	"github.com/thesunbg/paas/internal/scan"
+	"github.com/thesunbg/paas/internal/update"
 )
 
-const Version = "0.1.0"
+// Version of this paasd build, set at link time from `git describe --tags`
+// (Makefile: -X github.com/thesunbg/paas/internal/agent.Version=...). Releases are
+// tagged vX.Y.Z; anything else is a development build (internal/update.IsDev).
+var Version = "dev"
 
 type Agent struct {
 	cfg     config.Agent
@@ -183,6 +187,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		{proto.CmdRefreshImage, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
 			return bus.Handle(nc, s, a.handleRefreshImage)
 		}},
+		{proto.CmdUpdateBinary, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
+			return bus.Handle(nc, s, a.handleUpdateBinary)
+		}},
+		{proto.CmdRollbackBinary, func(nc *nats.Conn, s string) (*nats.Subscription, error) {
+			return bus.Handle(nc, s, a.handleRollbackBinary)
+		}},
 	}
 	for _, s := range subs {
 		if (s.cmd == proto.CmdBuild || s.cmd == proto.CmdDetect || s.cmd == proto.CmdPush || s.cmd == proto.CmdScan) && a.builder == nil {
@@ -205,6 +215,9 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	if a.standalone {
 		go a.selfUpdateLoop(ctx)
+		// Registered and serving commands: tell the local rollback guard of an update
+		// that this binary came up (internal/update.Self).
+		update.Confirm(a.cfg.DataDir, Version)
 	}
 	go a.fenceLoop(ctx)
 	slog.Info("agent ready", "node", a.cfg.NodeName, "id", a.nodeID, "roles", a.cfg.Roles, "address", a.cfg.NodeAddress)
@@ -230,9 +243,11 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) register(ctx context.Context) error {
+	caps := a.rt.Capabilities()
+	caps["arch"] = runtime.GOARCH // which release binary the node needs (updates)
 	req := proto.RegisterRequest{
 		Name: a.cfg.NodeName, Address: a.cfg.NodeAddress, Roles: a.cfg.Roles,
-		CPUCores: runtime.NumCPU(), MemoryMB: memTotalMB(), Capabilities: a.rt.Capabilities(), Version: Version,
+		CPUCores: runtime.NumCPU(), MemoryMB: memTotalMB(), Capabilities: caps, Version: Version,
 	}
 	if a.mesh != nil {
 		req.WGPublicKey, req.WGPort = a.mesh.PublicKey(), a.mesh.Port()

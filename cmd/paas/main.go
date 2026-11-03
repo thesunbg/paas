@@ -225,6 +225,10 @@ Usage:
   paas quota [show]                    The team's usage against its quota
   paas doctor [--refresh] [-v]         First-run setup checklist: DNS, HTTPS, ports, Git, backups,
                                        notifications (admin; exits 1 when a step fails)
+  paas update [--check]                Versions of every control plane and node, the latest release (admin)
+  paas update --yes [--version vX]     Rolling update: state backup, control planes (leader last), then
+                                       nodes one at a time; a machine that does not come back is rolled back
+  paas update status | pause | resume | abort
 
 Global flags via env: PAAS_SERVER, PAAS_TOKEN, PAAS_PROJECT.
 `)
@@ -318,6 +322,8 @@ func main() {
 		err = cmdQuota(rest)
 	case "doctor":
 		err = cmdDoctor(rest)
+	case "update":
+		err = cmdUpdate(rest)
 	default:
 		usage()
 		os.Exit(2)
@@ -710,7 +716,7 @@ func splitFlags(args []string) (pos, flags []string) {
 
 func boolFlag(f string) bool {
 	switch strings.TrimLeft(f, "-") {
-	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh", "yes", "status", "abort", "allow-empty", "move-volumes", "all":
+	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh", "yes", "status", "abort", "allow-empty", "move-volumes", "all", "check":
 		return true
 	}
 	return false

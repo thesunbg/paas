@@ -323,6 +323,20 @@ Checks run concurrently, at most 8 s each, and results are cached for 30 s.
 With sign-up on, anyone can register at `/#/signup` and gets a personal team. Limits apply to every
 non-administrator; requests over a limit return 403, too many sign-ups from one IP return 429.
 
+## Updating paas (administrators)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/admin/update` | `{version (this control plane), development, check_enabled, allow_unverified, latest: {tag, name, notes, url, published_at, assets} \| null, checked_at, check_error, update_available, control_planes: [{name, version, arch, node_id, leader, online, started_at, last_seen_at}], nodes: [{id, name, version, arch, roles, status, online, pinned, control_plane}], rollout: Rollout \| null}` (`rollout` is the latest one, finished or not) |
+| POST | `/api/v1/admin/update/check` | looks for the latest release now (`PAAS_UPDATE_URL`) and answers as GET |
+| POST | `/api/v1/admin/update` | `{version?, confirm: true}` starts a rolling update to `version` (default: the latest release). 400 without `confirm`, for a downgrade, when the release lacks a `paasd-linux-<arch>` the cluster needs, or when it publishes no `SHA256SUMS` (unless `PAAS_UPDATE_ALLOW_UNVERIFIED=true`); 409 while another update is running or paused; 502 when the release cannot be fetched. 201 Rollout |
+| POST | `/api/v1/admin/update/pause`, `/resume`, `/abort` | pause: the step in progress finishes, no further machine is started; resume a paused update; abort a running or paused one for good. 409 when the update is not in a state that allows it. 200 Rollout |
+| POST | `/api/v1/nodes/{id}/rollback-binary` | puts the node's previous paasd binary (`paasd.prev`) back and restarts it; a control plane's own node rolls back that control plane. A node keeps that binary (`pinned`, it no longer follows the control plane's binary on its own) until an update reaches it. 202; 409 when there is no previous binary; 502 when the node does not answer |
+| GET | `/download/release/{version}/paasd-linux-{amd64,arm64}` | no login: the binary of the version being rolled out, for nodes. The control plane fetches it from the release once, verifies it against the release's checksum and serves it from its data directory (the node verifies it again). 404 for any other version |
+
+Rollout: `{id, version, status: running|paused|failed|aborted|done, message, steps: [{kind: backup|control_plane|node, id, name, roles, leader, from_version, status: pending|starting|updating|rolling_back|done|skipped|failed|rolled_back, message, started_at, finished_at}], checksums: {arch: sha256}, requested_by, created_at, updated_at, finished_at}`.
+Order: a backup of the platform state, the control planes that are not the leader, the leader (leadership moves to an updated one, which continues from the database), then every other node one at a time (edge nodes too, so traffic keeps flowing through the others). Offline and cordoned nodes are skipped with a message. A machine that does not report the new version and come back online within 10 minutes is rolled back to `paasd.prev` and the update stops (`failed`, "failed at node X, rolled back to vY"). While an update is running, paused or failed, nodes do not follow the control plane's binary on their own (agent self-update). Rolling back restores binaries only: database migrations are additive, so the previous binary works on the newer schema; downgrades are refused.
+
 ## Team quotas
 
 A quota is a team's budget, set by instance administrators: a default for every team
@@ -403,7 +417,7 @@ receives pushes and pull requests through the app webhook (no per-repository web
 | DELETE | `/teams/{team}/notifications/{id}` | |
 | POST | `/teams/{team}/notifications/{id}/test` | sends a test message |
 
-Events: `deploy.succeeded`, `deploy.failed`, `deploy.vulnerable`, `instance.crashloop`, `instance.evicted`, `node.offline`, `backup.failed`, `job.failed`, `autoscale`, `database.quota`, `database.failover`, `database.eol`, `volume.move`, `alert.firing`, `alert.resolved`, `uptime.down`, `uptime.up`, `uptime.cert`. Webhook payloads of alert and uptime events carry `data` (rule / check, project, service, value or status). Channels created before the alert / uptime events existed are not subscribed to them; an alert rule or uptime check that lists `channel_ids` sends to those channels whatever their events.
+Events: `deploy.succeeded`, `deploy.failed`, `deploy.vulnerable`, `instance.crashloop`, `instance.evicted`, `node.offline`, `backup.failed`, `job.failed`, `autoscale`, `database.quota`, `database.failover`, `database.eol`, `volume.move`, `alert.firing`, `alert.resolved`, `uptime.down`, `uptime.up`, `uptime.cert`, `update.available` (a newer paas release, once per version; administrators' teams), `update.failed` (a rolling update stopped). Webhook payloads of alert and uptime events carry `data` (rule / check, project, service, value or status). Channels created before the alert / uptime events existed are not subscribed to them; an alert rule or uptime check that lists `channel_ids` sends to those channels whatever their events.
 
 ### Alert rules (per project)
 Developers and above create, change and delete; viewers read. The leader evaluates enabled rules every minute against the per-minute service metrics; a rule fires when its condition held for `for_seconds`, notifies `alert.firing` once, then `alert.resolved` when the condition stops holding. A new firing within `cooldown_seconds` of the previous notification is not notified (nor is its resolve). States are kept per rule and service and survive a leader change. Only running services are judged.

@@ -5,6 +5,7 @@
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import Loading from '../../components/Loading.svelte';
   import CopyField from '../../components/CopyField.svelte';
+  import Updates from './Updates.svelte';
 
   let settings = $state<SystemSettings | null>(null);
   let error = $state('');
@@ -55,6 +56,8 @@
     { key: 'max_domains', label: 'Custom domains', hint: '' },
   ];
 </script>
+
+<Updates />
 
 {#if !settings}
   {#if error}<ErrorMsg {error} />{:else}<Loading />{/if}

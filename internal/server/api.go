@@ -36,6 +36,7 @@ func (s *Server) routes() http.Handler {
 
 	mux.HandleFunc("GET /install.sh", installer.Handler)
 	mux.HandleFunc("GET /download/{file}", installer.BinaryHandler)
+	mux.HandleFunc("GET /download/release/{version}/{file}", s.handleReleaseDownload)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /api/v1/setup", s.handleSetupStatus)
 	mux.HandleFunc("POST /api/v1/cluster/enroll", s.handleEnroll)
@@ -234,6 +235,11 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/admin/setup-checklist", s.handleGetSetupChecklist)
 	h("PUT /api/v1/admin/setup-checklist", s.handlePutSetupChecklist)
 	h("POST /api/v1/admin/setup-checklist/{step}/check", s.handleCheckSetupStep)
+	h("GET /api/v1/admin/update", s.handleGetUpdate)
+	h("POST /api/v1/admin/update", s.handleStartUpdate)
+	h("POST /api/v1/admin/update/check", s.handleCheckUpdate)
+	h("POST /api/v1/admin/update/{action}", s.handleUpdateAction)
+	h("POST /api/v1/nodes/{id}/rollback-binary", s.handleRollbackNodeBinary)
 	h("GET /api/v1/admin/ai", s.handleGetAI)
 	h("PUT /api/v1/admin/ai", s.handlePutAI)
 

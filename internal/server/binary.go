@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/thesunbg/paas/internal/proto"
 )
@@ -38,8 +39,14 @@ func ownBinarySHA256() string {
 	return binarySum
 }
 
-// onBinary tells agents which binary to run (agent self-update).
-func (s *Server) onBinary(_ context.Context, _ *struct{}) *proto.BinaryInfo {
+// onBinary tells agents which binary to run (agent self-update). Nothing while a
+// rollout decides that (update.go): an empty answer leaves the node as it is.
+func (s *Server) onBinary(ctx context.Context, _ *struct{}) *proto.BinaryInfo {
+	hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if s.holdNodes(hctx) {
+		return &proto.BinaryInfo{}
+	}
 	return &proto.BinaryInfo{
 		Arch: runtime.GOARCH, SHA256: ownBinarySHA256(),
 		URL: s.cfg.PublicURL + "/download/paasd-linux-" + runtime.GOARCH,

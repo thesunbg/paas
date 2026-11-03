@@ -31,6 +31,7 @@ import (
 	"github.com/thesunbg/paas/internal/s3"
 	"github.com/thesunbg/paas/internal/secrets"
 	"github.com/thesunbg/paas/internal/store"
+	"github.com/thesunbg/paas/internal/update"
 	"github.com/thesunbg/paas/internal/util"
 )
 
@@ -102,6 +103,11 @@ type Server struct {
 
 	setup setupState   // first-run setup checklist: probes and cached results (setup_checklist.go)
 	ssh   sshInstaller // nodes being installed over SSH (ssh_install.go)
+	// Updates of paas itself (update.go).
+	ver          string                                // running version; empty: agent.Version (tests set it)
+	localNodeID  string                                // node row of the embedded agent ("all" mode)
+	startedAt    time.Time                             // when this process started
+	updateBackup func(context.Context) (string, error) // tests: replaces the state backup of a rollout
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.
@@ -129,7 +135,7 @@ func New(ctx context.Context, cfg config.Server) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, store: st, box: box, locks: map[string]*sync.Mutex{}, evictedOn: map[string]time.Time{}, wake: newWakeGroup(), clusterBase: base,
-		traffic: newTraffic(), scale: map[string]*scaleState{}}
+		traffic: newTraffic(), scale: map[string]*scaleState{}, startedAt: time.Now()}
 	s.s3.Store(&s3.Config{Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket, AccessKey: cfg.S3.AccessKey,
 		SecretKey: cfg.S3.SecretKey, Prefix: cfg.S3.Prefix, VirtualHost: cfg.S3.VirtualHost})
 	s.s3Env = s.storage().Enabled()
@@ -163,6 +169,7 @@ func (s *Server) EnsureLocalNode(ctx context.Context, name string, roles []strin
 	if err != nil {
 		return "", err
 	}
+	s.localNodeID = n.ID
 	return n.ID, nil
 }
 
@@ -214,9 +221,13 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.registerBusHandlers(); err != nil {
 		return err
 	}
+	if err := s.registerUpdateHandlers(); err != nil {
+		return err
+	}
 	if err := s.hub.Start(); err != nil {
 		return err
 	}
+	go s.reportControlPlaneLoop(ctx)
 	s.loadStorageSettings(ctx)
 	go s.resumeSSHInstalls(ctx)
 	go s.storageLoop(ctx)
@@ -239,7 +250,11 @@ func (s *Server) Run(ctx context.Context) error {
 	s.http = &http.Server{Addr: s.cfg.HTTPAddr, Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
 	errc := make(chan error, 1)
 	go func() { errc <- s.http.ListenAndServe() }()
-	slog.Info("control plane listening", "http", s.cfg.HTTPAddr, "nats", s.cfg.NATSAddr, "base_domain", s.cfg.BaseDomain)
+	slog.Info("control plane listening", "http", s.cfg.HTTPAddr, "nats", s.cfg.NATSAddr, "base_domain", s.cfg.BaseDomain, "version", s.version())
+	// Migrated, on the bus and still serving a little later: tell the local rollback
+	// guard of an update that this binary came up (internal/update.Self).
+	confirm := time.AfterFunc(10*time.Second, func() { update.Confirm(s.cfg.DataDir, s.version()) })
+	defer confirm.Stop()
 	select {
 	case <-ctx.Done():
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -496,6 +511,7 @@ func (s *Server) leaderLoop(ctx context.Context) {
 		go s.walShipLoop(lctx)
 		go s.alertLoop(lctx)
 		go s.uptimeLoop(lctx)
+		go s.updateLoop(lctx, epoch)
 		for lctx.Err() == nil {
 			time.Sleep(5 * time.Second)
 			pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)

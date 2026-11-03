@@ -37,6 +37,11 @@ type Server struct {
 	ServerName    string   // PAAS_SERVER_NAME (unique per control plane)
 	ClusterAddr   string   // PAAS_NATS_CLUSTER_ADDR, e.g. 0.0.0.0:6222
 	ClusterRoutes []string // PAAS_NATS_ROUTES, comma separated nats://host:6222
+
+	// Updates of paas itself (Settings → System → Updates).
+	UpdateURL             string // PAAS_UPDATE_URL, "latest release" endpoint (GitHub API JSON)
+	UpdateCheck           bool   // PAAS_UPDATE_CHECK=false disables the periodic check for new releases
+	UpdateAllowUnverified bool   // PAAS_UPDATE_ALLOW_UNVERIFIED=true installs binaries without a published checksum (unsafe)
 }
 
 // S3 configures off-site backup storage (any S3-compatible service).
@@ -148,6 +153,10 @@ func LoadServer() Server {
 		ServerName:      env("PAAS_SERVER_NAME", hostname()),
 		ClusterAddr:     env("PAAS_NATS_CLUSTER_ADDR", ""),
 		ClusterRoutes:   splitList(env("PAAS_NATS_ROUTES", "")),
+		UpdateURL:       env("PAAS_UPDATE_URL", "https://api.github.com/repos/thesunbg/paas/releases/latest"),
+		UpdateCheck:     envBool("PAAS_UPDATE_CHECK", true),
+
+		UpdateAllowUnverified: envBool("PAAS_UPDATE_ALLOW_UNVERIFIED", false),
 		S3: S3{
 			Endpoint: env("PAAS_S3_ENDPOINT", ""), Region: env("PAAS_S3_REGION", "auto"), Bucket: env("PAAS_S3_BUCKET", ""),
 			AccessKey: env("PAAS_S3_ACCESS_KEY", ""), SecretKey: env("PAAS_S3_SECRET_KEY", ""),

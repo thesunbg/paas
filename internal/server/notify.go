@@ -19,7 +19,7 @@ import (
 )
 
 // Notification event names.
-var notificationEvents = []string{"deploy.succeeded", "deploy.failed", "deploy.vulnerable", "instance.crashloop", "instance.evicted", "node.offline", "backup.failed", "job.failed", "autoscale", "database.quota", "database.failover", "database.eol", "volume.move", "alert.firing", "alert.resolved", "uptime.down", "uptime.up", "uptime.cert"}
+var notificationEvents = []string{"deploy.succeeded", "deploy.failed", "deploy.vulnerable", "instance.crashloop", "instance.evicted", "node.offline", "backup.failed", "job.failed", "autoscale", "database.quota", "database.failover", "database.eol", "volume.move", "alert.firing", "alert.resolved", "uptime.down", "uptime.up", "uptime.cert", "update.available", "update.failed"}
 
 var notifyClient = &http.Client{Timeout: 10 * time.Second}
 
@@ -199,7 +199,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(in.Events) == 0 {
-		in.Events = []string{"deploy.failed", "deploy.vulnerable", "instance.crashloop", "node.offline", "backup.failed", "job.failed", "database.quota", "database.failover", "database.eol", "volume.move", "alert.firing", "alert.resolved", "uptime.down", "uptime.up", "uptime.cert"}
+		in.Events = []string{"deploy.failed", "deploy.vulnerable", "instance.crashloop", "node.offline", "backup.failed", "job.failed", "database.quota", "database.failover", "database.eol", "volume.move", "alert.firing", "alert.resolved", "uptime.down", "uptime.up", "uptime.cert", "update.available", "update.failed"}
 	}
 	for _, e := range in.Events {
 		if !slices.Contains(notificationEvents, e) {

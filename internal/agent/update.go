@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,8 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/thesunbg/paas/internal/bus"
 	"github.com/thesunbg/paas/internal/proto"
+	"github.com/thesunbg/paas/internal/update"
 )
 
 // Standalone agents (nodes that joined a cluster) follow the control plane's
@@ -56,7 +60,16 @@ func (a *Agent) selfUpdateLoop(ctx context.Context) {
 func (a *Agent) selfUpdate(ctx context.Context) error {
 	var info proto.BinaryInfo
 	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	err := bus.Request(rctx, a.nc, proto.SubjBinary, struct{}{}, &info)
+	// The per-node subject lets the control plane hold this node back (a rollout in
+	// progress or failed, a binary pinned by a rollback); control planes that predate
+	// it only answer the shared subject.
+	var err error = nats.ErrNoResponders
+	if !a.legacy {
+		err = bus.Request(rctx, a.nc, proto.SubjNodeBinary(a.nodeID), struct{}{}, &info)
+	}
+	if errors.Is(err, nats.ErrNoResponders) {
+		err = bus.Request(rctx, a.nc, proto.SubjBinary, struct{}{}, &info)
+	}
 	cancel()
 	if err != nil {
 		return nil // control plane without self-update support, or unreachable
@@ -97,7 +110,8 @@ func (a *Agent) selfUpdate(ctx context.Context) error {
 	if err := os.Chmod(tmp, 0o755); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, exe); err != nil {
+	// Keeps the replaced binary as paasd.prev (POST /api/v1/nodes/{id}/rollback-binary).
+	if err := update.Install(exe, tmp); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
