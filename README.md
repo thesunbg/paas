@@ -39,6 +39,110 @@ See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap, and [docs/API.md](d
 | AI / MCP | MCP endpoint (`/mcp`) so AI agents such as Claude Code can inspect, deploy, roll back, restart and scale apps with an API token and its RBAC; optional "Explain this failure" on failed deployments (Anthropic or any OpenAI-compatible / self-hosted model, secrets redacted, off by default) |
 | Interfaces | Web dashboard (embedded Svelte app), `paas` CLI, REST API, MCP server for AI agents ([docs/MCP.md](docs/MCP.md)) |
 
+## Performance and capacity
+
+How many apps fit on a server. Every table says which kind of number it holds:
+- **Measured**: in the development environment (2 nodes, containerd + runc, BuildKit, PostgreSQL).
+- **Estimated**: computed from paas's defaults (sizes, overcommit, memory reserved for the system) and typical memory use of each kind of app. Real numbers depend on the app and its traffic; the dashboard always shows actual use so you can adjust.
+
+### Speed (measured)
+
+| Operation | Time |
+|---|---|
+| Redeploy of a Go app with a warm build cache, until it serves traffic | about 2.4 s |
+| A static site goes live | about 0.9 s |
+| A sleeping app wakes on its first request | about 1.7 s |
+| Failed requests during a rolling deploy | 0 |
+| Control-plane leader dies, another takes over (HA) | about 1 s |
+
+Why: no Docker daemon (the agent drives containerd, containers start with crun, about twice as fast as runc); multi-level build caches (BuildKit layers and cache mounts); an in-cluster registry; static sites served by the proxy with no container; traffic switches only after the health check passes.
+
+### Memory used by the platform
+
+| Component | RAM |
+|---|---|
+| `paasd` with every role on one node (control plane, agent, edge proxy, NATS) — measured | about 40 MB |
+| containerd | about 20–30 MB |
+| PostgreSQL holding the control-plane state | about 50–150 MB depending on the number of apps |
+| Compared with a platform built on the Docker daemon | about 100 MB saved per node (no `dockerd`) |
+
+Each node keeps **1 GB** for the operating system and the platform by default; the scheduler never places apps there (*Nodes → Settings*, `reserved_mb`).
+
+### App sizes and how the scheduler counts
+
+The **request** is the memory the scheduler reserves for an app; the **limit** is the most it may use.
+
+| Size | Memory request | Memory limit | CPU request | CPU limit |
+|---|---|---|---|---|
+| nano | 48 MB | 128 MB | 0.025 vCPU | 0.25 vCPU |
+| micro | 96 MB | 256 MB | 0.05 vCPU | 0.5 vCPU |
+| small | 160 MB | 512 MB | 0.1 vCPU | 1 vCPU |
+| medium | 384 MB | 1 GB | 0.25 vCPU | 2 vCPU |
+| large | 768 MB | 2 GB | 0.5 vCPU | 4 vCPU |
+| xlarge | 1.5 GB | 4 GB | 1 vCPU | 8 vCPU |
+
+A node's capacity = (RAM − 1 GB reserved) × **1.5** (default overcommit for burstable apps). Most apps stay well under their limit most of the time; when real memory runs short, the agent evicts the least important workload and zram compresses memory.
+
+### Shared databases (estimated)
+
+| How it runs | RAM |
+|---|---|
+| One PostgreSQL server per app | about 100–250 MB per app |
+| A logical database on a shared PostgreSQL server (the templates' default) | about 5–20 MB per app, plus one shared server of about 150–300 MB |
+| Redis | about 10–50 MB |
+
+30 n8n instances: 30 PostgreSQL servers take about 3–7.5 GB; 30 databases on one shared server about 0.3–0.9 GB.
+
+### Example: how many n8n on one server?
+
+The n8n template is **small** (request 160 MB, limit 512 MB) with a **shared** PostgreSQL database. Idle, an n8n typically uses about 150–250 MB (estimated).
+
+| Server RAM | n8n always running (estimated) | Batch with sleep (the default) |
+|---|---|---|
+| 4 GB | about 12–15 | about 50–100 copies, about 10–12 awake at once |
+| 8 GB | about 30–35 | 200 copies (one batch's maximum), about 25–30 awake at once |
+| 16 GB | about 65–75 | several hundred copies (several batches), about 65 awake at once |
+| 32 GB | about 140–150 | several hundred to over a thousand copies, about 140 awake at once |
+
+- **Always running** is bounded by real memory (about 200 MB each), not by the scheduler: 8 GB leaves about 7 GB for apps, about 35 n8n; the scheduler would allow (8 − 1) × 1.5 / 0.16 ≈ 67, but packing past real memory makes them slow.
+- **Sleep**: a copy nobody uses holds no memory (only its logical database, about 10 MB, and its data on disk). The limit becomes disk space and how many people use them at once — a class of 30 where 10 work at the same time holds memory for 10. A copy wakes in about 2 s.
+- When you create a batch, paas computes this for your own server and shows how many copies can be awake together; a batch that would run the server out of memory is refused.
+
+### Other apps (estimated, 8 GB server, always running)
+
+| App | Template size | Typical real memory | Apps on 8 GB |
+|---|---|---|---|
+| Static site (built React/Vue, HTML) | no container | 0 | hundreds to thousands (disk-bound) |
+| Go API | small | 10–30 MB | 100+ (scheduler-bound: about 67 at small, about 220 at nano) |
+| Node.js / Express API | small | 60–120 MB | about 55–65 (the scheduler allows 67 small apps) |
+| Python API (FastAPI, Django) | small | 80–250 MB | about 30–65 |
+| WordPress (shared MariaDB) | small | 80–150 MB | about 45–65 |
+| Next.js / Nuxt SSR | small | 150–300 MB | about 25–45 |
+| Uptime Kuma | micro | 80–120 MB | about 60–85 |
+| Metabase, Keycloak (Java) | medium | 400–700 MB | about 10–15 |
+
+Sleep mode for rarely used apps (previews, side projects, demos) typically fits 2–3 times as many.
+
+### Disk
+
+| What | Typical size |
+|---|---|
+| An app's images (the last 3 kept for rollback, `PAAS_IMAGE_RETENTION`) | about 0.2–1 GB per app |
+| A logical database | 1 GB quota by default (adjustable) |
+| Build cache | garbage-collected automatically |
+
+An 8 GB RAM / 160 GB SSD server usually runs out of memory before disk, unless apps store many files (Nextcloud, Jellyfin…).
+
+### Check on your own server
+
+- *Nodes*: reserved and real memory and the overcommit ratio of each node.
+- Service → *Metrics*: CPU, memory and requests per second; *Settings* suggests a smaller size when an app uses much less than its limit.
+- *Batches → New batch*: the estimate for the template and number of copies you pick, on your server.
+
+```bash
+ps -o rss=,comm= -C paasd | awk '{printf "%s: %.0f MB\n", $2, $1/1024}'
+```
+
 ## Install
 
 **1. Control plane + first node** (Ubuntu/Debian or Fedora/RHEL, as root):

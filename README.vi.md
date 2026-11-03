@@ -39,6 +39,121 @@ Thiết kế và lộ trình: [docs/PLAN.md](docs/PLAN.md). REST API: [docs/API.
 | AI / MCP | Endpoint MCP (`/mcp`) để AI agent như Claude Code xem, deploy, rollback, restart và scale app bằng API token, theo đúng quyền của token đó; nút "Explain this failure" (giải thích lỗi) trên deployment thất bại (dùng Anthropic hoặc bất kỳ model tương thích OpenAI / tự host, secret được che, tắt mặc định) |
 | Giao diện | Dashboard web (app Svelte nhúng sẵn), CLI `paas`, REST API, MCP server cho AI agent ([docs/MCP.md](docs/MCP.md)) |
 
+## Hiệu năng và dung lượng
+
+Mục này giúp bạn ước lượng một server chạy được bao nhiêu app. Số liệu chia làm hai loại, ghi rõ ở từng bảng:
+- **Đo thực tế**: đo trên môi trường dev (cụm 2 node, containerd + runc, BuildKit, PostgreSQL).
+- **Ước tính**: tính từ cấu hình mặc định của paas (kích thước tài nguyên, overcommit, RAM dành cho hệ thống) và mức RAM điển hình của từng loại app. Con số thật phụ thuộc vào app và lượng truy cập; dashboard luôn hiện mức dùng thật để bạn chỉnh lại.
+
+### Tốc độ (đo thực tế)
+
+| Thao tác | Thời gian |
+|---|---|
+| Deploy lại app Go đã có cache build, tới lúc nhận traffic | khoảng 2,4 giây |
+| Site tĩnh lên mạng | khoảng 0,9 giây |
+| App đang ngủ thức dậy khi có request đầu tiên | khoảng 1,7 giây |
+| Lỗi request trong lúc deploy cuốn chiếu | 0 |
+| Leader control plane chết, bản khác lên thay (chạy HA) | khoảng 1 giây |
+
+Vì sao nhanh:
+- **Không có Docker daemon**: agent gọi thẳng containerd, container chạy bằng crun (viết bằng C, khởi động nhanh hơn runc khoảng 2 lần).
+- **Build có cache nhiều tầng**: BuildKit giữ cache layer và cache mount (`node_modules`, Go module, pip…), nên lần build sau chỉ làm lại phần thay đổi.
+- **Registry nội bộ**: image chỉ đi trong cụm, không đẩy lên Docker Hub rồi kéo về.
+- **Site tĩnh không cần container**: proxy phục vụ thẳng file, có gzip và cache bất biến cho asset.
+- **Đổi traffic không downtime**: bản mới chỉ nhận request khi đã qua health check, bản cũ được dừng sau.
+
+### RAM của chính nền tảng
+
+| Thành phần | RAM |
+|---|---|
+| `paasd` chạy đủ vai trò trên 1 node (control plane, agent, edge proxy, NATS) — đo thực tế | khoảng 40 MB |
+| containerd | khoảng 20–30 MB |
+| PostgreSQL lưu trạng thái control plane | khoảng 50–150 MB tuỳ số app |
+| So với nền tảng dùng Docker daemon | tiết kiệm khoảng 100 MB mỗi node (không có `dockerd`) |
+
+Mặc định mỗi node giữ lại **1 GB RAM** cho hệ điều hành và nền tảng; scheduler không xếp app vào phần này. Có thể chỉnh trong *Nodes → Settings* (`reserved_mb`).
+
+### Kích thước app và cách scheduler tính
+
+Mỗi app có một kích thước. **Request** là phần RAM scheduler giữ chỗ cho app; **limit** là mức tối đa app được dùng (vượt thì bị giới hạn, không lấn sang app khác).
+
+| Kích thước | RAM request | RAM limit | CPU request | CPU limit |
+|---|---|---|---|---|
+| nano | 48 MB | 128 MB | 0,025 vCPU | 0,25 vCPU |
+| micro | 96 MB | 256 MB | 0,05 vCPU | 0,5 vCPU |
+| small | 160 MB | 512 MB | 0,1 vCPU | 1 vCPU |
+| medium | 384 MB | 1 GB | 0,25 vCPU | 2 vCPU |
+| large | 768 MB | 2 GB | 0,5 vCPU | 4 vCPU |
+| xlarge | 1,5 GB | 4 GB | 1 vCPU | 8 vCPU |
+
+Sức chứa của một node = (RAM − 1 GB dành cho hệ thống) × **1,5** (overcommit mặc định cho app loại burstable). Overcommit an toàn vì phần lớn app dùng ít hơn limit hầu hết thời gian; khi RAM thật sắp hết, agent đẩy bớt app ít quan trọng nhất và zram nén bộ nhớ để có thêm chỗ.
+
+### Database: dùng chung tiết kiệm bao nhiêu (ước tính)
+
+| Cách chạy | RAM |
+|---|---|
+| Mỗi app một PostgreSQL riêng | khoảng 100–250 MB mỗi app |
+| Database logic trên server PostgreSQL dùng chung (mặc định của template) | khoảng 5–20 MB thêm mỗi app, cộng một server dùng chung khoảng 150–300 MB |
+| Redis | khoảng 10–50 MB |
+
+Ví dụ 30 app n8n: 30 PostgreSQL riêng tốn khoảng 3–7,5 GB; 30 database trên một server dùng chung chỉ khoảng 0,3–0,9 GB.
+
+### Ví dụ: một server chạy được bao nhiêu n8n?
+
+Template n8n: kích thước **small** (request 160 MB, limit 512 MB), database PostgreSQL **dùng chung**. Khi nhàn rỗi, một n8n thường dùng khoảng 150–250 MB RAM thật (ước tính).
+
+| RAM server | n8n chạy liên tục (ước tính) | Batch bật chế độ ngủ (mặc định) |
+|---|---|---|
+| 4 GB | khoảng 12–15 | khoảng 50–100 bản sao, khoảng 10–12 bản hoạt động cùng lúc |
+| 8 GB | khoảng 30–35 | 200 bản sao (tối đa một batch), khoảng 25–30 bản hoạt động cùng lúc |
+| 16 GB | khoảng 65–75 | vài trăm bản sao (nhiều batch), khoảng 65 bản hoạt động cùng lúc |
+| 32 GB | khoảng 140–150 | vài trăm đến hơn nghìn bản sao, khoảng 140 bản hoạt động cùng lúc |
+
+Cách hiểu bảng:
+- **Chạy liên tục**: giới hạn bởi RAM thật (khoảng 200 MB mỗi n8n), không phải bởi scheduler. Ví dụ 8 GB: còn khoảng 7 GB cho app → khoảng 35 n8n; scheduler cho phép tới (8 − 1) × 1,5 / 0,16 ≈ 67, nhưng xếp quá RAM thật sẽ chậm.
+- **Chế độ ngủ**: bản sao không ai dùng không chiếm RAM (chỉ còn database logic khoảng 10 MB và dữ liệu trên đĩa). Số bản sao khi đó bị giới hạn bởi dung lượng đĩa và số người dùng cùng lúc, phù hợp cho lớp học hay demo: 30 học viên nhưng chỉ khoảng 10 người mở cùng lúc thì chỉ 10 bản chiếm RAM. Bản sao thức dậy trong khoảng 2 giây khi có người mở.
+- Khi tạo batch, paas tự tính trên chính server của bạn và hiện số bản có thể hoạt động cùng lúc; batch nào sẽ làm server hết RAM bị từ chối.
+
+### Các loại app khác (ước tính, server 8 GB, chạy liên tục)
+
+| App | Kích thước template | RAM thật thường gặp | Số app trên 8 GB |
+|---|---|---|---|
+| Site tĩnh (React, Vue build sẵn, HTML) | không cần container | 0 | hàng trăm đến hàng nghìn (chỉ giới hạn bởi đĩa) |
+| API Go | small | 10–30 MB | 100+ (giới hạn bởi scheduler: khoảng 67 với small, khoảng 220 với nano) |
+| API Node.js / Express | small | 60–120 MB | khoảng 55–65 (scheduler cho tối đa 67 app small) |
+| API Python (FastAPI, Django) | small | 80–250 MB | khoảng 30–65 |
+| WordPress (MariaDB dùng chung) | small | 80–150 MB | khoảng 45–65 |
+| Next.js / Nuxt SSR | small | 150–300 MB | khoảng 25–45 |
+| Uptime Kuma | micro | 80–120 MB | khoảng 60–85 |
+| Metabase, Keycloak (Java) | medium | 400–700 MB | khoảng 10–15 |
+
+Bật chế độ ngủ cho các app ít dùng (preview, side project, demo) thường tăng số app lên gấp 2–3 lần.
+
+### Ổ đĩa
+
+| Nội dung | Dung lượng thường gặp |
+|---|---|
+| Image của một app (giữ 3 bản gần nhất để rollback, chỉnh bằng `PAAS_IMAGE_RETENTION`) | khoảng 0,2–1 GB mỗi app |
+| Database logic mặc định | hạn mức 1 GB mỗi database (chỉnh được) |
+| Build cache | được dọn tự động |
+
+Một server 8 GB RAM / 160 GB SSD thường hết RAM trước khi hết đĩa, trừ khi app lưu nhiều file (Nextcloud, Jellyfin…).
+
+### Tự kiểm tra trên server của bạn
+
+- *Nodes*: RAM đã giữ chỗ, RAM thật đang dùng và tỉ lệ overcommit của từng node.
+- Trang service → *Metrics*: CPU, RAM, request/giây của từng app; *Settings* gợi ý giảm kích thước khi app dùng ít hơn nhiều so với limit.
+- *Batches → New batch*: ước tính cho đúng số bản sao và template bạn chọn, trên chính server của bạn.
+- Trên server:
+
+```bash
+ps -o rss=,comm= -C paasd | awk '{printf "%s: %.0f MB\n", $2, $1/1024}'
+```
+
+```bash
+free -m
+```
+
 ## Cài đặt
 
 **1. Control plane + node đầu tiên** (Ubuntu/Debian hoặc Fedora/RHEL, chạy bằng root):
