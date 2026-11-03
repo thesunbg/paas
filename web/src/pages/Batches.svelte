@@ -313,7 +313,7 @@
     {:else if batches.length}
       <div class="card table-wrap">
         <table>
-          <thead><tr><th>{t('Name')}</th><th>{t('Template')}</th><th>{t('Mode')}</th><th>{t('Copies')}</th><th>{t('Created')}</th><th></th></tr></thead>
+          <thead><tr><th>{t('Name')}</th><th>{t('Template')}</th><th>{t('Mode')}</th><th>{t('Copies')}</th><th>{t('Created at')}</th><th></th></tr></thead>
           <tbody>
             {#each batches as b (b.id)}
               <tr>

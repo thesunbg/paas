@@ -15,7 +15,6 @@
   "Services in a project reach each other at": "Các dịch vụ trong một dự án gọi nhau qua",
   "Cancel": "Huỷ",
   "Create project": "Tạo dự án",
-
   "Project renamed": "Đã đổi tên dự án",
   "Delete project": "Xoá dự án",
   "This permanently deletes {name}, its {services} and {databases}, including data and backups.": "Thao tác này xoá vĩnh viễn {name} cùng {services} và {databases} của nó, kể cả dữ liệu và bản sao lưu.",
@@ -93,7 +92,6 @@
   "Last backup": "Sao lưu gần nhất",
   "End of life {date}": "Hết hỗ trợ từ {date}",
   "ends {date}": "hết hỗ trợ {date}",
-
   "GitHub account connected": "Đã kết nối tài khoản GitHub",
   "Configure": "Cấu hình",
   "Environment": "Môi trường",
@@ -230,7 +228,6 @@
   "Back": "Quay lại",
   "Continue": "Tiếp tục",
   "Create and deploy": "Tạo và deploy",
-
   "Delete batch": "Xoá batch",
   "Deletes the {n} learner accounts of \"{name}\", their projects, apps and databases. Their data is lost.": "Xoá {n} tài khoản học viên của \"{name}\" cùng dự án, ứng dụng và database của họ. Dữ liệu sẽ bị mất.",
   "Deletes every copy of \"{name}\" with its database. Their data is lost.": "Xoá mọi bản sao của \"{name}\" cùng database của chúng. Dữ liệu sẽ bị mất.",
@@ -278,8 +275,8 @@
   "Create anyway": "Vẫn tạo",
   "No batches yet.": "Chưa có batch nào.",
   "Copies": "Bản sao",
-  "Created": "Ngày tạo",
   "accounts": "tài khoản",
   "copies": "bản sao",
-  "Delete": "Xoá"
+  "Delete": "Xoá",
+  "Created at": "Ngày tạo"
 }
