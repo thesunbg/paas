@@ -9,6 +9,7 @@
   import Modal from '../components/Modal.svelte';
   import ErrorMsg from '../components/ErrorMsg.svelte';
   import Icon from '../components/Icon.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   let overview = $state<Overview | null>(null);
   let projects = $state<ProjectListItem[] | null>(null);
@@ -21,13 +22,13 @@
   const team = $derived(currentTeam());
 
   async function load() {
-    const t = team;
-    if (!t) {
+    const tm = team;
+    if (!tm) {
       projects = [];
       return;
     }
     try {
-      const [o, ps] = await Promise.all([api.overview(), api.projects(t.id)]);
+      const [o, ps] = await Promise.all([api.overview(), api.projects(tm.id)]);
       overview = o;
       projects = ps ?? [];
       error = '';
@@ -51,7 +52,7 @@
     createError = '';
     try {
       const p = await api.createProject(team.id, newName.trim());
-      toast.success(`Project ${p.name} created`);
+      toast.success(t('Project {name} created', { name: p.name }));
       newOpen = false;
       newName = '';
       navigate(`/projects/${p.id}`);
@@ -65,11 +66,11 @@
   const stats = $derived(
     overview
       ? [
-          { label: 'Services', value: overview.services, icon: 'box' },
-          { label: 'Running', value: overview.running, icon: 'activity', cls: 'green' },
-          { label: 'Sleeping', value: overview.sleeping, icon: 'moon', cls: 'purple' },
-          { label: 'Databases', value: overview.databases, icon: 'database' },
-          ...(overview.nodes != null ? [{ label: 'Nodes', value: overview.nodes, icon: 'server', link: '/nodes' }] : []),
+          { label: t('Services'), value: overview.services, icon: 'box' },
+          { label: t('Running'), value: overview.running, icon: 'activity', cls: 'green' },
+          { label: t('Sleeping'), value: overview.sleeping, icon: 'moon', cls: 'purple' },
+          { label: t('Databases'), value: overview.databases, icon: 'database' },
+          ...(overview.nodes != null ? [{ label: t('Nodes'), value: overview.nodes, icon: 'server', link: '/nodes' }] : []),
         ]
       : [],
   );
@@ -78,11 +79,11 @@
 <div class="page">
   <div class="page-head">
     <div>
-      <h1>Projects</h1>
-      <p class="sub">{team ? team.name : 'No team selected'}</p>
+      <h1>{t('Projects')}</h1>
+      <p class="sub">{team ? team.name : t('No team selected')}</p>
     </div>
     {#if can('developer')}
-      <button class="primary" onclick={() => ((newOpen = true), (createError = ''))}><Icon name="plus" />New project</button>
+      <button class="primary" onclick={() => ((newOpen = true), (createError = ''))}><Icon name="plus" />{t('New project')}</button>
     {/if}
   </div>
 
@@ -109,9 +110,9 @@
   {:else if projects && projects.length === 0}
     <div class="card empty">
       <Icon name="folder" size={28} />
-      <h3>No projects yet</h3>
-      <p class="small">Projects group services and databases that share a private network.</p>
-      {#if can('developer')}<button class="primary" onclick={() => (newOpen = true)}><Icon name="plus" />Create your first project</button>{/if}
+      <h3>{t('No projects yet')}</h3>
+      <p class="small">{t('Projects group services and databases that share a private network.')}</p>
+      {#if can('developer')}<button class="primary" onclick={() => (newOpen = true)}><Icon name="plus" />{t('Create your first project')}</button>{/if}
     </div>
   {:else if projects}
     <div class="grid">
@@ -134,9 +135,9 @@
           <div class="between small">
             <span class="row nowrap" style="gap:6px">
               <span class="dot {p.running > 0 ? 'running' : p.services ? 'stopped' : 'created'}"></span>
-              <span class="muted">{p.running}/{p.services} running</span>
+              <span class="muted">{t('{running}/{total} running', { running: p.running, total: p.services })}</span>
             </span>
-            <span class="faint">Created {relTime(p.created_at)}</span>
+            <span class="faint">{t('Created {time}', { time: relTime(p.created_at) })}</span>
           </div>
         </a>
       {/each}
@@ -144,19 +145,19 @@
   {/if}
 </div>
 
-<Modal bind:open={newOpen} title="New project" width={440}>
+<Modal bind:open={newOpen} title={t('New project')} width={440}>
   <form id="new-project" class="stack" onsubmit={create}>
     <label class="field">
-      <span>Project name</span>
+      <span>{t('Project name')}</span>
       <input bind:value={newName} required placeholder="my-app" maxlength="64" />
-      <span class="hint">Services in a project reach each other at <code>&lt;service&gt;.&lt;project&gt;.internal</code>.</span>
+      <span class="hint">{t('Services in a project reach each other at')} <code>&lt;service&gt;.&lt;project&gt;.internal</code>.</span>
     </label>
     <ErrorMsg error={createError} />
   </form>
   {#snippet footer()}
-    <button type="button" onclick={() => (newOpen = false)}>Cancel</button>
+    <button type="button" onclick={() => (newOpen = false)}>{t('Cancel')}</button>
     <button type="submit" form="new-project" class="primary" disabled={creating || !newName.trim()}>
-      {#if creating}<span class="spinner"></span>{/if}Create project
+      {#if creating}<span class="spinner"></span>{/if}{t('Create project')}
     </button>
   {/snippet}
 </Modal>

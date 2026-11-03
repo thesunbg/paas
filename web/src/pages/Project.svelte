@@ -14,6 +14,7 @@
   import NewDatabaseDialog from '../components/NewDatabaseDialog.svelte';
   import TemplatesDialog from '../components/TemplatesDialog.svelte';
   import ComposeDialog from '../components/ComposeDialog.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -67,7 +68,7 @@
     return [s.name, s.slug, s.type, s.status, s.url ?? '', source(s), ...previewsOf(s.id).map((p) => `${p.name} #${p.preview_pr}`)].join(' ').toLowerCase();
   }
   const terms = $derived(query.toLowerCase().split(/\s+/).filter(Boolean));
-  const matches = (text: string) => terms.every((t) => text.includes(t));
+  const matches = (text: string) => terms.every((w) => text.includes(w));
   const visible = $derived.by(() => {
     const list = topLevel.filter(
       (s) => (statusFilter === 'all' || statusGroup(s.status) === statusFilter) && (typeFilter === 'all' || s.type === typeFilter) && matches(haystack(s)),
@@ -91,8 +92,8 @@
 
   // "/" focuses the search box, Escape clears it.
   function onKey(e: KeyboardEvent) {
-    const t = e.target as HTMLElement;
-    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    const el = e.target as HTMLElement;
+    const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
     if (e.key === '/' && !typing) {
       e.preventDefault();
       searchEl?.focus();
@@ -120,7 +121,7 @@
     try {
       data.project = await api.renameProject(data.project.id, name);
       editing = false;
-      toast.success('Project renamed');
+      toast.success(t('Project renamed'));
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -158,16 +159,20 @@
     if (!data) return;
     const p = data.project;
     const ok = await confirmDialog({
-      title: 'Delete project',
-      message: `This permanently deletes ${p.name}, its ${data.services.length} service(s) and ${data.databases.length} database(s), including data and backups.`,
-      confirmLabel: 'Delete project',
+      title: t('Delete project'),
+      message: t('This permanently deletes {name}, its {services} and {databases}, including data and backups.', {
+        name: p.name,
+        services: plural(data.services.length, 'service'),
+        databases: plural(data.databases.length, 'database'),
+      }),
+      confirmLabel: t('Delete project'),
       danger: true,
       requireText: p.name,
     });
     if (!ok) return;
     try {
       await api.deleteProject(p.id);
-      toast.success(`Project ${p.name} deleted`);
+      toast.success(t('Project {name} deleted', { name: p.name }));
       navigate('/');
     } catch (e) {
       toast.error(errorMessage(e));
@@ -177,6 +182,32 @@
   const typeBadge: Record<string, string> = { web: 'blue', worker: 'purple', static: 'green', cron: 'yellow' };
   const typeIcon: Record<string, string> = { web: 'box', worker: 'zap', static: 'globe', cron: 'clock' };
   const engineLabel: Record<string, string> = { postgres: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB', redis: 'Redis', mongo: 'MongoDB' };
+  // Display labels for the service types (web, worker, static, cron), service and
+  // database statuses, and database modes; unknown values are shown as they are.
+  function typeLabel(v: string): string {
+    const labels: Record<string, string> = { web: t('web'), worker: t('worker'), static: t('static'), cron: t('cron') };
+    return labels[v] ?? v;
+  }
+  function statusLabel(v: string): string {
+    const labels: Record<string, string> = {
+      created: t('created'),
+      deploying: t('deploying'),
+      running: t('running'),
+      sleeping: t('sleeping'),
+      stopped: t('stopped'),
+      failed: t('failed'),
+      provisioning: t('provisioning'),
+      ready: t('ready'),
+      upgrading: t('upgrading'),
+      deleting: t('deleting'),
+      importing: t('importing'),
+    };
+    return labels[v] ?? v;
+  }
+  function modeLabel(v: string): string {
+    const labels: Record<string, string> = { shared: t('shared'), dedicated: t('dedicated') };
+    return labels[v] ?? v;
+  }
 
   function source(s: ProjectDetail['services'][number]): string {
     if (s.source.kind === 'image') return s.source.image ?? '';
@@ -194,7 +225,7 @@
     <ErrorMsg {error} onretry={load} />
   {:else}
     {@const p = data.project}
-    <div class="crumbs"><a href={href('/')}>Projects</a><Icon name="chevron" size={12} /><span>{p.name}</span></div>
+    <div class="crumbs"><a href={href('/')}>{t('Projects')}</a><Icon name="chevron" size={12} /><span>{p.name}</span></div>
     <div class="page-head">
       <div style="min-width:0">
         {#if editing}
@@ -203,46 +234,46 @@
               class="title-input"
               bind:value={newName}
               maxlength="80"
-              aria-label="Project name"
+              aria-label={t('Project name')}
               use:focusSelect
               onkeydown={(e) => e.key === 'Escape' && (editing = false)}
               disabled={renaming}
             />
-            <button class="primary sm" disabled={renaming || !newName.trim()}>{#if renaming}<span class="spinner"></span>{/if}Save</button>
-            <button type="button" class="sm" onclick={() => (editing = false)} disabled={renaming}>Cancel</button>
+            <button class="primary sm" disabled={renaming || !newName.trim()}>{#if renaming}<span class="spinner"></span>{/if}{t('Save')}</button>
+            <button type="button" class="sm" onclick={() => (editing = false)} disabled={renaming}>{t('Cancel')}</button>
           </form>
         {:else}
           <div class="row nowrap title">
             <h1 class="truncate">{p.name}</h1>
             {#if can('admin', p.team_id)}
-              <button class="ghost icon sm" aria-label="Rename project" title="Rename project" onclick={startRename}><Icon name="pencil" size={14} /></button>
+              <button class="ghost icon sm" aria-label={t('Rename project')} title={t('Rename project')} onclick={startRename}><Icon name="pencil" size={14} /></button>
             {/if}
           </div>
         {/if}
         <p class="sub">
-          <span class="mono" title="Used in domains and internal DNS names; it does not change when the project is renamed">{p.slug}</span> · {plural(topLevel.length, 'service')}{data.services.length > topLevel.length ? ` (+${plural(data.services.length - topLevel.length, 'preview')})` : ''} · {plural(data.databases.length, 'database')} · created {relTime(p.created_at)}
+          <span class="mono" title={t('Used in domains and internal DNS names; it does not change when the project is renamed')}>{p.slug}</span> · {plural(topLevel.length, 'service')}{data.services.length > topLevel.length ? ` (+${plural(data.services.length - topLevel.length, 'preview')})` : ''} · {plural(data.databases.length, 'database')} · {t('created {time}', { time: relTime(p.created_at) })}
         </p>
       </div>
       <div class="row">
         {#if can('developer', p.team_id)}
           <div class="menu-wrap">
-            <button class="add-from" onclick={() => (addOpen = !addOpen)} aria-haspopup="menu" aria-expanded={addOpen}><Icon name="grid" />Add from<Icon name="chevdown" size={12} /></button>
+            <button class="add-from" onclick={() => (addOpen = !addOpen)} aria-haspopup="menu" aria-expanded={addOpen}><Icon name="grid" />{t('Add from')}<Icon name="chevdown" size={12} /></button>
             {#if addOpen}
               <div class="menu-backdrop" role="presentation" onclick={() => (addOpen = false)}></div>
               <div class="menu" role="menu">
-                <button role="menuitem" onclick={() => ((addOpen = false), (tplOpen = true))}><Icon name="grid" /><span><b>Template</b><br /><span class="faint small">WordPress, n8n, Elasticsearch, OpenClaw and 55 more</span></span></button>
-                <button role="menuitem" onclick={() => ((addOpen = false), (composeOpen = true))}><Icon name="upload" /><span><b>docker-compose file</b><br /><span class="faint small">Paste or upload a compose file</span></span></button>
+                <button role="menuitem" onclick={() => ((addOpen = false), (tplOpen = true))}><Icon name="grid" /><span><b>{t('Template')}</b><br /><span class="faint small">{t('WordPress, n8n, Elasticsearch, OpenClaw and {n} more', { n: 55 })}</span></span></button>
+                <button role="menuitem" onclick={() => ((addOpen = false), (composeOpen = true))}><Icon name="upload" /><span><b>{t('docker-compose file')}</b><br /><span class="faint small">{t('Paste or upload a compose file')}</span></span></button>
               </div>
             {/if}
           </div>
           {#if data.databases.length}
-            <a class="btn" href={href(`/projects/${p.id}/studio`)} target="_blank" rel="noopener" title="Browse and query this project's databases in dbweb"><Icon name="terminal" />DB studio</a>
+            <a class="btn" href={href(`/projects/${p.id}/studio`)} target="_blank" rel="noopener" title={t("Browse and query this project's databases in dbweb")}><Icon name="terminal" />DB studio</a>
           {/if}
-          <button onclick={() => (dbOpen = true)}><Icon name="database" />New database</button>
-          <a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />New service</a>
+          <button onclick={() => (dbOpen = true)}><Icon name="database" />{t('New database')}</button>
+          <a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />{t('New service')}</a>
         {/if}
         {#if can('admin', p.team_id)}
-          <button class="danger icon" aria-label="Delete project" title="Delete project" onclick={deleteProject}><Icon name="trash" /></button>
+          <button class="danger icon" aria-label={t('Delete project')} title={t('Delete project')} onclick={deleteProject}><Icon name="trash" /></button>
         {/if}
       </div>
     </div>
@@ -256,14 +287,14 @@
             type="search"
             bind:this={searchEl}
             bind:value={query}
-            placeholder="Search services and databases"
-            aria-label="Search services and databases"
+            placeholder={t('Search services and databases')}
+            aria-label={t('Search services and databases')}
             onkeydown={(e) => e.key === 'Escape' && (query = '')}
           />
           {#if !query}<kbd class="faint">/</kbd>{/if}
         </label>
-        <div class="seg" role="group" aria-label="Filter by status">
-          {#each [['all', 'All'], ['running', 'Running'], ['failed', 'Failed'], ['deploying', 'Deploying'], ['idle', 'Stopped']] as [k, label] (k)}
+        <div class="seg" role="group" aria-label={t('Filter by status')}>
+          {#each [['all', t('All')], ['running', t('Running')], ['failed', t('Failed')], ['deploying', t('Deploying')], ['idle', t('Stopped')]] as [k, label] (k)}
             {#if k === 'all' || counts[k] > 0}
               <button class:sel={statusFilter === k} class:bad={k === 'failed'} aria-pressed={statusFilter === k} onclick={() => (statusFilter = k as typeof statusFilter)}>
                 {#if k !== 'all'}<span class="dot {k === 'idle' ? 'stopped' : k}"></span>{/if}{label}<span class="count">{counts[k]}</span>
@@ -273,58 +304,58 @@
         </div>
         <span class="spacer"></span>
         {#if types.length > 1}
-          <select bind:value={typeFilter} aria-label="Filter by type">
-            <option value="all">All types</option>
-            {#each types as t (t)}<option value={t}>{t}</option>{/each}
+          <select bind:value={typeFilter} aria-label={t('Filter by type')}>
+            <option value="all">{t('All types')}</option>
+            {#each types as ty (ty)}<option value={ty}>{typeLabel(ty)}</option>{/each}
           </select>
         {/if}
-        <select bind:value={sort} aria-label="Sort">
-          <option value="status">Sort: status</option>
-          <option value="name">Sort: name</option>
-          <option value="recent">Sort: recently updated</option>
-          <option value="memory">Sort: memory</option>
+        <select bind:value={sort} aria-label={t('Sort')}>
+          <option value="status">{t('Sort: status')}</option>
+          <option value="name">{t('Sort: name')}</option>
+          <option value="recent">{t('Sort: recently updated')}</option>
+          <option value="memory">{t('Sort: memory')}</option>
         </select>
-        <div class="seg" role="group" aria-label="Layout">
-          <button class:sel={view === 'grid'} aria-pressed={view === 'grid'} aria-label="Grid" title="Grid" onclick={() => (view = 'grid')}><Icon name="grid" size={14} /></button>
-          <button class:sel={view === 'list'} aria-pressed={view === 'list'} aria-label="List" title="List" onclick={() => (view = 'list')}><Icon name="list" size={14} /></button>
+        <div class="seg" role="group" aria-label={t('Layout')}>
+          <button class:sel={view === 'grid'} aria-pressed={view === 'grid'} aria-label={t('Grid')} title={t('Grid')} onclick={() => (view = 'grid')}><Icon name="grid" size={14} /></button>
+          <button class:sel={view === 'list'} aria-pressed={view === 'list'} aria-label={t('List')} title={t('List')} onclick={() => (view = 'list')}><Icon name="list" size={14} /></button>
         </div>
       </div>
     {/if}
 
     <section class="stack">
-      <h2 class="section-title">Services{#if filtered && topLevel.length}<span class="faint small"> · {visible.length} of {topLevel.length}</span>{/if}</h2>
+      <h2 class="section-title">{t('Services')}{#if filtered && topLevel.length}<span class="faint small"> · {t('{n} of {total}', { n: visible.length, total: topLevel.length })}</span>{/if}</h2>
       {#if data.services.length === 0}
         <div class="card empty">
           <Icon name="box" size={28} />
-          <p>No services yet. Deploy from a Git repository or a Docker image, start from a template, or import a docker-compose file.</p>
+          <p>{t('No services yet. Deploy from a Git repository or a Docker image, start from a template, or import a docker-compose file.')}</p>
           {#if can('developer', p.team_id)}
             <div class="row" style="justify-content:center">
-              <a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />New service</a>
-              <button onclick={() => (tplOpen = true)}><Icon name="grid" />From template</button>
-              <button onclick={() => (composeOpen = true)}><Icon name="upload" />Import compose</button>
+              <a class="btn primary" href={href(`/projects/${p.id}/new-service`)}><Icon name="plus" />{t('New service')}</a>
+              <button onclick={() => (tplOpen = true)}><Icon name="grid" />{t('From template')}</button>
+              <button onclick={() => (composeOpen = true)}><Icon name="upload" />{t('Import compose')}</button>
             </div>
           {/if}
         </div>
       {:else if visible.length === 0}
         <div class="card empty">
           <Icon name="search" size={24} />
-          <p>No services match{query ? ` “${query}”` : ' these filters'}.</p>
-          <button onclick={clearFilters}>Clear filters</button>
+          <p>{query ? t('No services match “{query}”.', { query }) : t('No services match these filters.')}</p>
+          <button onclick={clearFilters}>{t('Clear filters')}</button>
         </div>
       {:else if view === 'list'}
         <div class="card table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Status</th><th class="hide-sm">Source</th><th>URL</th><th class="hide-sm num">Instances</th><th class="hide-sm num">Memory</th></tr></thead>
+            <thead><tr><th>{t('Name')}</th><th>{t('Status')}</th><th class="hide-sm">{t('Source')}</th><th>URL</th><th class="hide-sm num">{t('Instances')}</th><th class="hide-sm num">{t('Memory')}</th></tr></thead>
             <tbody>
               {#each visible as s (s.id)}
                 {@const pvs = previewsOf(s.id)}
                 <tr class="clickable" class:failed={s.status === 'failed'} onclick={() => navigate(`/services/${s.id}`)}>
                   <td>
                     <a href={href(`/services/${s.id}`)} class="row nowrap name"><Icon name={typeIcon[s.type] ?? 'box'} size={14} /><b>{s.name}</b></a>
-                    <span class="badge {typeBadge[s.type] ?? ''}">{s.type}</span>
+                    <span class="badge {typeBadge[s.type] ?? ''}">{typeLabel(s.type)}</span>
                     {#if pvs.length}<span class="badge purple">{plural(pvs.length, 'preview')}</span>{/if}
                   </td>
-                  <td><Status status={s.status} /></td>
+                  <td><Status status={s.status} label={statusLabel(s.status)} /></td>
                   <td class="hide-sm faint small mono truncate cell-src" title={source(s)}>{source(s)}</td>
                   <td class="small">
                     {#if s.url}<a href={s.url} target="_blank" rel="noreferrer" onclick={(e) => e.stopPropagation()} class="truncate url-cell">{s.url.replace(/^https?:\/\//, '')}</a>{:else}<span class="faint">{s.type === 'cron' ? s.spec.schedule + ' UTC' : '—'}</span>{/if}
@@ -341,13 +372,13 @@
           {#each visible as s (s.id)}
             {@const pvs = previewsOf(s.id)}
             <div class="card svc" class:failed={s.status === 'failed'}>
-              <a class="cover" href={href(`/services/${s.id}`)} aria-label="Open {s.name}"></a>
+              <a class="cover" href={href(`/services/${s.id}`)} aria-label={t('Open {name}', { name: s.name })}></a>
               <div class="between nowrap">
                 <div class="row nowrap" style="min-width:0">
                   <span class="sic"><Icon name={typeIcon[s.type] ?? 'box'} /></span>
                   <h3 class="truncate">{s.name}</h3>
                 </div>
-                <span class="badge {typeBadge[s.type] ?? ''}">{s.type}</span>
+                <span class="badge {typeBadge[s.type] ?? ''}">{typeLabel(s.type)}</span>
               </div>
               <div class="faint small mono truncate" title={source(s)}><Icon name={s.source.kind === 'image' ? 'layers' : 'git'} size={12} /> {source(s)}</div>
               {#if s.url}
@@ -355,22 +386,22 @@
               {:else if s.type === 'cron'}
                 <span class="faint small mono"><Icon name="clock" size={12} /> {s.spec.schedule} UTC</span>
               {:else}
-                <span class="faint small">{s.type === 'worker' ? 'No public URL (worker)' : 'No domain'}</span>
+                <span class="faint small">{s.type === 'worker' ? t('No public URL (worker)') : t('No domain')}</span>
               {/if}
               <div class="between small foot">
-                <Status status={s.status} />
+                <Status status={s.status} label={statusLabel(s.status)} />
                 <span class="muted">
                   {#if s.type === 'cron'}
-                    cron job
+                    {t('cron job')}
                   {:else if s.type !== 'static'}
-                    {s.instances}/{s.spec.replicas}{s.spec.autoscale?.enabled ? ` (auto ${s.spec.autoscale.min ?? 1}–${s.spec.autoscale.max ?? 3})` : ''} inst · {mb(s.memory_mb)} / {mb(s.spec.resources.memory_limit_mb)}
+                    {s.instances}/{s.spec.replicas}{s.spec.autoscale?.enabled ? ` (${t('auto {min}–{max}', { min: s.spec.autoscale.min ?? 1, max: s.spec.autoscale.max ?? 3 })})` : ''} {t('inst')} · {mb(s.memory_mb)} / {mb(s.spec.resources.memory_limit_mb)}
                   {:else}
-                    static
+                    {typeLabel('static')}
                   {/if}
                 </span>
               </div>
               {#if pvs.length}
-                <ul class="pvs" aria-label="Pull request previews of {s.name}">
+                <ul class="pvs" aria-label={t('Pull request previews of {name}', { name: s.name })}>
                   {#each pvs as pv (pv.id)}
                     <li>
                       <a href={href(`/services/${pv.id}`)} class="pv">
@@ -378,7 +409,7 @@
                         <span class="badge purple">PR #{pv.preview_pr}</span>
                         <span class="truncate small">{pv.name}</span>
                         <span class="spacer"></span>
-                        <span class="faint small">{pv.status}</span>
+                        <span class="faint small">{statusLabel(pv.status)}</span>
                       </a>
                     </li>
                   {/each}
@@ -391,29 +422,29 @@
     </section>
 
     <section class="stack" style="margin-top:28px">
-      <h2 class="section-title">Databases{#if terms.length && data.databases.length}<span class="faint small"> · {visibleDBs.length} of {data.databases.length}</span>{/if}</h2>
+      <h2 class="section-title">{t('Databases')}{#if terms.length && data.databases.length}<span class="faint small"> · {t('{n} of {total}', { n: visibleDBs.length, total: data.databases.length })}</span>{/if}</h2>
       {#if data.databases.length === 0}
         <div class="card empty">
           <Icon name="database" size={28} />
-          <p>No databases. Add PostgreSQL, MySQL, MariaDB, Redis or MongoDB.</p>
-          {#if can('developer', p.team_id)}<button onclick={() => (dbOpen = true)}><Icon name="plus" />New database</button>{/if}
+          <p>{t('No databases. Add PostgreSQL, MySQL, MariaDB, Redis or MongoDB.')}</p>
+          {#if can('developer', p.team_id)}<button onclick={() => (dbOpen = true)}><Icon name="plus" />{t('New database')}</button>{/if}
         </div>
       {:else if visibleDBs.length === 0}
-        <p class="faint small">No databases match “{query}”.</p>
+        <p class="faint small">{t('No databases match “{query}”.', { query })}</p>
       {:else}
         <div class="card table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Engine</th><th>Mode</th><th class="hide-sm">Size</th><th>Status</th><th class="hide-sm">Last backup</th></tr></thead>
+            <thead><tr><th>{t('Name')}</th><th>{t('Engine')}</th><th>{t('Mode')}</th><th class="hide-sm">{t('Size')}</th><th>{t('Status')}</th><th class="hide-sm">{t('Last backup')}</th></tr></thead>
             <tbody>
               {#each visibleDBs as d (d.id)}
                 <tr class="clickable" onclick={() => navigate(`/databases/${d.id}`)}>
                   <td><a href={href(`/databases/${d.id}`)}><Icon name="database" size={14} /> {d.name}</a></td>
                   <td>{engineLabel[d.engine] ?? d.engine} <span class="faint small">{d.version ?? ""}</span>
-                    {#if versionStatus(d.engine, d.version)?.status === 'eol'}<span class="badge red" title="End of life {versionStatus(d.engine, d.version)?.eol}">EOL</span>
-                    {:else if versionStatus(d.engine, d.version)?.status === 'ending'}<span class="badge yellow" title="End of life {versionStatus(d.engine, d.version)?.eol}">ends {versionStatus(d.engine, d.version)?.eol}</span>{/if}</td>
-                  <td><span class="badge {d.mode === 'dedicated' ? 'blue' : ''}">{d.mode}</span></td>
+                    {#if versionStatus(d.engine, d.version)?.status === 'eol'}<span class="badge red" title={t('End of life {date}', { date: versionStatus(d.engine, d.version)?.eol })}>EOL</span>
+                    {:else if versionStatus(d.engine, d.version)?.status === 'ending'}<span class="badge yellow" title={t('End of life {date}', { date: versionStatus(d.engine, d.version)?.eol })}>{t('ends {date}', { date: versionStatus(d.engine, d.version)?.eol })}</span>{/if}</td>
+                  <td><span class="badge {d.mode === 'dedicated' ? 'blue' : ''}">{modeLabel(d.mode)}</span></td>
                   <td class="hide-sm mono small">{d.mode === 'dedicated' ? d.size_preset : '—'}</td>
-                  <td><Status status={d.status} /></td>
+                  <td><Status status={d.status} label={statusLabel(d.status)} /></td>
                   <td class="hide-sm muted">{relTime(d.last_backup_at)}</td>
                 </tr>
               {/each}

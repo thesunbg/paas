@@ -3,7 +3,7 @@
   import { api, catalog, errorMessage, type DetectResult, type GitHubRepo, type ProjectDetail, type ServiceInput, type ServiceType, type Size, type TeamGitHub } from '../lib/api';
   import { href, navigate } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
-  import { mb, cpu, relTime } from '../lib/format';
+  import { mb, cpu, relTime, plural } from '../lib/format';
   import { rowsToMap, validateRows, type EnvRow } from '../lib/env';
   import { toast } from '../lib/toast.svelte';
   import ErrorMsg from '../components/ErrorMsg.svelte';
@@ -14,6 +14,7 @@
   import CronField from '../components/CronField.svelte';
   import AutoscaleFields from '../components/AutoscaleFields.svelte';
   import { parseCron } from '../lib/cron';
+  import { t, tn } from '../lib/i18n.svelte';
 
   let { projectId }: { projectId: string } = $props();
 
@@ -82,7 +83,7 @@
       gitMode = 'url';
     }
     const params = new URLSearchParams(location.hash.split('?')[1] ?? '');
-    if (params.get('github') === 'connected') toast.success('GitHub account connected');
+    if (params.get('github') === 'connected') toast.success(t('GitHub account connected'));
     if (params.get('github_error')) error = params.get('github_error')!;
   });
 
@@ -170,37 +171,38 @@
   });
 
   const steps = ['Source', 'Configure', 'Environment'];
+  const stepLabels = $derived([t('Source'), t('Configure'), t('Environment')]);
   const selectedSize = $derived(sizes.find((s) => s.name === size));
 
   function stepError(i: number): string {
     if (i === 0) {
       if (sourceKind === 'git') {
-        if (gitMode === 'github' && !picked) return 'Choose a repository';
-        if (!repo.trim()) return 'Enter a Git repository URL';
-        if (!/^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(repo.trim())) return 'Repository URL should start with https://, git@ or ssh://';
-      } else if (!image.trim()) return 'Enter a Docker image reference';
+        if (gitMode === 'github' && !picked) return t('Choose a repository');
+        if (!repo.trim()) return t('Enter a Git repository URL');
+        if (!/^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(repo.trim())) return t('Repository URL should start with https://, git@ or ssh://');
+      } else if (!image.trim()) return t('Enter a Docker image reference');
     }
     if (i === 1) {
-      if (!name.trim()) return 'Service name is required';
-      if (type === 'web' && (port < 1 || port > 65535)) return 'Port must be between 1 and 65535';
-      if (type === 'web' && sleepEnabled && idleMinutes < 1) return 'Idle minutes must be at least 1';
+      if (!name.trim()) return t('Service name is required');
+      if (type === 'web' && (port < 1 || port > 65535)) return t('Port must be between 1 and 65535');
+      if (type === 'web' && sleepEnabled && idleMinutes < 1) return t('Idle minutes must be at least 1');
       if (type === 'cron') {
         try {
           parseCron(schedule);
         } catch (err) {
-          return 'Schedule: ' + (err as Error).message;
+          return t('Schedule: {error}', { error: (err as Error).message });
         }
-        if (jobTimeout < 1) return 'Timeout must be at least 1 second';
+        if (jobTimeout < 1) return t('Timeout must be at least 1 second');
       }
       if (type === 'web' && autoscale.enabled) {
-        if (autoscale.min < 1 || autoscale.max < autoscale.min || autoscale.max > 50) return 'Autoscaling needs 1 ≤ min ≤ max ≤ 50';
-        if (!autoscale.target_cpu_percent && !autoscale.target_rps) return 'Set a CPU or request-rate target for autoscaling';
+        if (autoscale.min < 1 || autoscale.max < autoscale.min || autoscale.max > 50) return t('Autoscaling needs 1 ≤ min ≤ max ≤ 50');
+        if (!autoscale.target_cpu_percent && !autoscale.target_rps) return t('Set a CPU or request-rate target for autoscaling');
       }
     }
     if (i === 2) {
       const v = validateRows(envRows);
       if (v) return v;
-      if (domain && !/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/i.test(domain.trim())) return 'Invalid domain name';
+      if (domain && !/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/i.test(domain.trim())) return t('Invalid domain name');
     }
     return '';
   }
@@ -258,7 +260,11 @@
       });
       const n = r.services?.length ?? 0;
       const d = r.databases?.length ?? 0;
-      toast.success(`Created ${n} service${n === 1 ? '' : 's'}${d ? ` and ${d} database${d === 1 ? '' : 's'}` : ''}; deploying`);
+      toast.success(
+        d
+          ? t('Created {services} and {databases}; deploying', { services: plural(n, 'service'), databases: plural(d, 'database') })
+          : t('Created {services}; deploying', { services: plural(n, 'service') }),
+      );
       if (r.warnings?.length) {
         importWarnings = r.warnings;
         return;
@@ -339,7 +345,7 @@
     busy = true;
     try {
       const res = await api.createService(projectId, input);
-      toast.success(`Service ${res.service.name} created`);
+      toast.success(t('Service {name} created', { name: res.service.name }));
       if (res.deployment) navigate(`/services/${res.service.id}/deployments/${res.deployment.id}`);
       else navigate(`/services/${res.service.id}`);
     } catch (err) {
@@ -349,12 +355,12 @@
     }
   }
 
-  const types: { id: ServiceType; label: string; desc: string; icon: string }[] = [
-    { id: 'web', label: 'Web service', desc: 'HTTP server on a port, gets a public URL', icon: 'box' },
-    { id: 'worker', label: 'Worker', desc: 'Background process, no public URL', icon: 'zap' },
-    { id: 'static', label: 'Static site', desc: 'Built files served from the edge', icon: 'globe' },
-    { id: 'cron', label: 'Cron job', desc: 'Runs a command on a schedule', icon: 'clock' },
-  ];
+  const types: { id: ServiceType; label: string; desc: string; icon: string }[] = $derived([
+    { id: 'web', label: t('Web service'), desc: t('HTTP server on a port, gets a public URL'), icon: 'box' },
+    { id: 'worker', label: t('Worker'), desc: t('Background process, no public URL'), icon: 'zap' },
+    { id: 'static', label: t('Static site'), desc: t('Built files served from the edge'), icon: 'globe' },
+    { id: 'cron', label: t('Cron job'), desc: t('Runs a command on a schedule'), icon: 'clock' },
+  ]);
 </script>
 
 <div class="page narrow">
@@ -364,22 +370,22 @@
     <Loading rows={3} />
   {:else}
     <div class="crumbs">
-      <a href={href('/')}>Projects</a><Icon name="chevron" size={12} />
+      <a href={href('/')}>{t('Projects')}</a><Icon name="chevron" size={12} />
       <a href={href(`/projects/${projectId}`)}>{project.project.name}</a><Icon name="chevron" size={12} />
-      <span>New service</span>
+      <span>{t('New service')}</span>
     </div>
     <div class="page-head">
       <div>
-        <h1>New service</h1>
-        <p class="sub">Deploy from a Git repository or a container image into <b>{project.project.name}</b>.</p>
+        <h1>{t('New service')}</h1>
+        <p class="sub">{t('Deploy from a Git repository or a container image into')} <b>{project.project.name}</b>.</p>
       </div>
     </div>
 
-    <ol class="steps" aria-label="Steps">
+    <ol class="steps" aria-label={t('Steps')}>
       {#each steps as s, i (s)}
         <li class:done={i < step} class:cur={i === step}>
           <button type="button" class="ghost" onclick={() => (i <= step || !stepError(step)) && (step = i)} aria-current={i === step ? 'step' : undefined}>
-            <span class="n">{#if i < step}<Icon name="check" size={12} />{:else}{i + 1}{/if}</span>{s}
+            <span class="n">{#if i < step}<Icon name="check" size={12} />{:else}{i + 1}{/if}</span>{stepLabels[i]}
           </button>
         </li>
       {/each}
@@ -388,107 +394,107 @@
     <form class="card" onsubmit={submit} novalidate>
       <div class="card-body stack-lg">
         {#if step === 0}
-          <div class="seg" role="radiogroup" aria-label="Source type">
-            <label class:sel={sourceKind === 'git'}><input type="radio" bind:group={sourceKind} value="git" /><Icon name="git" />Git repository</label>
-            <label class:sel={sourceKind === 'image'}><input type="radio" bind:group={sourceKind} value="image" /><Icon name="layers" />Docker image</label>
+          <div class="seg" role="radiogroup" aria-label={t('Source type')}>
+            <label class:sel={sourceKind === 'git'}><input type="radio" bind:group={sourceKind} value="git" /><Icon name="git" />{t('Git repository')}</label>
+            <label class:sel={sourceKind === 'image'}><input type="radio" bind:group={sourceKind} value="image" /><Icon name="layers" />{t('Docker image')}</label>
           </div>
           {#if sourceKind === 'git'}
             {#if gh}
               <div class="tabs-inline">
-                <button type="button" class="ghost sm" class:on={gitMode === 'github'} onclick={() => (gitMode = 'github')}><Icon name="git" size={13} />From GitHub</button>
-                <button type="button" class="ghost sm" class:on={gitMode === 'url'} onclick={() => ((gitMode = 'url'), unpick())}>Any Git URL</button>
+                <button type="button" class="ghost sm" class:on={gitMode === 'github'} onclick={() => (gitMode = 'github')}><Icon name="git" size={13} />{t('From GitHub')}</button>
+                <button type="button" class="ghost sm" class:on={gitMode === 'url'} onclick={() => ((gitMode = 'url'), unpick())}>{t('Any Git URL')}</button>
               </div>
             {/if}
             {#if gitMode === 'github'}
               {#if !gh?.installations.length}
                 <div class="connect">
-                  <p><b>Connect your GitHub account</b> to pick repositories from a list. Private repositories, push deploys and PR previews then work automatically.</p>
+                  <p><b>{t('Connect your GitHub account')}</b> {t('to pick repositories from a list. Private repositories, push deploys and PR previews then work automatically.')}</p>
                   {#if gh?.install_url}
-                    <a class="btn primary" href={gh.install_url}><Icon name="git" size={14} />Connect GitHub</a>
+                    <a class="btn primary" href={gh.install_url}><Icon name="git" size={14} />{t('Connect GitHub')}</a>
                   {:else}
-                    <p class="hint">First set up the GitHub App once in <a href={href('/settings/github')}>Settings → GitHub</a>{session.me?.user.is_admin ? '' : ' (administrator only)'}.</p>
+                    <p class="hint">{t('First set up the GitHub App once in')} <a href={href('/settings/github')}>{t('Settings → GitHub')}</a>{session.me?.user.is_admin ? '' : ` ${t('(administrator only)')}`}.</p>
                   {/if}
                 </div>
               {:else if picked}
                 <div class="picked">
                   <Icon name="git" size={16} />
                   <div class="grow">
-                    <b>{picked.full_name}</b>{#if picked.private}<span class="badge">private</span>{/if}
+                    <b>{picked.full_name}</b>{#if picked.private}<span class="badge">{t('private')}</span>{/if}
                     {#if picked.description}<div class="faint small">{picked.description}</div>{/if}
                   </div>
-                  <button type="button" class="sm" onclick={unpick}>Change</button>
+                  <button type="button" class="sm" onclick={unpick}>{t('Change')}</button>
                 </div>
                 <div class="grid-2">
                   <label class="field">
-                    <span>Branch</span>
+                    <span>{t('Branch')}</span>
                     <select bind:value={branch} onchange={detect}>
                       {#each branches as b (b)}<option value={b}>{b}</option>{/each}
                     </select>
                   </label>
                   <label class="field">
-                    <span>Root directory <span class="faint">(optional)</span></span>
+                    <span>{t('Root directory')} <span class="faint">{t('(optional)')}</span></span>
                     <input class="mono" bind:value={rootDir} onchange={detect} placeholder="apps/web" spellcheck="false" />
-                    <span class="hint">For monorepos. Only pushes touching this folder redeploy.</span>
+                    <span class="hint">{t('For monorepos. Only pushes touching this folder redeploy.')}</span>
                   </label>
                 </div>
               {:else}
                 <div class="repo-pick">
-                  <input bind:value={repoQuery} placeholder="Search repositories…" autocomplete="off" spellcheck="false" />
+                  <input bind:value={repoQuery} placeholder={t('Search repositories…')} autocomplete="off" spellcheck="false" />
                   {#if reposError}<ErrorMsg error={reposError} />{/if}
                   {#if repos === null}
                     <Loading rows={3} />
                   {:else if filteredRepos.length === 0}
-                    <p class="muted small" style="padding:10px">No repositories{repoQuery ? ' match' : ' granted yet'}.</p>
+                    <p class="muted small" style="padding:10px">{repoQuery ? t('No repositories match.') : t('No repositories granted yet.')}</p>
                   {:else}
                     <ul>
                       {#each filteredRepos as r (r.installation_id + '/' + r.id)}
                         <li>
                           <button type="button" class="ghost" onclick={() => pick(r)}>
                             <Icon name="git" size={14} />
-                            <span class="grow"><b>{r.full_name}</b>{#if r.private}<span class="badge">private</span>{/if}<br /><span class="faint small">{r.language || '—'}{r.pushed_at ? ' · updated ' + relTime(r.pushed_at) : ''}</span></span>
-                            <span class="btn sm">Import</span>
+                            <span class="grow"><b>{r.full_name}</b>{#if r.private}<span class="badge">{t('private')}</span>{/if}<br /><span class="faint small">{r.language || '—'}{r.pushed_at ? ' · ' + t('updated {time}', { time: relTime(r.pushed_at) }) : ''}</span></span>
+                            <span class="btn sm">{t('Import')}</span>
                           </button>
                         </li>
                       {/each}
                     </ul>
                   {/if}
                   {#if gh?.install_url}
-                    <p class="hint">Missing a repository? <a href={gh.install_url}>Adjust GitHub App permissions</a>.</p>
+                    <p class="hint">{t('Missing a repository?')} <a href={gh.install_url}>{t('Adjust GitHub App permissions')}</a>.</p>
                   {/if}
                 </div>
               {/if}
             {:else}
             <label class="field">
-              <span>Repository URL</span>
+              <span>{t('Repository URL')}</span>
               <input class="mono" bind:value={repo} onchange={detect} placeholder="https://github.com/acme/app" autocomplete="off" spellcheck="false" />
             </label>
             <div class="grid-2">
               <label class="field">
-                <span>Branch</span>
+                <span>{t('Branch')}</span>
                 <input class="mono" bind:value={branch} onchange={detect} placeholder="main" spellcheck="false" />
               </label>
               <label class="field">
-                <span>Root directory <span class="faint">(optional)</span></span>
+                <span>{t('Root directory')} <span class="faint">{t('(optional)')}</span></span>
                 <input class="mono" bind:value={rootDir} placeholder="apps/web" spellcheck="false" />
-                <span class="hint">For monorepos. Only pushes touching this folder redeploy.</span>
+                <span class="hint">{t('For monorepos. Only pushes touching this folder redeploy.')}</span>
               </label>
             </div>
             <label class="field">
-              <span>Access token <span class="faint">(optional)</span></span>
+              <span>{t('Access token')} <span class="faint">{t('(optional)')}</span></span>
               <input type="password" class="mono" bind:value={gitToken} placeholder="ghp_…" autocomplete="off" />
-              <span class="hint">Needed for private repositories; also used to post GitHub commit statuses.</span>
+              <span class="hint">{t('Needed for private repositories; also used to post GitHub commit statuses.')}</span>
             </label>
             {/if}
             {#if detecting}
-              <div class="detect"><span class="spinner"></span>Analyzing repository…</div>
+              <div class="detect"><span class="spinner"></span>{t('Analyzing repository…')}</div>
             {:else if detected}
-              <div class="detect ok"><Icon name="check" size={14} />Detected <b>{detected.summary || detected.language}</b></div>
+              <div class="detect ok"><Icon name="check" size={14} />{t('Detected')} <b>{detected.summary || detected.language}</b></div>
               {#if detected.compose}
                 <div class="compose">
                   <div>
-                    <b>{detected.compose.path}</b> describes {detected.compose.services.length} services:
+                    <b>{detected.compose.path}</b> {tn(detected.compose.services.length, 'describes {n} service:', 'describes {n} services:')}
                     {#each detected.compose.services as s, i (s)}<code>{s}</code>{i < detected.compose.services.length - 1 ? ', ' : ''}{/each}.
-                    <br /><span class="faint small">Services with a <code>build</code> section are built from this repository with their Dockerfile; database containers become managed databases, linked automatically. Secrets the file expects are generated.</span>
+                    <br /><span class="faint small">{t('Services with a')} <code>build</code> {t('section are built from this repository with their Dockerfile; database containers become managed databases, linked automatically. Secrets the file expects are generated.')}</span>
                   </div>
                   {#if detected.compose_plan}
                     {@const cp = detected.compose_plan}
@@ -498,17 +504,17 @@
                           <div class="row nowrap">
                             <Icon name={ps.public ? 'globe' : 'box'} size={14} />
                             <b>{ps.name}</b>
-                            <span class="faint small mono truncate">{ps.dockerfile ?? ps.image}{ps.port ? ` · :${ps.port}` : ''}{ps.public ? ' · public' : ' · private'}{ps.depends_on?.length ? ` · after ${ps.depends_on.join(', ')}` : ''}</span>
+                            <span class="faint small mono truncate">{ps.dockerfile ?? ps.image}{ps.port ? ` · :${ps.port}` : ''} · {ps.public ? t('public') : t('private')}{ps.depends_on?.length ? ` · ${t('after {names}', { names: ps.depends_on.join(', ') })}` : ''}</span>
                           </div>
                           {#if ps.taken}
                             <div class="conflict small">
-                              <span>A service named <b>{ps.name}</b> already exists in this project. Create this one as</span>
-                              <input class="mono name-in" bind:value={renames[ps.name]} aria-label="New name for {ps.name}" spellcheck="false" disabled={importing} />
-                              {#if ps.reached_by?.length}<span class="faint">{ps.reached_by.join(', ')} call{ps.reached_by.length === 1 ? 's' : ''} it <code>{ps.name}</code> in their config: update that too, or delete the existing service first.</span>{/if}
+                              <span>{t('A service named')} <b>{ps.name}</b> {t('already exists in this project. Create this one as')}</span>
+                              <input class="mono name-in" bind:value={renames[ps.name]} aria-label={t('New name for {name}', { name: ps.name })} spellcheck="false" disabled={importing} />
+                              {#if ps.reached_by?.length}<span class="faint">{tn(ps.reached_by.length, '{names} calls it', '{names} call it', { names: ps.reached_by.join(', ') })} <code>{ps.name}</code> {t('in their config: update that too, or delete the existing service first.')}</span>{/if}
                             </div>
                           {/if}
                           {#if ps.links && Object.keys(ps.links).length}
-                            <div class="faint small">{#each Object.entries(ps.links) as [k, db] (k)}<code>{k}</code> ← database <b>{db}</b> {/each}</div>
+                            <div class="faint small">{#each Object.entries(ps.links) as [k, db] (k)}<code>{k}</code> ← {t('database')} <b>{db}</b> {/each}</div>
                           {/if}
                           {#if ps.inputs.length && composeEnv[ps.name]}
                             <EnvInputs inputs={ps.inputs} bind:values={composeEnv[ps.name]} disabled={importing} />
@@ -517,17 +523,17 @@
                       {/each}
                       {#each cp.databases as d (d.name)}
                         <li>
-                          <div class="row nowrap"><Icon name="database" size={14} /><b>{d.name}</b><span class="faint small">managed {d.engine}{d.version ? ' ' + d.version : ''}</span></div>
+                          <div class="row nowrap"><Icon name="database" size={14} /><b>{d.name}</b><span class="faint small">{t('managed {engine}', { engine: d.engine + (d.version ? ' ' + d.version : '') })}</span></div>
                           {#if d.taken}
                             <div class="conflict small">
-                              <span>A database named <b>{d.name}</b> already exists in this project.</span>
+                              <span>{t('A database named')} <b>{d.name}</b> {t('already exists in this project.')}</span>
                               {#if d.existing}
-                                <label class="opt"><input type="radio" bind:group={dbChoice[d.name]} value="existing" disabled={importing} />Use the existing <b>{d.existing.name}</b> ({d.existing.engine} {d.existing.version}) — the services share its data</label>
+                                <label class="opt"><input type="radio" bind:group={dbChoice[d.name]} value="existing" disabled={importing} />{t('Use the existing')} <b>{d.existing.name}</b> ({d.existing.engine} {d.existing.version}) {t('— the services share its data')}</label>
                               {/if}
                               <label class="opt">
                                 {#if d.existing}<input type="radio" bind:group={dbChoice[d.name]} value="new" disabled={importing} />{/if}
-                                Create a new one named
-                                <input class="mono name-in" bind:value={renames[d.name]} aria-label="New name for database {d.name}" spellcheck="false" disabled={importing || dbChoice[d.name] === 'existing'} />
+                                {t('Create a new one named')}
+                                <input class="mono name-in" bind:value={renames[d.name]} aria-label={t('New name for database {name}', { name: d.name })} spellcheck="false" disabled={importing || dbChoice[d.name] === 'existing'} />
                               </label>
                             </div>
                           {/if}
@@ -537,68 +543,68 @@
                   {/if}
                   {#if importWarnings.length}
                     <div class="alert warn small">
-                      <div><b>Created, with warnings</b><ul>{#each importWarnings as w, i (i)}<li>{w}</li>{/each}</ul></div>
+                      <div><b>{t('Created, with warnings')}</b><ul>{#each importWarnings as w, i (i)}<li>{w}</li>{/each}</ul></div>
                     </div>
-                    <a class="btn primary" href={href(`/projects/${projectId}`)}>Open project</a>
+                    <a class="btn primary" href={href(`/projects/${projectId}`)}>{t('Open project')}</a>
                   {:else}
                     <button type="button" class="btn primary" onclick={importAll} disabled={importing}>
-                      {#if importing}<span class="spinner"></span>{/if}Deploy all {detected.compose.services.length} services
+                      {#if importing}<span class="spinner"></span>{/if}{tn(detected.compose.services.length, 'Deploy {n} service', 'Deploy all {n} services')}
                     </button>
                   {/if}
                 </div>
               {/if}
             {:else if detectError}
-              <div class="detect warn">Could not analyze the repository: {detectError}</div>
+              <div class="detect warn">{t('Could not analyze the repository: {error}', { error: detectError })}</div>
             {/if}
-            <label class="check"><input type="checkbox" bind:checked={autoDeploy} />Deploy automatically on push{installationId ? '' : ' (webhook)'}</label>
+            <label class="check"><input type="checkbox" bind:checked={autoDeploy} />{t('Deploy automatically on push')}{installationId ? '' : ' (webhook)'}</label>
           {:else}
             <label class="field">
-              <span>Image</span>
+              <span>{t('Image')}</span>
               <input class="mono" bind:value={image} placeholder="ghcr.io/acme/app:1.2.0" autocomplete="off" spellcheck="false" />
-              <span class="hint">Any public registry image reference.</span>
+              <span class="hint">{t('Any public registry image reference.')}</span>
             </label>
           {/if}
         {:else if step === 1}
           {#if sourceKind === 'git'}
             {#if detecting}
-              <div class="detect"><span class="spinner"></span>Analyzing repository to suggest settings…</div>
+              <div class="detect"><span class="spinner"></span>{t('Analyzing repository to suggest settings…')}</div>
             {:else if detected}
               <div class="detect ok">
                 <Icon name="zap" size={14} />
-                <span>Detected <b>{detected.summary || detected.language}</b>{detected.commit_sha ? ` at ${detected.commit_sha.slice(0, 7)}` : ''} — type{detected.port && type === 'web' ? ' and port' : ''} preselected.{#if detected.prisma}<br />Prisma ({detected.prisma.provider}): <code>{detected.prisma.url_env || 'DATABASE_URL'}</code> is set up automatically{detected.prisma.provider === 'sqlite' ? ' with a persistent volume' : ' with a managed database'}, and {detected.prisma.migrations ? 'migrations run' : 'the schema is pushed'} before the app starts.{/if}</span>
+                <span>{t('Detected')} <b>{detected.summary || detected.language}</b>{detected.commit_sha ? ` ${t('at {sha}', { sha: detected.commit_sha.slice(0, 7) })}` : ''} — {detected.port && type === 'web' ? t('type and port preselected.') : t('type preselected.')}{#if detected.prisma}<br />Prisma ({detected.prisma.provider}): <code>{detected.prisma.url_env || 'DATABASE_URL'}</code> {detected.prisma.provider === 'sqlite' ? t('is set up automatically with a persistent volume,') : t('is set up automatically with a managed database,')} {detected.prisma.migrations ? t('and migrations run before the app starts.') : t('and the schema is pushed before the app starts.')}{/if}</span>
               </div>
             {:else if detectError}
-              <div class="detect warn">Could not analyze the repository: {detectError}</div>
+              <div class="detect warn">{t('Could not analyze the repository: {error}', { error: detectError })}</div>
             {/if}
           {/if}
           <fieldset>
-            <legend class="label">Service type</legend>
+            <legend class="label">{t('Service type')}</legend>
             <div class="types">
-              {#each types as t (t.id)}
-                <label class="type" class:sel={type === t.id}>
-                  <input type="radio" bind:group={type} value={t.id} onchange={() => (typeTouched = true)} />
-                  <Icon name={t.icon} size={18} />
-                  <span><b>{t.label}</b><br /><span class="faint small">{t.desc}</span></span>
+              {#each types as ty (ty.id)}
+                <label class="type" class:sel={type === ty.id}>
+                  <input type="radio" bind:group={type} value={ty.id} onchange={() => (typeTouched = true)} />
+                  <Icon name={ty.icon} size={18} />
+                  <span><b>{ty.label}</b><br /><span class="faint small">{ty.desc}</span></span>
                 </label>
               {/each}
             </div>
           </fieldset>
           <div class="grid-2">
             <label class="field">
-              <span>Name</span>
+              <span>{t('Name')}</span>
               <input bind:value={name} oninput={() => (nameTouched = true)} placeholder="api" maxlength="40" />
-              {#if type !== 'cron'}<span class="hint">Internal host: <code>{(name || 'name').toLowerCase()}.{project.project.slug}.internal</code></span>{/if}
+              {#if type !== 'cron'}<span class="hint">{t('Internal host:')} <code>{(name || 'name').toLowerCase()}.{project.project.slug}.internal</code></span>{/if}
             </label>
             {#if type === 'web'}
               <label class="field">
-                <span>Port</span>
+                <span>{t('Port')}</span>
                 <input type="number" bind:value={port} min="1" max="65535" oninput={() => (portTouched = true)} />
-                <span class="hint">The port your app listens on (also exported as <code>PORT</code>).</span>
+                <span class="hint">{t('The port your app listens on')} ({t('also exported as')} <code>PORT</code>).</span>
               </label>
             {/if}
           </div>
           <fieldset>
-            <legend class="label">Size</legend>
+            <legend class="label">{t('Size')}</legend>
             <div class="sizes">
               {#each sizes as s (s.name)}
                 <label class="size" class:sel={size === s.name}>
@@ -611,8 +617,13 @@
             </div>
             {#if selectedSize}
               <p class="hint" style="margin-top:6px">
-                Limit {mb(selectedSize.memory_limit_mb)} RAM / {cpu(selectedSize.cpu_limit_millis)} CPU · reserved {mb(selectedSize.memory_request_mb)} / {cpu(selectedSize.cpu_request_millis)} (burstable).
-                {#if type === 'static'}Used for the build only.{/if}
+                {t('Limit {memory} RAM / {cpu} CPU · reserved {memoryReserved} / {cpuReserved} (burstable).', {
+                  memory: mb(selectedSize.memory_limit_mb),
+                  cpu: cpu(selectedSize.cpu_limit_millis),
+                  memoryReserved: mb(selectedSize.memory_request_mb),
+                  cpuReserved: cpu(selectedSize.cpu_request_millis),
+                })}
+                {#if type === 'static'}{t('Used for the build only.')}{/if}
               </p>
             {/if}
           </fieldset>
@@ -620,12 +631,12 @@
             <div class="sleep stack">
               <CronField bind:value={schedule} />
               <label class="field">
-                <span>Command <span class="faint">(optional)</span></span>
+                <span>{t('Command')} <span class="faint">{t('(optional)')}</span></span>
                 <input class="mono" bind:value={jobCommand} placeholder="node scripts/report.js" spellcheck="false" />
-                <span class="hint">Runs with <code>/bin/sh -c</code>. Leave empty to use the image's default command.</span>
+                <span class="hint">{t('Runs with')} <code>/bin/sh -c</code>. {t("Leave empty to use the image's default command.")}</span>
               </label>
               <label class="field" style="max-width:220px">
-                <span>Timeout (seconds)</span>
+                <span>{t('Timeout (seconds)')}</span>
                 <input type="number" min="1" max="86400" bind:value={jobTimeout} />
               </label>
             </div>
@@ -634,18 +645,18 @@
             <AutoscaleFields bind:value={autoscale} />
             {#if sourceKind === 'git'}
               <div class="sleep">
-                <label class="check"><input type="checkbox" bind:checked={previews} />Preview deployments for pull requests</label>
-                <p class="hint">Each PR targeting <code>{branch || 'main'}</code> gets its own service and URL, sleeps when idle and is deleted when the PR closes. {installationId ? 'Handled by the GitHub App.' : 'Requires the GitHub webhook with the pull_request event.'}</p>
+                <label class="check"><input type="checkbox" bind:checked={previews} />{t('Preview deployments for pull requests')}</label>
+                <p class="hint">{t('Each PR targeting')} <code>{branch || 'main'}</code> {t('gets its own service and URL, sleeps when idle and is deleted when the PR closes.')} {installationId ? t('Handled by the GitHub App.') : t('Requires the GitHub webhook with the pull_request event.')}</p>
               </div>
             {/if}
           {/if}
           {#if type === 'web' && !autoscale.enabled}
             <div class="sleep">
-              <label class="check"><input type="checkbox" bind:checked={sleepEnabled} />Sleep when idle</label>
-              <p class="hint">Stops instances after a period without requests and wakes on the next request (a cold start of a few seconds).</p>
+              <label class="check"><input type="checkbox" bind:checked={sleepEnabled} />{t('Sleep when idle')}</label>
+              <p class="hint">{t('Stops instances after a period without requests and wakes on the next request (a cold start of a few seconds).')}</p>
               {#if sleepEnabled}
                 <label class="field" style="max-width:200px;margin-top:8px">
-                  <span>Idle minutes</span>
+                  <span>{t('Idle minutes')}</span>
                   <input type="number" min="1" max="1440" bind:value={idleMinutes} />
                 </label>
               {/if}
@@ -654,19 +665,19 @@
         {:else}
           <div class="stack">
             <div>
-              <h3>Environment variables</h3>
-              <p class="hint">Encrypted at rest. Paste a .env file to import many at once.</p>
+              <h3>{t('Environment variables')}</h3>
+              <p class="hint">{t('Encrypted at rest. Paste a .env file to import many at once.')}</p>
             </div>
             {#if detected?.env?.length}
               <div class="compose">
                 <div class="small">
-                  Read <code>{detected.env_file}</code>: defaults and generated secrets are filled in below{exampleInputs.length ? '; fill in what only you know' : ''}.
+                  {t('Read')} <code>{detected.env_file}</code>: {exampleInputs.length ? t('defaults and generated secrets are filled in below; fill in what only you know.') : t('defaults and generated secrets are filled in below.')}
                 </div>
                 {#if exampleInputs.length}<EnvInputs inputs={exampleInputs} bind:values={exampleValues} />{/if}
                 {#each exampleNotes as n (n.key)}
                   <div class="faint small">
                     <code>{n.key}</code>
-                    {#if n.kind === 'database'}expects a {n.value} database: create one in the project and link it as <code>{n.key}</code>{detected.prisma ? ' (Prisma: done automatically)' : ''}.{:else}points at localhost: set it to this service's public URL{n.value ? ` + ${n.value}` : ''} after it is created.{/if}
+                    {#if n.kind === 'database'}{t('expects a {engine} database: create one in the project and link it as', { engine: n.value })} <code>{n.key}</code>{detected.prisma ? ` ${t('(Prisma: done automatically)')}` : ''}.{:else}{t("points at localhost: set it to this service's public URL{suffix} after it is created.", { suffix: n.value ? ` + ${n.value}` : '' })}{/if}
                   </div>
                 {/each}
               </div>
@@ -676,26 +687,26 @@
           {#if type === 'web' || type === 'static'}
             <hr style="margin:0" />
             <label class="field">
-              <span>Custom domain <span class="faint">(optional)</span></span>
+              <span>{t('Custom domain')} <span class="faint">{t('(optional)')}</span></span>
               <input class="mono" bind:value={domain} placeholder="app.example.com" spellcheck="false" />
-              <span class="hint">A generated <code>*.{project.project.slug}…</code> domain is always added. For a custom one, point an A record to your edge node.</span>
+              <span class="hint">{t('A generated')} <code>*.{project.project.slug}…</code> {t('domain is always added.')} {t('For a custom one, point an A record to your edge node.')}</span>
             </label>
           {/if}
           <div class="summary">
-            <div class="section-title" style="margin-bottom:6px">Summary</div>
+            <div class="section-title" style="margin-bottom:6px">{t('Summary')}</div>
             <dl class="kv">
-              <dt>Source</dt><dd class="mono small">{sourceKind === 'git' ? `${picked ? picked.full_name : repo}@${branch || 'main'}${rootDir ? ' /' + rootDir : ''}` : image}</dd>
-              {#if detected}<dt>Detected</dt><dd>{detected.summary}</dd>{/if}
-              <dt>Type</dt><dd>{type}</dd>
-              <dt>Name</dt><dd>{name}</dd>
-              <dt>Size</dt><dd>{size}{selectedSize ? ` (${mb(selectedSize.memory_limit_mb)}, ${cpu(selectedSize.cpu_limit_millis)})` : ''}</dd>
+              <dt>{t('Source')}</dt><dd class="mono small">{sourceKind === 'git' ? `${picked ? picked.full_name : repo}@${branch || 'main'}${rootDir ? ' /' + rootDir : ''}` : image}</dd>
+              {#if detected}<dt>{t('Detected')}</dt><dd>{detected.summary}</dd>{/if}
+              <dt>{t('Type')}</dt><dd>{types.find((ty) => ty.id === type)?.label ?? type}</dd>
+              <dt>{t('Name')}</dt><dd>{name}</dd>
+              <dt>{t('Size')}</dt><dd>{size}{selectedSize ? ` (${mb(selectedSize.memory_limit_mb)}, ${cpu(selectedSize.cpu_limit_millis)})` : ''}</dd>
               {#if type === 'web'}
-                <dt>Port</dt><dd>{port}</dd>
-                <dt>Scaling</dt><dd>{autoscale.enabled ? `autoscale ${autoscale.min}–${autoscale.max}` : sleepEnabled ? `sleep after ${idleMinutes} min idle` : '1 replica'}</dd>
-                {#if previews && sourceKind === 'git'}<dt>PR previews</dt><dd>on</dd>{/if}
+                <dt>{t('Port')}</dt><dd>{port}</dd>
+                <dt>{t('Scaling')}</dt><dd>{autoscale.enabled ? t('autoscale {min}–{max}', { min: autoscale.min, max: autoscale.max }) : sleepEnabled ? t('sleep after {n} min idle', { n: idleMinutes }) : t('1 replica')}</dd>
+                {#if previews && sourceKind === 'git'}<dt>{t('PR previews')}</dt><dd>{t('on')}</dd>{/if}
               {/if}
-              {#if type === 'cron'}<dt>Schedule</dt><dd class="mono small">{schedule} (UTC)</dd>{/if}
-              <dt>Variables</dt><dd>{Object.keys(rowsToMap(envRows)).length}</dd>
+              {#if type === 'cron'}<dt>{t('Schedule')}</dt><dd class="mono small">{schedule} (UTC)</dd>{/if}
+              <dt>{t('Variables')}</dt><dd>{Object.keys(rowsToMap(envRows)).length}</dd>
             </dl>
           </div>
         {/if}
@@ -703,15 +714,15 @@
       </div>
       <div class="actions">
         {#if step > 0}
-          <button type="button" onclick={() => ((step -= 1), (error = ''))}><Icon name="arrowleft" size={14} />Back</button>
+          <button type="button" onclick={() => ((step -= 1), (error = ''))}><Icon name="arrowleft" size={14} />{t('Back')}</button>
         {:else}
-          <a class="btn" href={href(`/projects/${projectId}`)}>Cancel</a>
+          <a class="btn" href={href(`/projects/${projectId}`)}>{t('Cancel')}</a>
         {/if}
         <div class="spacer"></div>
         {#if step < steps.length - 1}
-          <button type="submit" class="primary">Continue<Icon name="chevron" size={14} /></button>
+          <button type="submit" class="primary">{t('Continue')}<Icon name="chevron" size={14} /></button>
         {:else}
-          <button type="submit" class="primary" disabled={busy}>{#if busy}<span class="spinner"></span>{:else}<Icon name="rocket" size={14} />{/if}Create and deploy</button>
+          <button type="submit" class="primary" disabled={busy}>{#if busy}<span class="spinner"></span>{:else}<Icon name="rocket" size={14} />{/if}{t('Create and deploy')}</button>
         {/if}
       </div>
     </form>
