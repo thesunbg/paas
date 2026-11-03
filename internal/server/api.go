@@ -224,6 +224,9 @@ func (s *Server) routes() http.Handler {
 	h("GET /api/v1/admin/state-backups", s.handleListStateBackups)
 	h("POST /api/v1/admin/state-backups", s.handleCreateStateBackup)
 	h("GET /api/v1/admin/state-backups/{name}", s.handleDownloadStateBackup)
+	h("GET /api/v1/admin/setup-checklist", s.handleGetSetupChecklist)
+	h("PUT /api/v1/admin/setup-checklist", s.handlePutSetupChecklist)
+	h("POST /api/v1/admin/setup-checklist/{step}/check", s.handleCheckSetupStep)
 	h("GET /api/v1/admin/ai", s.handleGetAI)
 	h("PUT /api/v1/admin/ai", s.handlePutAI)
 

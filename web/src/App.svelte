@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api, errorMessage, setUnauthorizedHandler, type SetupStatus } from './lib/api';
   import { session, loadMe } from './lib/session.svelte';
-  import { route } from './lib/router.svelte';
+  import { route, navigate } from './lib/router.svelte';
   import Layout from './components/Layout.svelte';
   import Toasts from './components/Toasts.svelte';
   import ConfirmHost from './components/ConfirmHost.svelte';
@@ -16,6 +16,7 @@
   import Nodes from './pages/Nodes.svelte';
   import Batches from './pages/Batches.svelte';
   import Settings from './pages/Settings.svelte';
+  import Setup from './pages/Setup.svelte';
   import NotFound from './pages/NotFound.svelte';
   import DeploymentRedirect from './pages/DeploymentRedirect.svelte';
 
@@ -35,6 +36,7 @@
       try {
         await loadMe();
         phase = 'app';
+        openSetupIfPending();
       } catch (e) {
         if ((e as { status?: number }).status === 401) phase = 'auth';
         else throw e;
@@ -58,6 +60,12 @@
     await loadMe();
     phase = 'app';
     if (!location.hash || location.hash === '#/' || location.hash === '#') location.hash = '#/';
+    openSetupIfPending();
+  }
+
+  // The instance administrator lands on the setup wizard until it is finished or skipped.
+  function openSetupIfPending() {
+    if (session.me?.user.is_admin && session.me.setup_pending && route.parts[0] !== 'setup' && route.parts[0] !== 'settings') navigate('/setup', true);
   }
 
   const p = $derived(route.parts);
@@ -65,7 +73,7 @@
 
   $effect(() => {
     // Keep the document title in sync with the section.
-    const names: Record<string, string> = { projects: 'Projects', nodes: 'Nodes', batches: 'Batches', settings: 'Settings', services: 'Service', databases: 'Database' };
+    const names: Record<string, string> = { setup: 'Setup', projects: 'Projects', nodes: 'Nodes', batches: 'Batches', settings: 'Settings', services: 'Service', databases: 'Database' };
     document.title = phase === 'app' ? `${names[section] ?? 'Dashboard'} · PaaS` : 'Sign in · PaaS';
   });
 </script>
@@ -82,6 +90,8 @@
   </div>
 {:else if phase === 'auth' && setup}
   <Login {setup} onauthed={onAuthed} />
+{:else if phase === 'app' && session.me && p[0] === 'setup' && session.me.user.is_admin}
+  <Setup step={p[1]} />
 {:else if phase === 'app' && session.me}
   <Layout {section} onlogout={() => (phase = 'auth')}>
     {#key p.slice(0, 2).join('/')}
