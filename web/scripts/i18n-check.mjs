@@ -41,14 +41,22 @@ for (const file of walk(root)) {
 for (const u of ['s', 'min', 'h', 'd', 'mo', 'y']) used.set(u, 'lib/format.ts');
 
 const dict = {};
-for (const name of readdirSync(dictDir).filter((n) => n.endsWith('.json'))) {
+const from = {}; // key -> dictionary file that defined it
+for (const name of readdirSync(dictDir).filter((n) => n.endsWith('.json')).sort()) {
   const d = JSON.parse(readFileSync(join(dictDir, name), 'utf8'));
   for (const [k, v] of Object.entries(d)) {
     if (typeof v !== 'string' || v.trim() === '') {
       console.error(`${name}: empty translation for ${JSON.stringify(k)}`);
       process.exitCode = 1;
     }
+    // The files are merged into one map: the same key translated differently in two
+    // files would silently depend on the merge order.
+    if (k in dict && dict[k] !== v) {
+      console.log(`conflict ${JSON.stringify(k)}: ${from[k]} ${JSON.stringify(dict[k])} vs ${name} ${JSON.stringify(v)}`);
+      process.exitCode = 1;
+    }
     dict[k] = v;
+    from[k] = name;
   }
 }
 
