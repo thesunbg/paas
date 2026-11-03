@@ -70,6 +70,7 @@ PAAS_REPO="${PAAS_REPO:-thesunbg/paas}"
 trap 'rc=$?; if [ $rc -ne 0 ]; then printf "\033[1;31merror:\033[0m installation failed (exit %s); rerun with sh -x to see where\n" "$rc" >&2; fi' EXIT
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
 [ "$(uname -s)" = Linux ] || die "Linux is required"
@@ -116,7 +117,10 @@ install_packages() {
   fi
 }
 
-# install_trivy puts the image scanner on a build node. paas-agent runs it on the
+# install_trivy puts the image scanner on a build node. It is optional: when the
+# download or its checksum fails, the node is installed without it (deploys then
+# record "vulnerability scan skipped"; a project with the block policy refuses to
+# deploy) and the installation carries on. paas-agent runs it on the
 # host against an exported image archive, offline: it only downloads its
 # vulnerability DB (cached in /var/lib/paas/trivy, refreshed at most every 12 h).
 install_trivy() {
@@ -127,15 +131,22 @@ install_trivy() {
   name="trivy_${TRIVY_VERSION}_Linux-${tarch}.tar.gz"
   base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
   log "installing Trivy $TRIVY_VERSION (image vulnerability scanner)"
-  fetch "$base/$name" "$1/$name"
+  if ! fetch "$base/$name" "$1/$name"; then
+    warn "could not download Trivy $TRIVY_VERSION ($base/$name): continuing without the image scanner; set TRIVY_VERSION to another release, or pass --no-trivy"
+    return 0
+  fi
   if [ -n "$TRIVY_SHA256" ]; then
     want="$TRIVY_SHA256"
-  else
-    fetch "$base/trivy_${TRIVY_VERSION}_checksums.txt" "$1/trivy-checksums.txt"
+  elif fetch "$base/trivy_${TRIVY_VERSION}_checksums.txt" "$1/trivy-checksums.txt"; then
     want=$(awk -v n="$name" '$2 == n {print $1}' "$1/trivy-checksums.txt")
+  else
+    want=""
   fi
   got=$(sha256sum "$1/$name" | awk '{print $1}')
-  [ -n "$want" ] && [ "$got" = "$want" ] || die "Trivy $name: checksum mismatch (got $got, want ${want:-none}); rerun with --no-trivy to skip"
+  if [ -z "$want" ] || [ "$got" != "$want" ]; then
+    warn "Trivy $name: checksum mismatch (got $got, want ${want:-none}): not installed, continuing without the image scanner"
+    return 0
+  fi
   tar -xzf "$1/$name" -C "$1" trivy
   install -m 0755 "$1/trivy" /usr/local/bin/trivy
 }
