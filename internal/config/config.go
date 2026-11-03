@@ -10,27 +10,28 @@ import (
 )
 
 type Server struct {
-	DatabaseURL     string // PAAS_DATABASE_URL
-	HTTPAddr        string // PAAS_HTTP_ADDR, API + dashboard
-	NATSAddr        string // PAAS_NATS_ADDR, listener for agents and proxies
-	NATSAdvertise   string // PAAS_NATS_ADVERTISE, host:port nodes dial for it (default: public URL host + NATSAddr port)
-	NATSLegacy      bool   // PAAS_NATS_LEGACY_TOKEN=1: accept the shared cluster token as a full-permission NATS credential (cutover only)
-	DataDir         string // PAAS_DATA_DIR
-	MasterKey       string // PAAS_MASTER_KEY (hex, optional; otherwise <data>/master.key)
-	BaseDomain      string // PAAS_BASE_DOMAIN, generated app domains are <svc>-<project>.<base>
-	DashboardDomain string // PAAS_DASHBOARD_DOMAIN, served by the proxy to the API
-	PublicURL       string // PAAS_PUBLIC_URL, used in webhook URLs and links
-	ClusterToken    string // PAAS_CLUSTER_TOKEN (optional; generated and stored otherwise)
-	AllowLocalGit   bool   // PAAS_ALLOW_LOCAL_GIT, allow file:// repos (dev / testing)
-	ImageRetention  int    // PAAS_IMAGE_RETENTION, deployments kept per service for rollback
-	ClusterBase     string // PAAS_CLUSTER_BASE, first two octets of the container address space (default 10.100)
-	S3              S3     // off-site backups
-	DBHost          string // PAAS_DB_HOST, public host for external database access (default db.<base>)
-	StudioRepo      string // PAAS_STUDIO_REPO, git repository of the DB studio (dbweb)
-	StudioBranch    string // PAAS_STUDIO_BRANCH
-	DBPortMin       int    // PAAS_DB_PORT_MIN, first public port for databases (default 20000)
-	DBPortMax       int    // PAAS_DB_PORT_MAX (default 20999)
-	MetricsToken    string // PAAS_METRICS_TOKEN, bearer token for GET /metrics (Prometheus); admins can always use their own token
+	DatabaseURL     string   // PAAS_DATABASE_URL
+	HTTPAddr        string   // PAAS_HTTP_ADDR, API + dashboard
+	NATSAddr        string   // PAAS_NATS_ADDR, listener for agents and proxies
+	NATSAdvertise   string   // PAAS_NATS_ADVERTISE, host:port nodes dial for it (default: public URL host + NATSAddr port)
+	NATSLegacy      bool     // PAAS_NATS_LEGACY_TOKEN=1: accept the shared cluster token as a full-permission NATS credential (cutover only)
+	DataDir         string   // PAAS_DATA_DIR
+	MasterKey       string   // PAAS_MASTER_KEY (hex, optional; otherwise <data>/master.key)
+	BaseDomain      string   // PAAS_BASE_DOMAIN, generated app domains are <svc>-<project>.<base>
+	DashboardDomain string   // PAAS_DASHBOARD_DOMAIN, served by the proxy to the API
+	PublicURL       string   // PAAS_PUBLIC_URL, used in webhook URLs and links
+	ClusterToken    string   // PAAS_CLUSTER_TOKEN (optional; generated and stored otherwise)
+	AllowLocalGit   bool     // PAAS_ALLOW_LOCAL_GIT, allow file:// repos (dev / testing)
+	ImageRetention  int      // PAAS_IMAGE_RETENTION, deployments kept per service for rollback
+	ClusterBase     string   // PAAS_CLUSTER_BASE, first two octets of the container address space (default 10.100)
+	S3              S3       // off-site backups
+	DBHost          string   // PAAS_DB_HOST, public host for external database access (default db.<base>)
+	StudioRepo      string   // PAAS_STUDIO_REPO, git repository of the DB studio (dbweb)
+	StudioBranch    string   // PAAS_STUDIO_BRANCH
+	DBPortMin       int      // PAAS_DB_PORT_MIN, first public port for databases (default 20000)
+	DBPortMax       int      // PAAS_DB_PORT_MAX (default 20999)
+	MetricsToken    string   // PAAS_METRICS_TOKEN, bearer token for GET /metrics (Prometheus); admins can always use their own token
+	PublicIPs       []string // PAAS_PUBLIC_IPS, comma separated public IPs of the edge (setup checklist DNS check; default: node addresses)
 
 	// High availability: several control planes share PostgreSQL and form a NATS cluster.
 	ServerName    string   // PAAS_SERVER_NAME (unique per control plane)
@@ -135,6 +136,7 @@ func LoadServer() Server {
 		PublicURL:       strings.TrimRight(env("PAAS_PUBLIC_URL", "http://paas."+base), "/"),
 		ClusterToken:    env("PAAS_CLUSTER_TOKEN", ""),
 		MetricsToken:    env("PAAS_METRICS_TOKEN", ""),
+		PublicIPs:       splitList(env("PAAS_PUBLIC_IPS", "")),
 		AllowLocalGit:   envBool("PAAS_ALLOW_LOCAL_GIT", false),
 		ImageRetention:  envInt("PAAS_IMAGE_RETENTION", 3),
 		DBHost:          env("PAAS_DB_HOST", "db."+base),

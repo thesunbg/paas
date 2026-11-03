@@ -216,7 +216,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"user": u, "teams": teams})
+	out := map[string]any{"user": u, "teams": teams}
+	if u.IsAdmin {
+		// The dashboard opens the first-run setup wizard while this is true.
+		prog, err := s.setupProgress(r.Context())
+		out["setup_pending"] = err == nil && prog.pending()
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {

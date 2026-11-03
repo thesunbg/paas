@@ -213,6 +213,8 @@ Usage:
                                        Same for every service with volumes of a lost node (admin)
   paas join-command [--roles r1,r2]    Print a single-use command to add a node (admin; roles default to worker)
   paas quota [show]                    The team's usage against its quota
+  paas doctor [--refresh] [-v]         First-run setup checklist: DNS, HTTPS, ports, Git, backups,
+                                       notifications (admin; exits 1 when a step fails)
 
 Global flags via env: PAAS_SERVER, PAAS_TOKEN, PAAS_PROJECT.
 `)
@@ -298,6 +300,8 @@ func main() {
 		err = cmdJoinCommand(rest)
 	case "quota":
 		err = cmdQuota(rest)
+	case "doctor":
+		err = cmdDoctor(rest)
 	default:
 		usage()
 		os.Exit(2)

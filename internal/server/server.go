@@ -99,6 +99,8 @@ type Server struct {
 	ha          haMemory // leader-only HA observations, guarded by haMu
 
 	uptime uptimeRunner // uptime checks in flight (uptime.go)
+
+	setup setupState // first-run setup checklist: probes and cached results (setup_checklist.go)
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.

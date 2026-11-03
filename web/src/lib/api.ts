@@ -33,6 +33,8 @@ export interface Team {
 export interface Me {
   user: User;
   teams: Team[];
+  /** Administrators only: the first-run setup wizard is neither finished nor dismissed. */
+  setup_pending?: boolean;
 }
 
 export interface SetupStatus {
@@ -534,6 +536,37 @@ export interface BackupHealth {
   verify_note?: string;
   offsite: boolean;
   message?: string;
+}
+
+export type SetupStatusLevel = 'ok' | 'warn' | 'fail';
+export type SetupStepId = 'admin' | 'dns' | 'https' | 'ports' | 'github' | 'backups' | 'notifications' | 'first_app';
+
+/** One step of the first-run setup checklist with the result of its check. */
+export interface SetupStep {
+  id: SetupStepId;
+  title: string;
+  howto: string;
+  status: SetupStatusLevel;
+  summary: string;
+  details?: string[];
+  records?: { name: string; type: string; value: string }[];
+  info?: Record<string, unknown>;
+  checked_at: string;
+  skipped: boolean;
+  completed: boolean;
+}
+
+export interface SetupProgress {
+  dismissed: boolean;
+  finished: boolean;
+  completed: SetupStepId[];
+  skipped: SetupStepId[];
+  updated_at?: string;
+  pending: boolean;
+}
+
+export interface SetupChecklist extends SetupProgress {
+  steps: SetupStep[];
 }
 
 export interface StorageSettings {
@@ -1491,6 +1524,10 @@ export const api = {
   putAISettings: (input: AIInput) => put<AISettings>('/admin/ai', input),
   storage: () => get<StorageSettings>('/admin/storage'),
   putStorage: (input: StorageInput) => put<StorageSettings>('/admin/storage', input),
+  setupChecklist: (refresh = false) => get<SetupChecklist>(`/admin/setup-checklist${refresh ? '?refresh=1' : ''}`),
+  checkSetupStep: (step: SetupStepId) => post<SetupStep>(`/admin/setup-checklist/${e(step)}/check`),
+  putSetupChecklist: (input: { dismissed?: boolean; finished?: boolean; completed?: SetupStepId[]; skipped?: SetupStepId[] }) =>
+    put<SetupProgress>('/admin/setup-checklist', input),
   stateBackups: () => get<StateBackups>('/admin/state-backups'),
   stateBackupNow: () => post<StateBackupRun>('/admin/state-backups'),
   stateBackupURL: (name: string) => `${BASE}/admin/state-backups/${e(name)}`,

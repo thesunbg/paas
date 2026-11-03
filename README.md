@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/thesunbg/paas/main/internal/install
   | sudo sh -s -- server --domain apps.example.com --email you@example.com
 ```
 
-Use `--https` instead of `--email` for automatic HTTPS without an email. Point DNS for `*.apps.example.com` and `paas.apps.example.com` at the server. Changing `--domain` later and re-running the script moves the generated app domains and the GitHub App webhook to the new domain. Then open `https://paas.apps.example.com` and create the administrator account. The script installs:
+Use `--https` instead of `--email` for automatic HTTPS without an email. Point DNS for `*.apps.example.com` and `paas.apps.example.com` at the server. Changing `--domain` later and re-running the script moves the generated app domains and the GitHub App webhook to the new domain. Then open `https://paas.apps.example.com` and create the administrator account: a setup wizard follows and checks DNS, HTTPS, ports, Git, off-site backups, notifications and a first deploy, with a how-to for each (re-open it from *Settings → System → Setup checklist*). Over SSH, `paas doctor` prints the same checklist. The script installs:
 - containerd 2, crun, runc, the CNI plugins and BuildKit;
 - PostgreSQL for the control-plane state;
 - zram and kernel tuning;
@@ -132,6 +132,7 @@ The installer sets up an extra control plane with `server --database-url … --m
 | `PAAS_CLUSTER_BASE` | `10.100` | container address space (node *n* gets `10.(100+n).0.0/16`) |
 | `PAAS_WG_PORT` / `PAAS_MESH` | `51820` / `true` | WireGuard mesh |
 | `PAAS_IMAGE_RETENTION` | `3` | deployments kept per service for rollback |
+| `PAAS_PUBLIC_IPS` | node addresses | public IPs DNS should point to (setup checklist), comma separated; set it behind NAT |
 | `PAAS_METRICS_TOKEN` | | bearer token for the Prometheus endpoint `GET /metrics` (administrators can also use their own API token) |
 | `PAAS_UPTIME_ALLOW_PRIVATE` | `false` | let uptime checks reach private addresses (trusted networks) |
 | `PAAS_S3_ENDPOINT`, `PAAS_S3_BUCKET`, `PAAS_S3_ACCESS_KEY`, `PAAS_S3_SECRET_KEY`, `PAAS_S3_REGION`, `PAAS_S3_PREFIX` | | off-site database backups |

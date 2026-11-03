@@ -14,6 +14,7 @@
   import GitHub from './settings/GitHub.svelte';
   import GitCredentials from './settings/GitCredentials.svelte';
   import System from './settings/System.svelte';
+  import SetupChecklist from './settings/SetupChecklist.svelte';
   import Users from './settings/Users.svelte';
   import GitHubSignIn from './settings/GitHubSignIn.svelte';
   import SSOSignIn from './settings/SSOSignIn.svelte';
@@ -321,7 +322,10 @@
       {:else if tab === 'ai' && session.me?.user.is_admin}
         <AI />
       {:else if tab === 'system' && session.me?.user.is_admin}
-        <System />
+        <div class="stack-lg">
+          <SetupChecklist />
+          <System />
+        </div>
       {:else}
         <p class="muted">Unknown section.</p>
       {/if}

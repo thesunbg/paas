@@ -19,7 +19,7 @@ AI agents can also use the [MCP endpoint](MCP.md) at `POST /mcp` (same API token
 | POST | `/auth/register` | `{email, password, name}` | `{user, token}`. The first user becomes administrator; later signups need `allow_signup` |
 | POST | `/auth/login` | `{email, password}` | `{user, token}`. 403 `{error, sso}` when single sign-on is enforced for the email's domain |
 | POST | `/auth/logout` | | |
-| GET | `/me` | | `{user, teams: [{id, name, slug, role}]}` |
+| GET | `/me` | | `{user, teams: [{id, name, slug, role}], setup_pending?}`; `setup_pending` (administrators only) is true until the setup wizard is finished or skipped |
 | POST | `/me/password` | `{current, new}` | |
 | GET/POST | `/tokens` | `{name}` | POST returns `{token, info}` once |
 | DELETE | `/tokens/{id}` | | |
@@ -294,6 +294,24 @@ instance owner (the first administrator), whose password stays as a break-glass 
 | GET | `/api/v1/admin/state-backups/{name}` | download a sealed backup (restore with `paasd restore-state --file`) |
 | GET/PUT | `/api/v1/admin/ai` | AI failure diagnosis provider `{provider, model, base_url, api_key}` (provider `anthropic`, `openai` or empty) → `{enabled, provider, model, base_url, has_key, default_model}`. `anthropic`: Messages API, key required, model defaults to `claude-sonnet-5-5`, `base_url` optional; `openai`: any OpenAI-compatible `/chat/completions` endpoint (`base_url` like `http://ollama:11434/v1`, model required, key optional). The key is stored encrypted and never returned; an empty `api_key` keeps the stored one; an empty provider turns AI off |
 | PUT | `/api/v1/admin/settings` | `{allow_signup?, limits?: {max_projects, max_services, max_databases, max_memory_mb, max_replicas, max_signups_per_ip_per_day}, quota?: TeamQuota}` (0 = unlimited); `quota` is the default team quota |
+
+## Setup checklist (administrators)
+
+The first-run wizard in the dashboard (and `paas doctor`) is backed by these. Steps, in order:
+`admin` (2FA on the caller's account), `dns` (`*.<base>` probed with a random label, and the dashboard
+domain, resolved for A and AAAA and compared with `PAAS_PUBLIC_IPS`, else the addresses of edge nodes and
+of this host's node; `records` lists what to create), `https` (TLS dial to the dashboard domain with SNI,
+falling back to the local edge proxy: expiry, host name, trust), `ports` (80 / 443 listening on this host
+and on edge nodes), `github`, `backups` (off-site S3 upload / download / delete), `notifications`
+(channels in administrators' teams), `first_app` (a deployed service outside the system project).
+Each step: `{id, title, howto, status: ok|warn|fail, summary, details?, records?: [{name, type, value}], info?, checked_at, skipped, completed}`.
+Checks run concurrently, at most 8 s each, and results are cached for 30 s.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/admin/setup-checklist[?refresh=1]` | `{dismissed, finished, completed: [step], skipped: [step], updated_at, pending, steps: [...]}`; `refresh=1` runs every check again |
+| POST | `/api/v1/admin/setup-checklist/{step}/check` | runs one check again (bypasses the cache) and returns the step |
+| PUT | `/api/v1/admin/setup-checklist` | `{dismissed?, finished?, completed?: [step], skipped?: [step]}`; fields left out are kept. Stored per instance (settings table) |
 
 With sign-up on, anyone can register at `/#/signup` and gets a personal team. Limits apply to every
 non-administrator; requests over a limit return 403, too many sign-ups from one IP return 429.

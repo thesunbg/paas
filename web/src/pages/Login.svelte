@@ -74,7 +74,7 @@
     </h1>
     <p class="muted sub">
       {#if isSetup}
-        This is a fresh installation. The first account becomes the platform administrator.
+        This is a fresh installation. The first account becomes the platform administrator; a short setup wizard follows.
       {:else if mode === 'register'}
         Sign up for an account on {setup.base_domain || 'this platform'}.
       {:else}
