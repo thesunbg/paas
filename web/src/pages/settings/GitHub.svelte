@@ -59,7 +59,7 @@
   }
 
   async function removeApp() {
-    if (!(await confirmDialog({ title: 'Disconnect GitHub App', message: 'Services using it can no longer clone or receive pushes until a new app is created. Delete the app on GitHub too.', confirmLabel: 'Disconnect', danger: true }))) return;
+    if (!(await confirmDialog({ title: 'Disconnect GitHub App', message: 'Services using it can no longer clone or receive pushes until a new app is created and the GitHub accounts are connected to it again (their links to this app are removed). Delete the app on GitHub too.', confirmLabel: 'Disconnect', danger: true }))) return;
     try {
       await api.deleteGitHubApp();
       await load();

@@ -374,7 +374,7 @@ their GitHub accounts/organizations and pick repositories from a list.
 | GET | `/api/v1/github/app` | Status of the app (`configured`, `slug`, `html_url`) |
 | POST | `/api/v1/github/app/manifest` | Admin. `{organization?}` → `{action_url, manifest}`; the browser POSTs `manifest` as a form field to `action_url` |
 | GET | `/api/v1/github/app/callback` | GitHub redirects here after creating the app (stores its keys encrypted) |
-| DELETE | `/api/v1/github/app` | Admin. Forget the app |
+| DELETE | `/api/v1/github/app` | Admin. Forget the app and the installations linked to it (teams connect their GitHub accounts again to the next app); delete the app on GitHub too |
 | GET | `/api/v1/teams/{team}/github` | Connected installations and a signed `install_url` |
 | GET | `/api/v1/github/installed` | GitHub redirects here after installing; the OAuth code proves the user can access the installation |
 | GET | `/api/v1/teams/{team}/github/repos` | Repositories granted to the team's installations |

@@ -262,10 +262,15 @@ func (s *Server) handleDeleteGitHubApp(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	if _, err := s.store.Q(r.Context()).Exec(r.Context(), `DELETE FROM settings WHERE key=$1`, settingGitHubApp); err != nil {
+	// The installations belong to that app: a new app (another domain, for example)
+	// gets new installation ids, and an old row for the same account would be picked
+	// for its repositories and fail. Teams link their accounts again to the new app.
+	_, err := s.store.Q(r.Context()).Exec(r.Context(), `WITH inst AS (DELETE FROM github_installations) DELETE FROM settings WHERE key=$1`, settingGitHubApp)
+	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
+	s.store.Audit(r.Context(), &currentUser(r).ID, nil, "github.app.delete", "")
 	s.ghMu.Lock()
 	s.gh = nil
 	s.ghMu.Unlock()

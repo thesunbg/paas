@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -70,4 +71,35 @@ func testPEM(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+}
+
+// Disconnecting the GitHub App also forgets its installations: a new app gets new
+// installation ids, and a stale row for the same account would be used and fail.
+func TestDeleteGitHubAppForgetsInstallations(t *testing.T) {
+	s, h := newTestServer(t)
+	ctx := context.Background()
+	admin := userWithTeam(t, s, "admin@example.com", true)
+	tok := mustLogin(t, h, "admin@example.com", "password1")
+	team := s.firstTeam(ctx, admin)
+	if err := s.store.SetSetting(ctx, settingGitHubApp, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.Q(ctx).Exec(ctx, `INSERT INTO github_installations (installation_id, team_id, account_login) VALUES (42, $1, 'me')`, team); err != nil {
+		t.Fatal(err)
+	}
+	userWithTeam(t, s, "dev@example.com", false)
+	if w := do(t, h, "DELETE", "/api/v1/github/app", mustLogin(t, h, "dev@example.com", "password1"), nil); w.Code != 403 {
+		t.Fatalf("non-admin DELETE = %d", w.Code)
+	}
+	if w := do(t, h, "DELETE", "/api/v1/github/app", tok, nil); w.Code != 204 {
+		t.Fatalf("DELETE = %d %s", w.Code, w.Body.String())
+	}
+	var n int
+	_ = s.store.Q(ctx).QueryRow(ctx, `SELECT count(*) FROM github_installations`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d installations left", n)
+	}
+	if _, err := s.store.GetSetting(ctx, settingGitHubApp); err == nil {
+		t.Fatal("the app is still configured")
+	}
 }

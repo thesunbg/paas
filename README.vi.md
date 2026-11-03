@@ -105,6 +105,18 @@ Vào **Settings → GitHub → Create GitHub App** (admin, chỉ làm một lầ
 
 `PAAS_PUBLIC_URL` của server phải truy cập được từ GitHub, và nếu là `https://` thì HTTPS phải hoạt động (xem [Xử lý sự cố](#xử-lý-sự-cố)).
 
+### Đổi domain hoặc tạo lại GitHub App
+
+GitHub App ghi cứng các URL quay về theo `PAAS_PUBLIC_URL` lúc tạo. Khi chuyển sang domain khác (ví dụ từ `paas.<ip>.sslip.io` sang `paas.tenmien.com`), hãy tạo app mới:
+
+1. Kiểm tra `/etc/paas/paasd.env`: `PAAS_PUBLIC_URL`, `PAAS_DASHBOARD_DOMAIN` và `PAAS_BASE_DOMAIN` đã là domain mới. Cách chắc nhất là chạy lại `install.sh server --domain <domain mới> --email ...`.
+2. Trên dashboard: *Settings → GitHub → Disconnect* app cũ. Thao tác này xoá luôn các liên kết tài khoản GitHub với app cũ.
+3. Bấm **Create GitHub App**: GitHub tạo app mới với URL của domain mới.
+4. Bấm **Connect GitHub account**, cài app mới vào tài khoản hoặc organization và chọn các repo.
+5. Trên GitHub: *Settings → Developer settings → GitHub Apps* → app cũ → *Advanced* → **Delete GitHub App**.
+
+Các service giữ nguyên repo; lần push tiếp theo sẽ deploy qua app mới, không cần tạo lại service.
+
 ## Database dạng dịch vụ
 
 PostgreSQL, MySQL, MariaDB, Redis và MongoDB được quản lý sẵn, dùng chung hoặc riêng, gồm:
