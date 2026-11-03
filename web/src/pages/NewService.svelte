@@ -703,7 +703,7 @@
               {#if type === 'web'}
                 <dt>{t('Port')}</dt><dd>{port}</dd>
                 <dt>{t('Scaling')}</dt><dd>{autoscale.enabled ? t('autoscale {min}–{max}', { min: autoscale.min, max: autoscale.max }) : sleepEnabled ? t('sleep after {n} min idle', { n: idleMinutes }) : t('1 replica')}</dd>
-                {#if previews && sourceKind === 'git'}<dt>{t('PR previews')}</dt><dd>{t('on')}</dd>{/if}
+                {#if previews && sourceKind === 'git'}<dt>{t('PR previews')}</dt><dd>{t('enabled')}</dd>{/if}
               {/if}
               {#if type === 'cron'}<dt>{t('Schedule')}</dt><dd class="mono small">{schedule} (UTC)</dd>{/if}
               <dt>{t('Variables')}</dt><dd>{Object.keys(rowsToMap(envRows)).length}</dd>

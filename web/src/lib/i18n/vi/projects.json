@@ -34,7 +34,7 @@
   "ready": "sẵn sàng",
   "upgrading": "đang nâng cấp",
   "deleting": "đang xoá",
-  "importing": "đang nhập",
+  "importing": "đang nhập dữ liệu",
   "shared": "dùng chung",
   "dedicated": "riêng",
   "Save": "Lưu",
@@ -89,7 +89,7 @@
   "Engine": "Engine",
   "Mode": "Chế độ",
   "Size": "Kích thước",
-  "Last backup": "Sao lưu gần nhất",
+  "Last backup": "Lần sao lưu gần nhất",
   "End of life {date}": "Hết hỗ trợ từ {date}",
   "ends {date}": "hết hỗ trợ {date}",
   "GitHub account connected": "Đã kết nối tài khoản GitHub",
@@ -222,7 +222,7 @@
   "sleep after {n} min idle": "ngủ sau {n} phút không hoạt động",
   "1 replica": "1 replica",
   "PR previews": "Bản preview PR",
-  "on": "bật",
+  "on": "trên",
   "Schedule": "Lịch chạy",
   "Variables": "Biến",
   "Back": "Quay lại",
@@ -278,5 +278,6 @@
   "accounts": "tài khoản",
   "copies": "bản sao",
   "Delete": "Xoá",
-  "Created at": "Tạo lúc"
+  "Created at": "Tạo lúc",
+  "enabled": "bật"
 }

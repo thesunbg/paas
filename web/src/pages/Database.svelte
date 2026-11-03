@@ -463,7 +463,7 @@
       {:else}
         <div class="table-wrap">
           <table>
-            <thead><tr><th>{t('Created')}</th><th>{t('Status')}</th><th class="right">{t('Size')}</th><th class="hide-sm">{t('Duration')}</th><th class="hide-sm">{t('File')}</th><th class="right"></th></tr></thead>
+            <thead><tr><th>{t('Created at')}</th><th>{t('Status')}</th><th class="right">{t('Size')}</th><th class="hide-sm">{t('Duration')}</th><th class="hide-sm">{t('File')}</th><th class="right"></th></tr></thead>
             <tbody>
               {#each backups.filter((x) => x.kind !== 'base') as b (b.id)}
                 <tr>
