@@ -46,6 +46,14 @@ curl -fsSL https://raw.githubusercontent.com/thesunbg/paas/main/internal/install
   | sudo sh -s -- server --domain apps.example.com --email you@example.com
 ```
 
+Or, from your laptop, without logging in to the server yourself (the `paas` CLI connects over SSH, confirms the host key, checks the machine, warns when DNS does not point at it yet, runs the same script and waits for the dashboard):
+
+```bash
+paas install --ssh root@203.0.113.10 --domain apps.example.com --email you@example.com
+```
+
+It authenticates with your SSH agent by default (`--identity ~/.ssh/key` or `--password` otherwise; a non-root user needs sudo). The host key is accepted when `~/.ssh/known_hosts` lists it, when it matches `--fingerprint SHA256:...`, or when you confirm it interactively (`--yes` trusts it on first use); a key that differs from known_hosts is refused. `--installer-url` runs another install.sh, and flags after `--` are passed to it.
+
 Use `--https` instead of `--email` for automatic HTTPS without an email. Point DNS for `*.apps.example.com` and `paas.apps.example.com` at the server. Changing `--domain` later and re-running the script moves the generated app domains and the GitHub App webhook to the new domain. Then open `https://paas.apps.example.com` and create the administrator account. The script installs:
 - containerd 2, crun, runc, the CNI plugins and BuildKit;
 - PostgreSQL for the control-plane state;
@@ -58,6 +66,8 @@ Use `--https` instead of `--email` for automatic HTTPS without an email. Point D
 curl -fsSL https://paas.apps.example.com/install.sh | sudo sh -s -- join \
   --url https://paas.apps.example.com --token <join-token> --roles worker
 ```
+
+Or let the control plane do it: *Nodes → Add node → Install over SSH* (or `paas node add root@203.0.113.11 --roles worker`). Give the host, the SSH user (root or a sudo user) and a private key or password, and confirm the server's host key fingerprint. The control plane checks the machine (OS, architecture, systemd, memory, disk, free ports, an existing paasd, whether it reaches the control plane), runs the join command above with a fresh single-use token, streams the installer output and waits until the node is online. The key or password is used for that install only and never stored; attempts, their checklist and log are kept (`paas node installs`).
 
 The token is single-use and short-lived, and it is only issued when `PAAS_PUBLIC_URL` is `https://`. The node trades it for its own identity (`POST /api/v1/cluster/enroll`) and receives the bus address and CA from the control plane.
 

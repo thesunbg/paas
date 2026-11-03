@@ -99,6 +99,8 @@ type Server struct {
 	ha          haMemory // leader-only HA observations, guarded by haMu
 
 	uptime uptimeRunner // uptime checks in flight (uptime.go)
+
+	ssh sshInstaller // nodes being installed over SSH (ssh_install.go)
 }
 
 // New connects to Postgres, applies migrations and starts the embedded NATS server.
@@ -215,6 +217,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	s.loadStorageSettings(ctx)
+	go s.resumeSSHInstalls(ctx)
 	go s.storageLoop(ctx)
 	go s.leaderLoop(ctx)
 	go func() {
