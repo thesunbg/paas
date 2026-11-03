@@ -213,6 +213,10 @@ Usage:
                                        Same for every service with volumes of a lost node (admin)
   paas join-command [--roles r1,r2]    Print a single-use command to add a node (admin; roles default to worker)
   paas quota [show]                    The team's usage against its quota
+  paas update [--check]                Versions of every control plane and node, the latest release (admin)
+  paas update --yes [--version vX]     Rolling update: state backup, control planes (leader last), then
+                                       nodes one at a time; a machine that does not come back is rolled back
+  paas update status | pause | resume | abort
 
 Global flags via env: PAAS_SERVER, PAAS_TOKEN, PAAS_PROJECT.
 `)
@@ -298,6 +302,8 @@ func main() {
 		err = cmdJoinCommand(rest)
 	case "quota":
 		err = cmdQuota(rest)
+	case "update":
+		err = cmdUpdate(rest)
 	default:
 		usage()
 		os.Exit(2)
@@ -677,7 +683,7 @@ func splitFlags(args []string) (pos, flags []string) {
 
 func boolFlag(f string) bool {
 	switch strings.TrimLeft(f, "-") {
-	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh", "yes", "status", "abort", "allow-empty", "move-volumes", "all":
+	case "sleep", "f", "follow", "no-follow", "no-deploy", "no-restart", "refresh", "yes", "status", "abort", "allow-empty", "move-volumes", "all", "check":
 		return true
 	}
 	return false

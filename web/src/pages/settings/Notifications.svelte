@@ -62,6 +62,8 @@
     'uptime.down': 'Uptime check down',
     'uptime.up': 'Uptime check recovered',
     'uptime.cert': 'TLS certificate expiring',
+    'update.available': 'New paas release available (admins)',
+    'update.failed': 'paas update stopped (admins)',
   };
 
   async function add(e: SubmitEvent) {

@@ -1,5 +1,5 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w
+LDFLAGS := -s -w -X github.com/thesunbg/paas/internal/agent.Version=$(VERSION)
 GOFLAGS := -trimpath
 
 .PHONY: all build web paasd paas test test-integration vet fmt clean release
@@ -43,6 +43,9 @@ release:
 		done; \
 	done
 	cp internal/installer/install.sh dist/install.sh
+	# Checksums of every published file: control planes refuse to install a binary
+	# that is not listed here (Settings → System → Updates).
+	cd dist && sha256sum paasd-linux-* paas-* install.sh > SHA256SUMS
 
 clean:
 	rm -rf bin dist

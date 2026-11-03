@@ -18,6 +18,7 @@ const (
 	SubjHeartbeat        = "paas.agent.heartbeat"
 	SubjNodeRegisterAll  = "paas.node.*.register"
 	SubjNodeHeartbeatAll = "paas.node.*.heartbeat"
+	SubjNodeBinaryAll    = "paas.node.*.binary"
 	SubjCPKick           = "paas.cp.kick"          // control plane -> control planes: {nkey} to disconnect
 	SubjRoutes           = "paas.proxy.routes"     // server -> proxies (full table)
 	SubjRoutesGet        = "paas.proxy.routes.get" // proxy -> server (request current table)
@@ -97,7 +98,41 @@ const (
 	// CmdScan scans an image for known vulnerabilities on a build node (see ScanRequest).
 	// Agents without it do not answer: the caller treats that like a node without a scanner.
 	CmdScan = "scan"
+	// CmdUpdateBinary installs another paasd version on the node and restarts the agent
+	// (rolling upgrade, see UpdateBinaryRequest); CmdRollbackBinary puts the previous
+	// binary (paasd.prev) back and restarts. Agents without them do not answer.
+	CmdUpdateBinary   = "updatebinary"
+	CmdRollbackBinary = "rollbackbinary"
 )
+
+// UpdateBinaryRequest names the binary of a version for each architecture; the node
+// downloads the one for its own, verifies the checksum and swaps it in (internal/update).
+type UpdateBinaryRequest struct {
+	Version string            `json:"version"`
+	URLs    map[string]string `json:"urls"`   // arch -> download URL
+	SHA256  map[string]string `json:"sha256"` // arch -> hex; missing only with AllowUnverified
+	// AllowUnverified: PAAS_UPDATE_ALLOW_UNVERIFIED=true on the control plane (unsafe).
+	AllowUnverified bool `json:"allow_unverified,omitempty"`
+	// GuardSec: after this long without the new process confirming it came up, a local
+	// systemd timer restores paasd.prev (0: no guard).
+	GuardSec int `json:"guard_sec"`
+}
+
+// UpdateBinaryReply answers CmdUpdateBinary, CmdRollbackBinary and the control-plane
+// update subjects. Rejected marks a refusal a retry cannot fix (bad or missing checksum).
+type UpdateBinaryReply struct {
+	Error    string `json:"error,omitempty"`
+	Rejected bool   `json:"rejected,omitempty"`
+}
+
+// SubjCPUpdate and SubjCPRollback address one control plane by its server name (only
+// the control planes' internal connections may publish on paas.cp.*).
+func SubjCPUpdate(name string) string   { return "paas.cp." + name + ".update" }
+func SubjCPRollback(name string) string { return "paas.cp." + name + ".rollback" }
+
+// SubjNodeBinary is SubjBinary with the asking node in the subject (bound to it by
+// NATS permissions), so the answer can depend on the node (rollouts, pinned binaries).
+func SubjNodeBinary(id string) string { return "paas.node." + id + ".binary" }
 
 type RegisterRequest struct {
 	Token        string            `json:"token"`

@@ -112,6 +112,16 @@ Nodes get the bus URL and the cluster CA when they enroll; point the dashboard h
 
 The installer sets up an extra control plane with `server --database-url … --master-key-file … --server-name cp2 --routes nats://cp1:6222`. Backups, restoring the platform state and recovering from a lost node are in [docs/DR.md](docs/DR.md).
 
+## Upgrading
+
+Settings → System → Updates shows the version of every control plane and node and the latest release (checked every 6 hours by the leader; `PAAS_UPDATE_CHECK=false` turns that off, `PAAS_UPDATE_URL` points it at a mirror). **Update** (or `paas update --yes [--version vX.Y.Z]`, progress with `paas update status`) runs a rolling upgrade:
+
+1. a backup of the platform state;
+2. the control planes, one at a time, the leader last so leadership moves to an updated one, which carries on;
+3. every other node (worker, build, edge) one at a time; offline and cordoned nodes are skipped.
+
+Each machine downloads the release binary, checks it against the release's `SHA256SUMS` (it refuses a missing or wrong checksum; `PAAS_UPDATE_ALLOW_UNVERIFIED=true` skips the check and is unsafe), swaps it in atomically keeping the old one as `/usr/local/bin/paasd.prev`, and restarts under systemd; containers keep running. A machine that does not come back healthy with the new version within 10 minutes is rolled back to `paasd.prev` and the update stops; a local systemd timer does the same if the new binary cannot even start. Updates can be paused, resumed and aborted, and any node can be rolled back by hand. Only binaries are rolled back, never the database: migrations are additive, so the previous version keeps working on the newer schema, and downgrades are refused. If a release's notes say a migration is not additive, the way back is the state backup taken in step 1 (`paasd restore-state`). Development builds (anything but a `vX.Y.Z` tag) are never told a release is newer.
+
 ## Configuration
 
 `paasd` is configured through environment variables (`/etc/paas/paasd.env`):
@@ -136,6 +146,9 @@ The installer sets up an extra control plane with `server --database-url … --m
 | `PAAS_UPTIME_ALLOW_PRIVATE` | `false` | let uptime checks reach private addresses (trusted networks) |
 | `PAAS_S3_ENDPOINT`, `PAAS_S3_BUCKET`, `PAAS_S3_ACCESS_KEY`, `PAAS_S3_SECRET_KEY`, `PAAS_S3_REGION`, `PAAS_S3_PREFIX` | | off-site database backups |
 | `PAAS_EVICT_PSI` / `PAAS_EVICT_MIN_FREE_MB` | `40` / `256` | memory-pressure eviction thresholds |
+| `PAAS_UPDATE_URL` | GitHub's latest release of thesunbg/paas | release endpoint for update checks (GitHub API JSON) |
+| `PAAS_UPDATE_CHECK` | `true` | `false` stops the 6-hourly check for new releases |
+| `PAAS_UPDATE_ALLOW_UNVERIFIED` | `false` | **unsafe**: install release binaries that have no published SHA-256 checksum |
 | `PAAS_SERVER_NAME`, `PAAS_NATS_CLUSTER_ADDR`, `PAAS_NATS_ROUTES`, `PAAS_NATS_ADVERTISE`, `PAAS_MASTER_KEY`, `PAAS_CLUSTER_TOKEN` | | high availability (see above) |
 
 ## Development
