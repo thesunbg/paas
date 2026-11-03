@@ -4,6 +4,7 @@
   import { href, navigate } from '../../lib/router.svelte';
   import { rowsToMap, validateRows, type EnvRow } from '../../lib/env';
   import { toast } from '../../lib/toast.svelte';
+  import { t } from '../../lib/i18n.svelte';
   import EnvEditor from '../../components/EnvEditor.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import Loading from '../../components/Loading.svelte';
@@ -47,11 +48,11 @@
       const res = await api.putEnv(serviceId, rowsToMap(rows), { replace: true, restart });
       original = JSON.stringify(rowsToMap(rows));
       if (res.deployment) {
-        toast.success(detail.service.type === 'static' ? 'Saved — rebuilding the site' : 'Saved — restarting with the new variables');
+        toast.success(detail.service.type === 'static' ? t('Saved — rebuilding the site') : t('Saved — restarting with the new variables'));
         reload();
         navigate(`/services/${serviceId}/deployments/${res.deployment.id}`);
       } else {
-        toast.success(restart ? 'Saved — variables apply on the next deploy' : 'Saved');
+        toast.success(restart ? t('Saved — variables apply on the next deploy') : t('Saved'));
       }
     } catch (e) {
       saveError = errorMessage(e);
@@ -72,32 +73,32 @@
     <div class="card">
       <div class="card-head">
         <div>
-          <h3>Environment variables</h3>
-          <p class="hint">Encrypted at rest and injected at runtime{detail.service.type === 'static' ? ' and build time' : ''}.</p>
+          <h3>{t('Environment variables')}</h3>
+          <p class="hint">{detail.service.type === 'static' ? t('Encrypted at rest and injected at runtime and build time.') : t('Encrypted at rest and injected at runtime.')}</p>
         </div>
-        {#if dirty}<span class="badge yellow">unsaved changes</span>{/if}
+        {#if dirty}<span class="badge yellow">{t('unsaved changes')}</span>{/if}
       </div>
       <div class="card-body stack">
-        {#if !canEdit}<p class="hint">You have read-only access: values are hidden.</p>{/if}
+        {#if !canEdit}<p class="hint">{t('You have read-only access: values are hidden.')}</p>{/if}
         <EnvEditor bind:rows masked disabled={!canEdit} />
         <ErrorMsg error={saveError} />
       </div>
       {#if canEdit}
       <div class="foot">
-        <label class="check small"><input type="checkbox" bind:checked={restart} />Restart the service to apply</label>
+        <label class="check small"><input type="checkbox" bind:checked={restart} />{t('Restart the service to apply')}</label>
         <div class="spacer"></div>
-        <button onclick={load} disabled={saving || !dirty}>Discard</button>
-        <button class="primary" onclick={save} disabled={saving || !dirty}>{#if saving}<span class="spinner"></span>{/if}Save</button>
+        <button onclick={load} disabled={saving || !dirty}>{t('Discard')}</button>
+        <button class="primary" onclick={save} disabled={saving || !dirty}>{#if saving}<span class="spinner"></span>{/if}{t('Save')}</button>
       </div>
       {/if}
     </div>
 
     {#if linkedEntries.length || tuning.length}
       <div class="card">
-        <div class="card-head"><h3>Provided by the platform</h3><span class="hint">read-only</span></div>
+        <div class="card-head"><h3>{t('Provided by the platform')}</h3><span class="hint">{t('read-only')}</span></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Value</th><th>Source</th></tr></thead>
+            <thead><tr><th>{t('Name')}</th><th>{t('Value')}</th><th>{t('Source')}</th></tr></thead>
             <tbody>
               {#each linkedEntries as [k, v] (k)}
                 {@const db = detail.databases.find((d) => d.env_name === k)}
@@ -111,7 +112,7 @@
                 <tr>
                   <td class="mono small">{k}</td>
                   <td class="mono small break">{v}</td>
-                  <td class="faint small">runtime tuning (overridable)</td>
+                  <td class="faint small">{t('runtime tuning (overridable)')}</td>
                 </tr>
               {/each}
             </tbody>

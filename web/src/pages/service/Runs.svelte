@@ -5,6 +5,7 @@
   import { describeCron } from '../../lib/cron';
   import { poll } from '../../lib/poll';
   import { toast } from '../../lib/toast.svelte';
+  import { t, intlLocale } from '../../lib/i18n.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import Loading from '../../components/Loading.svelte';
   import Icon from '../../components/Icon.svelte';
@@ -37,7 +38,7 @@
     busy = true;
     try {
       const r = await api.runJob(sid);
-      toast.success('Job started');
+      toast.success(t('Job started'));
       open[r.id] = true;
       await load();
       reload();
@@ -49,6 +50,8 @@
   }
 
   const st = (r: JobRun) => (r.status === 'succeeded' ? 'completed' : r.status === 'failed' ? 'failed' : 'deploying');
+  // Run statuses and triggers (JobRun.status: running | succeeded | failed; trigger: schedule | manual).
+  const runLabel = $derived<Record<string, string>>({ running: t('running'), succeeded: t('succeeded'), failed: t('failed'), schedule: t('schedule'), manual: t('manual') });
   const schedule = $derived(detail.service.spec.schedule ?? '');
   const desc = $derived(describeCron(schedule));
   const stats = $derived.by(() => {
@@ -62,25 +65,25 @@
   <div class="card head">
     <div class="row" style="gap:20px">
       <div>
-        <div class="label">Schedule</div>
+        <div class="label">{t('Schedule')}</div>
         <div><code>{schedule || '—'}</code> <span class="muted small">{desc}{desc ? ' · ' : ''}UTC</span></div>
       </div>
       <div>
-        <div class="label">Next run</div>
-        <div title={absTime(detail.next_run)}>{detail.next_run ? `${relTime(detail.next_run, now)} · ${new Date(detail.next_run).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '—'}</div>
+        <div class="label">{t('Next run')}</div>
+        <div title={absTime(detail.next_run)}>{detail.next_run ? `${relTime(detail.next_run, now)} · ${new Date(detail.next_run).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' })}` : '—'}</div>
       </div>
       <div>
-        <div class="label">Timeout</div>
-        <div>{detail.service.spec.job_timeout_sec ? `${detail.service.spec.job_timeout_sec}s` : 'default'}</div>
+        <div class="label">{t('Timeout')}</div>
+        <div>{detail.service.spec.job_timeout_sec ? `${detail.service.spec.job_timeout_sec}s` : t('default')}</div>
       </div>
       <div>
-        <div class="label">Recent runs ({stats.total})</div>
-        <div><span style="color:var(--green)">{stats.ok} succeeded</span> · <span style:color={stats.failed ? 'var(--red)' : undefined}>{stats.failed} failed</span></div>
+        <div class="label">{t('Recent runs ({n})', { n: stats.total })}</div>
+        <div><span style="color:var(--green)">{t('{n} succeeded', { n: stats.ok })}</span> · <span style:color={stats.failed ? 'var(--red)' : undefined}>{t('{n} failed', { n: stats.failed })}</span></div>
       </div>
       <div class="spacer"></div>
       {#if canEdit}
-        <button class="primary" onclick={runNow} disabled={busy || !detail.service.current_deployment_id} title={detail.service.current_deployment_id ? '' : 'Deploy the job first'}>
-          {#if busy}<span class="spinner"></span>{:else}<Icon name="play" size={14} />{/if}Run now
+        <button class="primary" onclick={runNow} disabled={busy || !detail.service.current_deployment_id} title={detail.service.current_deployment_id ? '' : t('Deploy the job first')}>
+          {#if busy}<span class="spinner"></span>{:else}<Icon name="play" size={14} />{/if}{t('Run now')}
         </button>
       {/if}
     </div>
@@ -90,24 +93,24 @@
   {#if runs === null && !error}
     <Loading rows={3} />
   {:else if runs && runs.length === 0}
-    <div class="card empty"><Icon name="clock" size={28} /><p>No runs yet. The job runs at the next scheduled time{canEdit ? ', or press Run now' : ''}.</p></div>
+    <div class="card empty"><Icon name="clock" size={28} /><p>{canEdit ? t('No runs yet. The job runs at the next scheduled time, or press Run now.') : t('No runs yet. The job runs at the next scheduled time.')}</p></div>
   {:else if runs}
     <div class="card">
       {#each runs as r (r.id)}
         <div class="run" class:failed={r.status === 'failed'}>
           <button class="ghost line" aria-expanded={!!open[r.id]} onclick={() => (open[r.id] = !open[r.id])}>
             <Icon name={open[r.id] ? 'chevdown' : 'chevron'} size={14} />
-            <Status status={st(r)} label={r.status} />
+            <Status status={st(r)} label={runLabel[r.status] ?? r.status} />
             <span class="badge {r.exit_code === 0 ? 'green' : r.exit_code == null ? '' : 'red'}">{r.exit_code == null ? '—' : `exit ${r.exit_code}`}</span>
-            <span class="badge outline hide-sm">{r.trigger}</span>
+            <span class="badge outline hide-sm">{runLabel[r.trigger] ?? r.trigger}</span>
             <span class="muted small truncate out1 hide-sm">{r.output.split('\n').find((l) => l.trim()) ?? ''}</span>
             <span class="spacer"></span>
             <span class="small nowrap" title={absTime(r.started_at)}>{relTime(r.started_at, now)}</span>
             <span class="faint small mono nowrap dur hide-sm">{between(r.started_at, r.finished_at, r.status === 'running')}</span>
           </button>
           {#if open[r.id]}
-            <pre class="log out">{r.output || '(no output)'}</pre>
-            <div class="faint small meta mono">{r.container_id} · started {absTime(r.started_at)}{r.finished_at ? ` · finished ${absTime(r.finished_at)}` : ''}</div>
+            <pre class="log out">{r.output || t('(no output)')}</pre>
+            <div class="faint small meta mono">{r.container_id} · {t('started {time}', { time: absTime(r.started_at) })}{r.finished_at ? ` · ${t('finished {time}', { time: absTime(r.finished_at) })}` : ''}</div>
           {/if}
         </div>
       {/each}

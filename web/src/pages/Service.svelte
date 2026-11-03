@@ -4,6 +4,7 @@
   import { can } from '../lib/session.svelte';
   import { href } from '../lib/router.svelte';
   import { poll } from '../lib/poll';
+  import { t } from '../lib/i18n.svelte';
   import ErrorMsg from '../components/ErrorMsg.svelte';
   import Loading from '../components/Loading.svelte';
   import Icon from '../components/Icon.svelte';
@@ -48,18 +49,18 @@
   const kind = $derived(detail?.service.type);
   const tabs = $derived(
     [
-      { id: 'overview', label: 'Overview' },
-      { id: 'runs', label: 'Runs', hide: kind !== 'cron' },
-      { id: 'deployments', label: 'Deployments' },
-      { id: 'metrics', label: 'Metrics', hide: kind === 'static' || kind === 'cron' },
-      { id: 'alerts', label: 'Alerts', hide: kind === 'cron' || kind === 'database' },
-      { id: 'logs', label: 'Logs', hide: kind === 'static' || kind === 'cron' },
-      { id: 'env', label: 'Environment' },
-      { id: 'security', label: 'Security', hide: kind === 'static' },
-      { id: 'domains', label: 'Domains', hide: kind === 'worker' || kind === 'cron' },
-      { id: 'settings', label: 'Settings' },
-      { id: 'console', label: 'Console', hide: !isDev || kind === 'static' || kind === 'cron' },
-    ].filter((t) => !t.hide),
+      { id: 'overview', label: t('Overview') },
+      { id: 'runs', label: t('Runs'), hide: kind !== 'cron' },
+      { id: 'deployments', label: t('Deployments') },
+      { id: 'metrics', label: t('Metrics'), hide: kind === 'static' || kind === 'cron' },
+      { id: 'alerts', label: t('Alerts'), hide: kind === 'cron' || kind === 'database' },
+      { id: 'logs', label: t('Logs'), hide: kind === 'static' || kind === 'cron' },
+      { id: 'env', label: t('Environment') },
+      { id: 'security', label: t('Security'), hide: kind === 'static' },
+      { id: 'domains', label: t('Domains'), hide: kind === 'worker' || kind === 'cron' },
+      { id: 'settings', label: t('Settings') },
+      { id: 'console', label: t('Console'), hide: !isDev || kind === 'static' || kind === 'cron' },
+    ].filter((x) => !x.hide),
   );
 
   const typeBadge: Record<string, string> = { web: 'blue', worker: 'purple', static: 'green', cron: 'yellow' };
@@ -73,7 +74,7 @@
   {:else}
     {@const s = detail.service}
     <div class="crumbs">
-      <a href={href('/')}>Projects</a><Icon name="chevron" size={12} />
+      <a href={href('/')}>{t('Projects')}</a><Icon name="chevron" size={12} />
       <a href={href(`/projects/${detail.project.id}`)}>{detail.project.name}</a><Icon name="chevron" size={12} />
       <span>{s.name}</span>
     </div>
@@ -88,7 +89,7 @@
           {#if detail.urls[0]}
             <a href={detail.urls[0]} target="_blank" rel="noreferrer" class="row nowrap" style="gap:4px">{detail.urls[0].replace(/^https?:\/\//, '')}<Icon name="external" size={12} /></a>
           {/if}
-          {#if s.type !== 'cron'}<span class="mono faint small">{detail.internal_host}</span>{:else}<span class="faint small">Scheduled job · <code>{s.spec.schedule}</code> UTC</span>{/if}
+          {#if s.type !== 'cron'}<span class="mono faint small">{detail.internal_host}</span>{:else}<span class="faint small">{t('Scheduled job')} · <code>{s.spec.schedule}</code> UTC</span>{/if}
         </p>
       </div>
     </div>
@@ -96,14 +97,14 @@
     {#if s.parent_id}
       <a class="alert info preview" href={href(`/services/${s.parent_id}`)}>
         <Icon name="branch" />
-        <span style="flex:1">Preview of <b>{parentName || 'parent service'}</b> · PR #{s.preview_pr}. Sleeps when idle and is deleted when the pull request closes.</span>
-        <span class="nowrap">Open parent →</span>
+        <span style="flex:1">{t('Preview of')} <b>{parentName || t('parent service')}</b> · PR #{s.preview_pr}. {t('Sleeps when idle and is deleted when the pull request closes.')}</span>
+        <span class="nowrap">{t('Open parent')} →</span>
       </a>
     {/if}
 
-    <div class="tabs" role="tablist" aria-label="Service sections">
-      {#each tabs as t (t.id)}
-        <a role="tab" class="tab" class:active={tab === t.id} aria-selected={tab === t.id} href={href(`/services/${id}/${t.id}`)}>{t.label}</a>
+    <div class="tabs" role="tablist" aria-label={t('Service sections')}>
+      {#each tabs as tb (tb.id)}
+        <a role="tab" class="tab" class:active={tab === tb.id} aria-selected={tab === tb.id} href={href(`/services/${id}/${tb.id}`)}>{tb.label}</a>
       {/each}
     </div>
 
@@ -135,7 +136,7 @@
       {:else if tab === 'console'}
         <Console {detail} />
       {:else}
-        <p class="muted">Unknown tab.</p>
+        <p class="muted">{t('Unknown tab.')}</p>
       {/if}
     </div>
   {/if}

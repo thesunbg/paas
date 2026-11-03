@@ -4,6 +4,7 @@
   import { mb, cpu } from '../../lib/format';
   import { navigate, href } from '../../lib/router.svelte';
   import { toast } from '../../lib/toast.svelte';
+  import { t } from '../../lib/i18n.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import CopyField from '../../components/CopyField.svelte';
   import Secret from '../../components/Secret.svelte';
@@ -196,17 +197,17 @@
   async function save(e: SubmitEvent) {
     e.preventDefault();
     error = '';
-    if (kind === 'git' && !repo.trim()) return void (error = 'Repository URL is required');
-    if (kind === 'image' && !image.trim()) return void (error = 'Image is required');
-    if (volumes.some((v) => (v.name || v.path) && (!v.name.trim() || !v.path.startsWith('/')))) return void (error = 'Volumes need a name and an absolute path');
-    if (volumes.filter((v) => v.name).length && replicas > 1 && !isCron) return void (error = 'Services with volumes cannot run more than one replica');
+    if (kind === 'git' && !repo.trim()) return void (error = t('Repository URL is required'));
+    if (kind === 'image' && !image.trim()) return void (error = t('Image is required'));
+    if (volumes.some((v) => (v.name || v.path) && (!v.name.trim() || !v.path.startsWith('/')))) return void (error = t('Volumes need a name and an absolute path'));
+    if (volumes.filter((v) => v.name).length && replicas > 1 && !isCron) return void (error = t('Services with volumes cannot run more than one replica'));
     if (isWeb && autoscale.enabled && (autoscale.min < 1 || autoscale.max < autoscale.min || autoscale.max > 50))
-      return void (error = 'Autoscaling needs 1 ≤ min ≤ max ≤ 50');
+      return void (error = t('Autoscaling needs 1 ≤ min ≤ max ≤ 50'));
     if (isCron) {
       try {
         parseCron(schedule);
       } catch (err) {
-        return void (error = 'Schedule: ' + (err as Error).message);
+        return void (error = t('Schedule: {error}', { error: (err as Error).message }));
       }
     }
     saving = true;
@@ -217,10 +218,10 @@
       clearToken = false;
       await reload();
       if (r.deployment) {
-        toast.success('Saved — rolling restart started');
+        toast.success(t('Saved — rolling restart started'));
         navigate(`/services/${detail.service.id}/deployments/${r.deployment.id}`);
       } else {
-        toast.success('Settings saved' + (patch.source || patch.build ? ' — deploy to apply source/build changes' : ''));
+        toast.success(patch.source || patch.build ? t('Settings saved — deploy to apply source/build changes') : t('Settings saved'));
       }
     } catch (err) {
       error = errorMessage(err);
@@ -234,189 +235,189 @@
 <div class="layout">
   <form class="stack-lg" onsubmit={save}>
     <fieldset class="card" disabled={!canEdit}>
-      <legend class="card-head"><h3>General</h3></legend>
+      <legend class="card-head"><h3>{t('General')}</h3></legend>
       <div class="card-body stack">
         <label class="field">
-          <span>Name</span>
+          <span>{t('Name')}</span>
           <input bind:value={name} maxlength="40" />
-          <span class="hint">Renaming keeps the slug <code>{detail.service.slug}</code> and existing domains.</span>
+          <span class="hint">{t('Renaming keeps the slug')} <code>{detail.service.slug}</code> {t('and existing domains.')}</span>
         </label>
       </div>
     </fieldset>
 
     <fieldset class="card" disabled={!canEdit}>
-      <legend class="card-head"><h3>Source</h3></legend>
+      <legend class="card-head"><h3>{t('Source')}</h3></legend>
       <div class="card-body stack">
-        <div class="row" role="radiogroup" aria-label="Source type">
-          <label class="check"><input type="radio" bind:group={kind} value="git" />Git repository</label>
-          <label class="check"><input type="radio" bind:group={kind} value="image" />Docker image</label>
+        <div class="row" role="radiogroup" aria-label={t('Source type')}>
+          <label class="check"><input type="radio" bind:group={kind} value="git" />{t('Git repository')}</label>
+          <label class="check"><input type="radio" bind:group={kind} value="image" />{t('Docker image')}</label>
         </div>
         {#if kind === 'git'}
-          <label class="field"><span>Repository URL</span><input class="mono" bind:value={repo} spellcheck="false" /></label>
+          <label class="field"><span>{t('Repository URL')}</span><input class="mono" bind:value={repo} spellcheck="false" /></label>
           <div class="grid-3">
-            <label class="field"><span>Branch</span><input class="mono" bind:value={branch} /></label>
-            <label class="field"><span>Root directory</span><input class="mono" bind:value={rootDir} placeholder="/" /></label>
-            <label class="field"><span>Dockerfile</span><input class="mono" bind:value={dockerfile} placeholder="auto-detect" /></label>
+            <label class="field"><span>{t('Branch')}</span><input class="mono" bind:value={branch} /></label>
+            <label class="field"><span>{t('Root directory')}</span><input class="mono" bind:value={rootDir} placeholder="/" /></label>
+            <label class="field"><span>Dockerfile</span><input class="mono" bind:value={dockerfile} placeholder={t('auto-detect')} /></label>
           </div>
           {#if s0.source.installation_id}
-          <p class="hint">Connected through the GitHub App — no token needed.</p>
+          <p class="hint">{t('Connected through the GitHub App — no token needed.')}</p>
           {:else}
           <label class="field">
-            <span>Access token</span>
-            <input type="password" class="mono" bind:value={gitToken} placeholder={detail.service.has_git_token ? '•••••••• (set — leave blank to keep)' : 'not set'} autocomplete="off" disabled={clearToken} />
-            <span class="hint">Optional when the team has a credential for this host (Settings → <a href={href('/settings/git')}>Git hosts</a>).</span>
+            <span>{t('Access token')}</span>
+            <input type="password" class="mono" bind:value={gitToken} placeholder={detail.service.has_git_token ? t('•••••••• (set — leave blank to keep)') : t('not set')} autocomplete="off" disabled={clearToken} />
+            <span class="hint">{t('Optional when the team has a credential for this host (Settings →')} <a href={href('/settings/git')}>{t('Git hosts')}</a>).</span>
           </label>
-          {#if detail.service.has_git_token}<label class="check small"><input type="checkbox" bind:checked={clearToken} />Remove the stored token</label>{/if}
+          {#if detail.service.has_git_token}<label class="check small"><input type="checkbox" bind:checked={clearToken} />{t('Remove the stored token')}</label>{/if}
           {/if}
-          <label class="check small"><input type="checkbox" bind:checked={autoDeploy} />Deploy automatically on push</label>
+          <label class="check small"><input type="checkbox" bind:checked={autoDeploy} />{t('Deploy automatically on push')}</label>
         {:else}
-          <label class="field"><span>Image</span><input class="mono" bind:value={image} spellcheck="false" /></label>
+          <label class="field"><span>{t('Image')}</span><input class="mono" bind:value={image} spellcheck="false" /></label>
         {/if}
       </div>
     </fieldset>
 
     {#if kind === 'git'}
       <fieldset class="card" disabled={!canEdit}>
-        <legend class="card-head"><h3>Build</h3></legend>
+        <legend class="card-head"><h3>{t('Build')}</h3></legend>
         <div class="card-body stack">
           <label class="field">
-            <span>Builder</span>
+            <span>{t('Builder')}</span>
             <select bind:value={builder}>
-              <option value="">Auto-detect (Dockerfile if present, else language buildpack)</option>
-              <option value="auto">Language buildpack</option>
+              <option value="">{t('Auto-detect (Dockerfile if present, else language buildpack)')}</option>
+              <option value="auto">{t('Language buildpack')}</option>
               <option value="dockerfile">Dockerfile</option>
             </select>
           </label>
           <div class="grid-2">
-            <label class="field"><span>Install command</span><input class="mono" bind:value={installCmd} placeholder="npm ci" /></label>
-            <label class="field"><span>Build command</span><input class="mono" bind:value={buildCmd} placeholder="npm run build" /></label>
-            {#if !isStatic}<label class="field"><span>Start command</span><input class="mono" bind:value={startCmd} placeholder="npm start" /></label>{/if}
-            {#if isStatic || s0.type === 'web'}<label class="field"><span>Output directory</span><input class="mono" bind:value={outputDir} placeholder="dist" /></label>{/if}
+            <label class="field"><span>{t('Install command')}</span><input class="mono" bind:value={installCmd} placeholder="npm ci" /></label>
+            <label class="field"><span>{t('Build command')}</span><input class="mono" bind:value={buildCmd} placeholder="npm run build" /></label>
+            {#if !isStatic}<label class="field"><span>{t('Start command')}</span><input class="mono" bind:value={startCmd} placeholder="npm start" /></label>{/if}
+            {#if isStatic || s0.type === 'web'}<label class="field"><span>{t('Output directory')}</span><input class="mono" bind:value={outputDir} placeholder="dist" /></label>{/if}
           </div>
-          <p class="hint">Source and build changes apply on the next deployment.</p>
+          <p class="hint">{t('Source and build changes apply on the next deployment.')}</p>
         </div>
       </fieldset>
     {/if}
 
     <fieldset class="card" disabled={!canEdit}>
-      <legend class="card-head"><h3>Resources</h3></legend>
+      <legend class="card-head"><h3>{t('Resources')}</h3></legend>
       <div class="card-body stack">
         <div class="grid-2">
           <label class="field">
-            <span>Size</span>
+            <span>{t('Size')}</span>
             <select bind:value={size} onchange={pickSize}>
               {#each sizes as x (x.name)}<option value={x.name}>{x.name} — {mb(x.memory_limit_mb)}, {cpu(x.cpu_limit_millis)}</option>{/each}
-              <option value="custom">custom</option>
+              <option value="custom">{t('custom')}</option>
             </select>
           </label>
           <label class="field">
-            <span>QoS class</span>
+            <span>{t('QoS class')}</span>
             <select bind:value={qos} onchange={pickSize} disabled={size === 'custom'}>
-              <option value="guaranteed">guaranteed — reserve the full limit</option>
-              <option value="burstable">burstable — reserve less, burst to the limit</option>
-              <option value="best-effort">best-effort — no reservation</option>
+              <option value="guaranteed">{t('guaranteed — reserve the full limit')}</option>
+              <option value="burstable">{t('burstable — reserve less, burst to the limit')}</option>
+              <option value="best-effort">{t('best-effort — no reservation')}</option>
             </select>
           </label>
         </div>
         <details open={size === 'custom'}>
-          <summary class="small muted">Custom requests and limits</summary>
+          <summary class="small muted">{t('Custom requests and limits')}</summary>
           <div class="grid-2" style="margin-top:10px">
-            <label class="field"><span>Memory limit (MB)</span><input type="number" min="32" bind:value={res.memory_limit_mb} oninput={() => (size = 'custom')} /></label>
-            <label class="field"><span>Memory request (MB)</span><input type="number" min="0" bind:value={res.memory_request_mb} oninput={() => (size = 'custom')} /></label>
-            <label class="field"><span>CPU limit (millicores)</span><input type="number" min="0" step="50" bind:value={res.cpu_limit_millis} oninput={() => (size = 'custom')} /></label>
-            <label class="field"><span>CPU request (millicores)</span><input type="number" min="0" step="25" bind:value={res.cpu_request_millis} oninput={() => (size = 'custom')} /></label>
+            <label class="field"><span>{t('Memory limit (MB)')}</span><input type="number" min="32" bind:value={res.memory_limit_mb} oninput={() => (size = 'custom')} /></label>
+            <label class="field"><span>{t('Memory request (MB)')}</span><input type="number" min="0" bind:value={res.memory_request_mb} oninput={() => (size = 'custom')} /></label>
+            <label class="field"><span>{t('CPU limit (millicores)')}</span><input type="number" min="0" step="50" bind:value={res.cpu_limit_millis} oninput={() => (size = 'custom')} /></label>
+            <label class="field"><span>{t('CPU request (millicores)')}</span><input type="number" min="0" step="25" bind:value={res.cpu_request_millis} oninput={() => (size = 'custom')} /></label>
           </div>
         </details>
-        <p class="hint">Requests are reserved on a node for scheduling; limits are hard caps. Changes trigger a rolling restart.</p>
+        <p class="hint">{t('Requests are reserved on a node for scheduling; limits are hard caps. Changes trigger a rolling restart.')}</p>
       </div>
     </fieldset>
 
     {#if !isStatic}
       <fieldset class="card" disabled={!canEdit}>
-        <legend class="card-head"><h3>Runtime</h3></legend>
+        <legend class="card-head"><h3>{t('Runtime')}</h3></legend>
         <div class="card-body stack">
           {#if isCron}
             <CronField bind:value={schedule} />
             <label class="field" style="max-width:220px">
-              <span>Job timeout (seconds)</span>
-              <input type="number" min="1" max="86400" bind:value={jobTimeout} placeholder="default" />
+              <span>{t('Job timeout (seconds)')}</span>
+              <input type="number" min="1" max="86400" bind:value={jobTimeout} placeholder={t('default')} />
             </label>
           {/if}
           {#if isWeb}
             <AutoscaleFields bind:value={autoscale} disabled={!canEdit} />
             {#if !isPreview && kind === 'git'}
-              <label class="check"><input type="checkbox" bind:checked={previews} />Preview deployments for pull requests</label>
-              <p class="hint" style="margin-top:-6px">Needs the webhook with pull / merge request events (see the webhook panel).</p>
+              <label class="check"><input type="checkbox" bind:checked={previews} />{t('Preview deployments for pull requests')}</label>
+              <p class="hint" style="margin-top:-6px">{t('Needs the webhook with pull / merge request events (see the webhook panel).')}</p>
             {/if}
           {/if}
           <div class="grid-3">
-            {#if isWeb}<label class="field"><span>Port</span><input type="number" min="1" max="65535" bind:value={port} /></label>{/if}
+            {#if isWeb}<label class="field"><span>{t('Port')}</span><input type="number" min="1" max="65535" bind:value={port} /></label>{/if}
             {#if !isCron}
               <label class="field">
-                <span>Replicas</span>
-                <input type="number" min="1" max="50" bind:value={replicas} disabled={autoscale.enabled} title={autoscale.enabled ? 'Managed by autoscaling' : ''} />
+                <span>{t('Replicas')}</span>
+                <input type="number" min="1" max="50" bind:value={replicas} disabled={autoscale.enabled} title={autoscale.enabled ? t('Managed by autoscaling') : ''} />
               </label>
             {/if}
             <label class="field">
-              <span>Runtime class</span>
+              <span>{t('Runtime class')}</span>
               <select bind:value={runtimeClass}>
-                <option value="standard">standard (runc/crun)</option>
-                <option value="sandboxed">sandboxed (gVisor)</option>
+                <option value="standard">{t('standard (runc/crun)')}</option>
+                <option value="sandboxed">{t('sandboxed (gVisor)')}</option>
               </select>
             </label>
           </div>
           <label class="field">
-            <span>{isCron ? 'Job command' : 'Start command override'} <span class="faint">(optional)</span></span>
-            <input class="mono" bind:value={command} placeholder="run with the image's default command" />
-            <span class="hint">Runs as <code>/bin/sh -c "…"</code>.</span>
+            <span>{isCron ? t('Job command') : t('Start command override')} <span class="faint">{t('(optional)')}</span></span>
+            <input class="mono" bind:value={command} placeholder={t("run with the image's default command")} />
+            <span class="hint">{t('Runs as')} <code>/bin/sh -c "…"</code>.</span>
           </label>
           {#if !isCron}
           <div class="grid-3">
             <label class="field">
-              <span>Health check</span>
+              <span>{t('Health check')}</span>
               <select bind:value={hcType}>
-                <option value="">auto (TCP, or HTTP when a path is set)</option>
+                <option value="">{t('auto (TCP, or HTTP when a path is set)')}</option>
                 <option value="http">HTTP</option>
                 <option value="tcp">TCP</option>
-                <option value="none">none</option>
+                <option value="none">{t('none')}</option>
               </select>
             </label>
             {#if hcType === 'http' || hcType === ''}
-              <label class="field"><span>Path</span><input class="mono" bind:value={hcPath} placeholder="/" /></label>
+              <label class="field"><span>{t('Path')}</span><input class="mono" bind:value={hcPath} placeholder="/" /></label>
             {/if}
-            <label class="field"><span>Timeout (s)</span><input type="number" min="1" max="600" bind:value={hcTimeout} placeholder="90" /></label>
+            <label class="field"><span>{t('Timeout (s)')}</span><input type="number" min="1" max="600" bind:value={hcTimeout} placeholder="90" /></label>
           </div>
           {/if}
           {#if isWeb && !autoscale.enabled}
             <div>
-              <label class="check"><input type="checkbox" bind:checked={sleepEnabled} />Sleep when idle</label>
+              <label class="check"><input type="checkbox" bind:checked={sleepEnabled} />{t('Sleep when idle')}</label>
               {#if sleepEnabled}
-                <label class="field" style="max-width:200px;margin-top:8px"><span>Idle minutes</span><input type="number" min="1" max="1440" bind:value={idleMinutes} /></label>
+                <label class="field" style="max-width:200px;margin-top:8px"><span>{t('Idle minutes')}</span><input type="number" min="1" max="1440" bind:value={idleMinutes} /></label>
               {/if}
             </div>
           {/if}
           <div class="stack" style="gap:6px">
-            <span class="label">Volumes</span>
+            <span class="label">{t('Volumes')}</span>
             {#each volumes as v, i (i)}
               <div class="row nowrap">
-                <input class="mono" aria-label="Volume name" placeholder="data" bind:value={v.name} />
-                <input class="mono" aria-label="Mount path" placeholder="/data" bind:value={v.path} />
-                <button type="button" class="icon ghost" aria-label="Remove volume" onclick={() => volumes.splice(i, 1)}><Icon name="trash" size={14} /></button>
+                <input class="mono" aria-label={t('Volume name')} placeholder="data" bind:value={v.name} />
+                <input class="mono" aria-label={t('Mount path')} placeholder="/data" bind:value={v.path} />
+                <button type="button" class="icon ghost" aria-label={t('Remove volume')} onclick={() => volumes.splice(i, 1)}><Icon name="trash" size={14} /></button>
               </div>
             {/each}
-            <div><button type="button" class="sm" onclick={() => volumes.push({ name: '', path: '' })}><Icon name="plus" size={12} />Add volume</button></div>
-            <p class="hint">Persistent node-local storage. Services with volumes run a single replica.</p>
+            <div><button type="button" class="sm" onclick={() => volumes.push({ name: '', path: '' })}><Icon name="plus" size={12} />{t('Add volume')}</button></div>
+            <p class="hint">{t('Persistent node-local storage. Services with volumes run a single replica.')}</p>
             {#if volumes.some((v) => v.name.trim())}
               <label class="field" style="max-width:480px;margin-top:8px">
-                <span>Volume backups</span>
+                <span>{t('Volume backups')}</span>
                 <select bind:value={volBackupHours} style="max-width:260px">
-                  <option value={6}>Every 6 hours</option>
-                  <option value={12}>Every 12 hours</option>
-                  <option value={0}>Daily</option>
-                  <option value={168}>Weekly</option>
-                  <option value={-1}>Off</option>
+                  <option value={6}>{t('Every 6 hours')}</option>
+                  <option value={12}>{t('Every 12 hours')}</option>
+                  <option value={0}>{t('Daily')}</option>
+                  <option value={168}>{t('Weekly')}</option>
+                  <option value={-1}>{t('Off')}</option>
                 </select>
-                <span class="hint">Copied to off-site storage (the last 7 are kept), so the service can be recovered on another node if its node is lost.</span>
+                <span class="hint">{t('Copied to off-site storage (the last 7 are kept), so the service can be recovered on another node if its node is lost.')}</span>
               </label>
             {/if}
           </div>
@@ -424,9 +425,9 @@
       </fieldset>
     {:else}
       <fieldset class="card" disabled={!canEdit}>
-        <legend class="card-head"><h3>Static site</h3></legend>
+        <legend class="card-head"><h3>{t('Static site')}</h3></legend>
         <div class="card-body">
-          <label class="check"><input type="checkbox" bind:checked={spa} />Single-page app (serve index.html for unknown paths)</label>
+          <label class="check"><input type="checkbox" bind:checked={spa} />{t('Single-page app (serve index.html for unknown paths)')}</label>
         </div>
       </fieldset>
     {/if}
@@ -435,9 +436,9 @@
       <div class="savebar">
         <ErrorMsg {error} />
         <div class="row">
-          <span class="faint small">{changed ? `Changed: ${Object.keys(patch).join(', ')}` : 'No changes'}</span>
+          <span class="faint small">{changed ? t('Changed: {fields}', { fields: Object.keys(patch).join(', ') }) : t('No changes')}</span>
           <div class="spacer"></div>
-          <button type="submit" class="primary" disabled={saving || !changed}>{#if saving}<span class="spinner"></span>{/if}Save changes</button>
+          <button type="submit" class="primary" disabled={saving || !changed}>{#if saving}<span class="spinner"></span>{/if}{t('Save changes')}</button>
         </div>
       </div>
     {/if}
@@ -448,40 +449,40 @@
       <div class="card">
         <div class="card-head"><h3>GitHub</h3></div>
         <div class="card-body stack">
-          <p class="small">Connected through the GitHub App. Pushes to <code>{s0.source.branch || 'main'}</code>{s0.source.root_dir ? ` touching ${s0.source.root_dir}/` : ''} deploy automatically{detail.service.source.auto_deploy ? '' : ' (auto-deploy is currently off)'}; commit statuses{previews ? ' and PR previews' : ''} are reported on GitHub.</p>
+          <p class="small">{t('Connected through the GitHub App.')} {t('Pushes to')} <code>{s0.source.branch || 'main'}</code>{s0.source.root_dir ? ` ${t('touching {dir}/', { dir: s0.source.root_dir })}` : ''} {t('deploy automatically')}{detail.service.source.auto_deploy ? '' : ` ${t('(auto-deploy is currently off)')}`}; {previews ? t('commit statuses and PR previews are reported on GitHub.') : t('commit statuses are reported on GitHub.')}</p>
         </div>
       </div>
     {:else if s0.source.kind !== 'image'}
       <div class="card">
-        <div class="card-head"><h3>{providerName} webhook</h3></div>
+        <div class="card-head"><h3>{t('{provider} webhook', { provider: providerName })}</h3></div>
         <div class="card-body stack">
           <div class="field"><span>{provider === 'gitlab' ? 'URL' : provider === 'bitbucket' ? 'URL' : 'Payload URL'}</span><CopyField value={detail.webhook_url} label="Webhook URL" /></div>
           <div class="field"><span>{provider === 'gitlab' ? 'Secret token' : 'Secret'}</span><Secret value={detail.webhook_secret} /></div>
           <ol class="howto small muted">
             {#if provider === 'gitlab'}
-              <li>Open your project on GitLab → <b>Settings</b> → <b>Webhooks</b> → <b>Add new webhook</b>.</li>
-              <li>Paste the <b>URL</b> above and the secret as <b>Secret token</b>.</li>
-              <li>Trigger: <b>Push events</b>{#if previews} and <b>Merge request events</b>{/if}. Save.</li>
+              <li>{t('Open your project on GitLab →')} <b>Settings</b> → <b>Webhooks</b> → <b>Add new webhook</b>.</li>
+              <li>{t('Paste the')} <b>URL</b> {t('above and the secret as')} <b>Secret token</b>.</li>
+              <li>{t('Trigger:')} <b>Push events</b>{#if previews} {t('and')} <b>Merge request events</b>{/if}. {t('Save.')}</li>
             {:else if provider === 'gitea'}
-              <li>Open your repository on Gitea / Forgejo → <b>Settings</b> → <b>Webhooks</b> → <b>Add webhook</b> → <b>Gitea</b> (or <b>Forgejo</b>).</li>
-              <li>Paste the <b>Target URL</b> above; content type <code>application/json</code>; secret: the value above.</li>
-              <li>Trigger on: <b>Push</b>{#if previews} and <b>Pull request</b>{/if} events. Save.</li>
+              <li>{t('Open your repository on Gitea / Forgejo →')} <b>Settings</b> → <b>Webhooks</b> → <b>Add webhook</b> → <b>Gitea</b> ({t('or')} <b>Forgejo</b>).</li>
+              <li>{t('Paste the')} <b>Target URL</b> {t('above; content type')} <code>application/json</code>; {t('secret: the value above.')}</li>
+              <li>{t('Trigger on:')} <b>Push</b>{#if previews} {t('and')} <b>Pull request</b>{/if} {t('events. Save.')}</li>
             {:else if provider === 'bitbucket'}
-              <li>Open your repository on Bitbucket → <b>Repository settings</b> → <b>Webhooks</b> → <b>Add webhook</b>.</li>
-              <li>Paste the <b>URL</b> above and the secret (required: unsigned deliveries are rejected).</li>
-              <li>Triggers: <b>Repository push</b>{#if previews} and Pull request <b>Created</b>, <b>Updated</b>, <b>Merged</b>, <b>Declined</b>{/if}. Save.</li>
+              <li>{t('Open your repository on Bitbucket →')} <b>Repository settings</b> → <b>Webhooks</b> → <b>Add webhook</b>.</li>
+              <li>{t('Paste the')} <b>URL</b> {t('above and the secret (required: unsigned deliveries are rejected).')}</li>
+              <li>{t('Triggers:')} <b>Repository push</b>{#if previews} {t('and Pull request')} <b>Created</b>, <b>Updated</b>, <b>Merged</b>, <b>Declined</b>{/if}. {t('Save.')}</li>
             {:else}
-              <li>Open your repository on GitHub → <b>Settings</b> → <b>Webhooks</b> → <b>Add webhook</b>.</li>
-              <li>Paste the <b>Payload URL</b> above.</li>
-              <li>Content type: <code>application/json</code>.</li>
-              <li>Secret: the value above.</li>
-              <li>Events: <b>Pushes</b>{previews ? ' and ' : ''}{#if previews}<b>Pull requests</b>{/if} (“Let me select individual events”). Save.</li>
+              <li>{t('Open your repository on GitHub →')} <b>Settings</b> → <b>Webhooks</b> → <b>Add webhook</b>.</li>
+              <li>{t('Paste the')} <b>Payload URL</b> {t('above.')}</li>
+              <li>{t('Content type:')} <code>application/json</code>.</li>
+              <li>{t('Secret: the value above.')}</li>
+              <li>{t('Events:')} <b>Pushes</b>{previews ? ` ${t('and')} ` : ''}{#if previews}<b>Pull requests</b>{/if} (“Let me select individual events”). {t('Save.')}</li>
             {/if}
           </ol>
           {#if !detail.git_provider}
-            <p class="hint">Self-hosted GitLab or Gitea? Add a credential for its host under Settings → <a href={href('/settings/git')}>Git hosts</a> to get the matching webhook.</p>
+            <p class="hint">{t('Self-hosted GitLab or Gitea? Add a credential for its host under Settings →')} <a href={href('/settings/git')}>{t('Git hosts')}</a> {t('to get the matching webhook.')}</p>
           {/if}
-          <p class="hint">Pushes to <code>{s0.source.branch || 'main'}</code>{s0.source.root_dir ? ` touching ${s0.source.root_dir}/` : ''} deploy automatically{detail.service.source.auto_deploy ? '' : ' (auto-deploy is currently off)'}.</p>
+          <p class="hint">{t('Pushes to')} <code>{s0.source.branch || 'main'}</code>{s0.source.root_dir ? ` ${t('touching {dir}/', { dir: s0.source.root_dir })}` : ''} {t('deploy automatically')}{detail.service.source.auto_deploy ? '' : ` ${t('(auto-deploy is currently off)')}`}.</p>
         </div>
       </div>
     {/if}
@@ -490,11 +491,11 @@
       <VolumeBackups serviceId={s0.id} {canEdit} />
     {/if}
     <div class="card">
-      <div class="card-head"><h3>Identifiers</h3></div>
+      <div class="card-head"><h3>{t('Identifiers')}</h3></div>
       <dl class="kv card-body small">
-        <dt>Service ID</dt><dd class="mono">{s0.id}</dd>
+        <dt>{t('Service ID')}</dt><dd class="mono">{s0.id}</dd>
         <dt>Slug</dt><dd class="mono">{s0.slug}</dd>
-        <dt>Type</dt><dd>{s0.type}</dd>
+        <dt>{t('Type')}</dt><dd>{s0.type}</dd>
       </dl>
     </div>
   </aside>

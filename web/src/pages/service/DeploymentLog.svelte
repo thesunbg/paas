@@ -4,6 +4,7 @@
   import { href, navigate } from '../../lib/router.svelte';
   import { relTime, between, shortSha, absTime } from '../../lib/format';
   import { toast } from '../../lib/toast.svelte';
+  import { t, tn } from '../../lib/i18n.svelte';
   import DeployBadge from '../../components/DeployBadge.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import LogView from '../../components/LogView.svelte';
@@ -64,32 +65,34 @@
       es.close();
       refresh();
       reload();
-      if (final === 'active') toast.success('Deployment is live');
-      else if (final === 'failed') toast.error('Deployment failed');
+      if (final === 'active') toast.success(t('Deployment is live'));
+      else if (final === 'failed') toast.error(t('Deployment failed'));
     });
     es.onerror = () => {
       if (es.readyState === EventSource.CLOSED) {
         streaming = false;
-        if (!final) error = 'Log stream disconnected';
+        if (!final) error = t('Log stream disconnected');
       }
     };
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       tickNow = Date.now();
       if (streaming && dep && !terminal.includes(dep.status)) refresh();
     }, 3000);
     return () => {
       es.close();
-      clearInterval(t);
+      clearInterval(timer);
     };
   });
 
   const status = $derived(final ?? dep?.status ?? 'queued');
   const isRunning = $derived(!terminal.includes(status));
+  // Final deployment statuses sent by the log stream's done event.
+  const finalLabel = $derived<Record<string, string>>({ active: t('active'), superseded: t('superseded'), failed: t('failed'), cancelled: t('cancelled') });
 
   async function cancel() {
     try {
       await api.cancelDeployment(deploymentId);
-      toast.success('Deployment cancelled');
+      toast.success(t('Deployment cancelled'));
       refresh();
     } catch (e) {
       toast.error(errorMessage(e));
@@ -98,7 +101,7 @@
   async function redeploy() {
     try {
       const d = await api.deploy(serviceId);
-      toast.success('Deployment queued');
+      toast.success(t('Deployment queued'));
       navigate(`/services/${serviceId}/deployments/${d.id}`);
     } catch (e) {
       toast.error(errorMessage(e));
@@ -117,18 +120,18 @@
 
 <div class="stack">
   <div class="between">
-    <a href={href(`/services/${serviceId}/deployments`)} class="small row nowrap" style="gap:4px"><Icon name="arrowleft" size={12} />All deployments</a>
+    <a href={href(`/services/${serviceId}/deployments`)} class="small row nowrap" style="gap:4px"><Icon name="arrowleft" size={12} />{t('All deployments')}</a>
     <div class="row">
-      {#if canEdit && status === 'queued'}<button class="sm" onclick={cancel}>Cancel</button>{/if}
-      {#if canEdit && status === 'failed'}<button class="sm primary" onclick={redeploy}><Icon name="rocket" size={12} />Redeploy</button>{/if}
-      <button class="sm" onclick={download} disabled={!lines.length}>Download</button>
+      {#if canEdit && status === 'queued'}<button class="sm" onclick={cancel}>{t('Cancel')}</button>{/if}
+      {#if canEdit && status === 'failed'}<button class="sm primary" onclick={redeploy}><Icon name="rocket" size={12} />{t('Redeploy')}</button>{/if}
+      <button class="sm" onclick={download} disabled={!lines.length}>{t('Download')}</button>
     </div>
   </div>
 
   <div class="card head">
     <div class="row" style="gap:14px">
       <DeployBadge {status} />
-      {#if isRunning}<span class="row nowrap small muted" style="gap:6px"><span class="spinner"></span>{streaming ? 'Streaming live' : 'Waiting'}</span>{/if}
+      {#if isRunning}<span class="row nowrap small muted" style="gap:6px"><span class="spinner"></span>{streaming ? t('Streaming live') : t('Waiting')}</span>{/if}
       <span class="mono small">#{deploymentId.slice(0, 8)}</span>
       {#if dep}
         {#if dep.commit_sha}<span class="small"><code>{shortSha(dep.commit_sha)}</code> <span class="muted">{dep.commit_message}</span></span>{/if}
@@ -148,24 +151,24 @@
   <ErrorMsg {error} />
 
   <div class="row">
-    <label class="sr-only" for="dlfilter">Filter log</label>
-    <input id="dlfilter" class="filter" type="search" placeholder="Filter lines…" bind:value={filter} />
-    <span class="faint small">{lines.length} lines</span>
+    <label class="sr-only" for="dlfilter">{t('Filter log')}</label>
+    <input id="dlfilter" class="filter" type="search" placeholder={t('Filter lines…')} bind:value={filter} />
+    <span class="faint small">{tn(lines.length, '{n} line', '{n} lines')}</span>
   </div>
 
-  <LogView {lines} {filter} height="calc(100vh - 360px)" empty={isRunning ? 'Waiting for output…' : 'No log output.'} />
+  <LogView {lines} {filter} height="calc(100vh - 360px)" empty={isRunning ? t('Waiting for output…') : t('No log output.')} />
 
   {#if final}
     <div class="alert {final === 'active' ? 'success' : final === 'failed' ? 'error' : ''}">
       <Icon name={final === 'active' ? 'check' : final === 'failed' ? 'x' : 'activity'} />
-      Deployment finished with status <b>{final}</b>.
-      {#if final === 'active' && detail.urls[0]}<a href={detail.urls[0]} target="_blank" rel="noreferrer">Open {detail.urls[0].replace(/^https?:\/\//, '')}</a>{/if}
+      {t('Deployment finished with status')} <b>{finalLabel[final] ?? final}</b>.
+      {#if final === 'active' && detail.urls[0]}<a href={detail.urls[0]} target="_blank" rel="noreferrer">{t('Open {url}', { url: detail.urls[0].replace(/^https?:\/\//, '') })}</a>{/if}
     </div>
   {/if}
 
   {#if scan}
-    <section class="card" aria-label="Security">
-      <div class="card-head"><h3>Security</h3></div>
+    <section class="card" aria-label={t('Security')}>
+      <div class="card-head"><h3>{t('Security')}</h3></div>
       <div class="card-body"><ScanPanel {scan} limit={20} /></div>
     </section>
   {/if}

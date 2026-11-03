@@ -6,6 +6,7 @@
   import Chart, { type Pt } from '../../components/Chart.svelte';
   import ErrorMsg from '../../components/ErrorMsg.svelte';
   import Loading from '../../components/Loading.svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   let { detail }: { detail: ServiceDetail } = $props();
 
@@ -75,7 +76,7 @@
 
 <div class="stack">
   <div class="between">
-    <div class="seg" role="radiogroup" aria-label="Time range">
+    <div class="seg" role="radiogroup" aria-label={t('Time range')}>
       {#each ranges as h (h)}
         <button type="button" role="radio" aria-checked={hours === h} class="sm" class:on={hours === h} onclick={() => pick(h)}>{h}h</button>
       {/each}
@@ -83,9 +84,9 @@
     <div class="row small muted" style="gap:16px">
       {#if loading}<span class="spinner"></span>{/if}
       {#if data}
-        <span>Now: <b class="num">{data.rps_5m.toFixed(2)}</b> req/s</span>
-        <span>5xx (5 min): <b class="num" style:color={data.errors_5m ? 'var(--red)' : undefined}>{data.errors_5m}</b></span>
-        <span>{hours}h: <b class="num">{n0(totals.req)}</b> requests, <b class="num">{totals.err}</b> errors{totals.req ? ` (${((totals.err / totals.req) * 100).toFixed(2)}%)` : ''}</span>
+        <span>{t('Now:')} <b class="num">{data.rps_5m.toFixed(2)}</b> req/s</span>
+        <span>{t('5xx (5 min):')} <b class="num" style:color={data.errors_5m ? 'var(--red)' : undefined}>{data.errors_5m}</b></span>
+        <span>{hours}h: <b class="num">{n0(totals.req)}</b> {t('requests')}, <b class="num">{totals.err}</b> {t('errors')}{totals.req ? ` (${((totals.err / totals.req) * 100).toFixed(2)}%)` : ''}</span>
       {/if}
     </div>
   </div>
@@ -94,28 +95,28 @@
     <Loading rows={2} />
   {:else if data}
     <div class="charts">
-      <Chart title="Memory (sum of instances) · limit {mb(limit)}/instance" points={memory} format={(v) => mb(v)} />
-      <Chart title="CPU (sum of instances)" points={cpuS} format={(v) => cpu(Math.round(v))} />
-      <Chart title="Requests per minute" points={reqs} kind="bars" format={n0} minTop={2} />
-      <Chart title="5xx errors per minute" points={errs} kind="bars" color="var(--red)" format={n0} minTop={2} summary={totals.err ? `${totals.err} in ${hours}h` : 'none'} />
-      <Chart title="Network in (received)" points={netIn} format={rate} summary={`${bytes(netTotals.rx)} in ${hours}h`} />
-      <Chart title="Network out (sent)" points={netOut} format={rate} color="var(--purple, #8b5cf6)" summary={`${bytes(netTotals.tx)} in ${hours}h`} />
-      <Chart title="Running instances" points={inst} format={(v) => String(Math.round(v))} minTop={2} />
+      <Chart title={t('Memory (sum of instances) · limit {limit}/instance', { limit: mb(limit) })} points={memory} format={(v) => mb(v)} />
+      <Chart title={t('CPU (sum of instances)')} points={cpuS} format={(v) => cpu(Math.round(v))} />
+      <Chart title={t('Requests per minute')} points={reqs} kind="bars" format={n0} minTop={2} />
+      <Chart title={t('5xx errors per minute')} points={errs} kind="bars" color="var(--red)" format={n0} minTop={2} summary={totals.err ? t('{n} in {hours}h', { n: totals.err, hours }) : t('none')} />
+      <Chart title={t('Network in (received)')} points={netIn} format={rate} summary={t('{n} in {hours}h', { n: bytes(netTotals.rx), hours })} />
+      <Chart title={t('Network out (sent)')} points={netOut} format={rate} color="var(--purple, #8b5cf6)" summary={t('{n} in {hours}h', { n: bytes(netTotals.tx), hours })} />
+      <Chart title={t('Running instances')} points={inst} format={(v) => String(Math.round(v))} minTop={2} />
     </div>
     {#if tr}
       <div class="card traffic">
         <div class="card-head">
-          <h3>Bandwidth</h3>
-          <span class="faint small">{tr.since ? `since ${tr.since}` : 'last 30 days'} · days in {tr.tz}</span>
+          <h3>{t('Bandwidth')}</h3>
+          <span class="faint small">{tr.since ? t('since {date}', { date: tr.since }) : t('last 30 days')} · {t('days in {tz}', { tz: tr.tz })}</span>
         </div>
         <div class="card-body stack">
           <div class="row small" style="gap:24px">
-            <span>Today: <b class="num">↓ {bytes(tr.rx_today)}</b> <b class="num">↑ {bytes(tr.tx_today)}</b></span>
-            <span>30 days: <b class="num">↓ {bytes(tr.rx_30d)}</b> <b class="num">↑ {bytes(tr.tx_30d)}</b> · total <b class="num">{bytes(tr.rx_30d + tr.tx_30d)}</b></span>
+            <span>{t('Today:')} <b class="num">↓ {bytes(tr.rx_today)}</b> <b class="num">↑ {bytes(tr.tx_today)}</b></span>
+            <span>{t('30 days:')} <b class="num">↓ {bytes(tr.rx_30d)}</b> <b class="num">↑ {bytes(tr.tx_30d)}</b> · {t('total')} <b class="num">{bytes(tr.rx_30d + tr.tx_30d)}</b></span>
           </div>
           {#if tr.daily.length}
             {@const top = Math.max(1, ...tr.daily.map((d) => d.rx_bytes + d.tx_bytes))}
-            <div class="days" role="img" aria-label="Traffic per day">
+            <div class="days" role="img" aria-label={t('Traffic per day')}>
               {#each tr.daily as d (d.day)}
                 <div class="day" title="{d.day}: ↓ {bytes(d.rx_bytes)} ↑ {bytes(d.tx_bytes)}">
                   <span class="tx" style:height="{(d.tx_bytes / top) * 100}%"></span>
@@ -123,14 +124,14 @@
                 </div>
               {/each}
             </div>
-            <p class="hint">Per day: <span class="key rx"></span> received <span class="key tx"></span> sent. All traffic of the containers, including calls to databases and other services of the project.</p>
+            <p class="hint">{t('Per day:')} <span class="key rx"></span> {t('received')} <span class="key tx"></span> {t('sent.')} {t('All traffic of the containers, including calls to databases and other services of the project.')}</p>
           {:else}
-            <p class="hint">No traffic recorded yet.</p>
+            <p class="hint">{t('No traffic recorded yet.')}</p>
           {/if}
         </div>
       </div>
     {/if}
-    <p class="hint">One point per minute, recorded by the control plane. Hover or use the arrow keys on a chart to read values.</p>
+    <p class="hint">{t('One point per minute, recorded by the control plane. Hover or use the arrow keys on a chart to read values.')}</p>
   {/if}
 </div>
 

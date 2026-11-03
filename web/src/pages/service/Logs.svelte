@@ -3,6 +3,7 @@
   import { api } from '../../lib/api';
   import LogView from '../../components/LogView.svelte';
   import Icon from '../../components/Icon.svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   let { serviceId }: { serviceId: string } = $props();
 
@@ -68,19 +69,19 @@
   <div class="row toolbar">
     <span class="row nowrap small" style="gap:6px">
       <span class="dot {conn === 'live' ? (paused ? 'sleeping' : 'running') : conn === 'error' ? 'failed' : 'deploying'}"></span>
-      {conn === 'live' ? (paused ? 'Paused' : 'Live') : conn === 'error' ? 'Disconnected' : 'Connecting…'}
+      {conn === 'live' ? (paused ? t('Paused') : t('Live')) : conn === 'error' ? t('Disconnected') : t('Connecting…')}
     </span>
-    <label class="sr-only" for="logfilter">Filter logs</label>
-    <input id="logfilter" type="search" class="filter" placeholder="Filter…" bind:value={filter} />
+    <label class="sr-only" for="logfilter">{t('Filter logs')}</label>
+    <input id="logfilter" type="search" class="filter" placeholder={t('Filter…')} bind:value={filter} />
     <div class="spacer"></div>
     <button class="sm" onclick={togglePause} aria-pressed={paused}>
-      <Icon name={paused ? 'play' : 'pause'} size={12} />{paused ? `Resume${buffered ? ` (${buffered} new)` : ''}` : 'Pause'}
+      <Icon name={paused ? 'play' : 'pause'} size={12} />{paused ? (buffered ? t('Resume ({n} new)', { n: buffered }) : t('Resume')) : t('Pause')}
     </button>
-    <button class="sm" onclick={clear}>Clear</button>
-    {#if conn === 'error'}<button class="sm" onclick={connect}><Icon name="refresh" size={12} />Reconnect</button>{/if}
+    <button class="sm" onclick={clear}>{t('Clear')}</button>
+    {#if conn === 'error'}<button class="sm" onclick={connect}><Icon name="refresh" size={12} />{t('Reconnect')}</button>{/if}
   </div>
-  <LogView {lines} {filter} height="calc(100vh - 300px)" empty={conn === 'live' ? 'Waiting for log lines… (sleeping or stopped services produce no output)' : 'Connecting…'} />
-  <p class="hint">Each line is prefixed with the last 6 characters of the container id. Keeps the latest {MAX} lines.</p>
+  <LogView {lines} {filter} height="calc(100vh - 300px)" empty={conn === 'live' ? t('Waiting for log lines… (sleeping or stopped services produce no output)') : t('Connecting…')} />
+  <p class="hint">{t('Each line is prefixed with the last 6 characters of the container id. Keeps the latest {n} lines.', { n: MAX })}</p>
 </div>
 
 <style>
