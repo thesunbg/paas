@@ -98,7 +98,7 @@
   {:else if deps}
     <div class="card table-wrap">
       <table>
-        <thead><tr><th>{t('Status')}</th><th>{t('Commit')}</th><th class="hide-sm">{t('Trigger')}</th><th>{t('Created')}</th><th class="hide-sm">{t('Duration')}</th><th class="right">{t('Actions')}</th></tr></thead>
+        <thead><tr><th>{t('Status')}</th><th>{t('Commit')}</th><th class="hide-sm">{t('Trigger')}</th><th>{t('Created at')}</th><th class="hide-sm">{t('Duration')}</th><th class="right">{t('Actions')}</th></tr></thead>
         <tbody>
           {#each deps as d (d.id)}
             <tr class="clickable" onclick={() => navigate(`/services/${sid}/deployments/${d.id}`)}>

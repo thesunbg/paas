@@ -94,7 +94,7 @@
   "ends {date}": "hết hỗ trợ {date}",
   "GitHub account connected": "Đã kết nối tài khoản GitHub",
   "Configure": "Cấu hình",
-  "Environment": "Môi trường",
+  "Environment": "Biến môi trường",
   "Choose a repository": "Hãy chọn một repo",
   "Enter a Git repository URL": "Hãy nhập URL repo Git",
   "Repository URL should start with https://, git@ or ssh://": "URL repo phải bắt đầu bằng https://, git@ hoặc ssh://",
@@ -278,5 +278,5 @@
   "accounts": "tài khoản",
   "copies": "bản sao",
   "Delete": "Xoá",
-  "Created at": "Ngày tạo"
+  "Created at": "Tạo lúc"
 }
