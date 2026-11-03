@@ -7,6 +7,7 @@
   import Loading from '../../components/Loading.svelte';
   import SetupMark from '../../components/SetupMark.svelte';
   import Icon from '../../components/Icon.svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   let list = $state<SetupChecklist | null>(null);
   let error = $state('');
@@ -45,20 +46,20 @@
 <div class="card">
   <div class="card-head">
     <div>
-      <h3>Setup checklist</h3>
+      <h3>{t('Setup checklist')}</h3>
       <p class="hint">
-        DNS, HTTPS, ports, git, off-site backups and notifications, checked from the server. Also available over SSH as <code>paas doctor</code>.
+        {t('DNS, HTTPS, ports, git, off-site backups and notifications, checked from the server. Also available over SSH as')} <code>paas doctor</code>.
       </p>
     </div>
     <div class="row nowrap">
-      <button class="sm" onclick={() => load(true)} disabled={busy} aria-label="Check again">
-        {#if busy}<span class="spinner"></span>{:else}<Icon name="refresh" size={13} />{/if}<span class="hide-sm">Check again</span>
+      <button class="sm" onclick={() => load(true)} disabled={busy} aria-label={t('Check again')}>
+        {#if busy}<span class="spinner"></span>{:else}<Icon name="refresh" size={13} />{/if}<span class="hide-sm">{t('Check again')}</span>
       </button>
-      <button class="sm primary" onclick={() => openWizard()}>Open wizard</button>
+      <button class="sm primary" onclick={() => openWizard()}>{t('Open wizard')}</button>
     </div>
   </div>
   {#if !list}
-    <div class="card-body">{#if error}<ErrorMsg {error} />{:else}<Loading label="Running checks…" />{/if}</div>
+    <div class="card-body">{#if error}<ErrorMsg {error} />{:else}<Loading label={t('Running checks…')} />{/if}</div>
   {:else}
     <ul class="steps">
       {#each list.steps as s (s.id)}
@@ -66,7 +67,7 @@
           <button type="button" class="step" onclick={() => openWizard(s.id)}>
             <SetupMark status={s.status} skipped={s.skipped} />
             <span class="text">
-              <b>{s.title}</b>{#if s.skipped && s.status !== 'ok'} <span class="faint small">skipped</span>{/if}
+              <b>{s.title}</b>{#if s.skipped && s.status !== 'ok'} <span class="faint small">{t('skipped')}</span>{/if}
               <span class="muted small">{s.summary}</span>
             </span>
             <Icon name="chevron" size={14} />
@@ -75,8 +76,8 @@
       {/each}
     </ul>
     <div class="card-body foot faint small">
-      {counts.ok} ok · {counts.warn} to review · {counts.fail} failing{#if checkedAt} · checked {relTime(checkedAt)}{/if}
-      {#if list.finished}· wizard finished{:else if list.dismissed}· wizard skipped{/if}
+      {t('{ok} ok · {warn} to review · {fail} failing', { ok: counts.ok, warn: counts.warn, fail: counts.fail })}{#if checkedAt} · {t('checked {when}', { when: relTime(checkedAt) })}{/if}
+      {#if list.finished}· {t('wizard finished')}{:else if list.dismissed}· {t('wizard skipped')}{/if}
     </div>
   {/if}
 </div>
