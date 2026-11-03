@@ -23,6 +23,9 @@ Mã nguồn đã chạy end-to-end trong môi trường thử nghiệm (2 node, 
 | Cluster: join 1 lệnh, WireGuard mesh, cách ly nftables xuyên node, registry nội bộ, drain/cordon | ✅ | Dùng WireGuard userspace (wireguard-go), không cần module kernel |
 | Preview cho mỗi PR, cron job, autoscaling, thông báo, metrics, 2FA, template, import Compose | ✅ | |
 | HA control plane | ✅ | Nhiều `paasd server` dùng chung PostgreSQL, NATS chạy thành cluster, bầu leader bằng advisory lock, khoá phân tán theo service. Đã thử: tắt hẳn control plane chính thì bản còn lại lên leader trong khoảng 1 giây. PostgreSQL HA (Patroni/managed) thì tự lo |
+| Thêm node qua SSH, cài control plane từ laptop (`paas install --ssh`) | ✅ | Xác nhận fingerprint host key trước khi gửi credential, credential không được lưu, preflight (OS, arch, RAM, disk, cổng, kết nối tới control plane), log trực tiếp. Chưa thử với server thật |
+| Cập nhật paas từ dashboard | ✅ | Kiểm tra release, SHA256SUMS bắt buộc, state backup trước, control plane (leader sau cùng) rồi từng node, tự rollback node không lên, pause/resume/abort. Lần đầu phải nâng cấp control plane lên bản này bằng tay. Chưa có chữ ký minisign/cosign |
+| Wizard cài đặt lần đầu, `paas doctor` | ✅ | DNS wildcard, HTTPS, cổng, GitHub, S3 backup, thông báo, app đầu tiên |
 | Tự động thêm node qua API cloud (Hetzner/DO/AWS) | ⏳ | Chưa làm |
 | Lazy pulling, Firecracker, Wasm, CRIU | ⏳ | Giai đoạn 4 |
 | Git host ngoài GitHub: GitLab, Gitea/Forgejo, Bitbucket Cloud | ✅ | Token theo team (mã hoá, chỉ gửi tới đúng host), webhook có xác thực, preview cho MR/PR, commit status. Chưa thử với server thật |
