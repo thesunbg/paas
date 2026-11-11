@@ -515,8 +515,10 @@ func (s *Server) restoreBackup(ctx context.Context, db *store.Database, b *store
 	if err != nil {
 		return err
 	}
-	if b.NodeID == nil || *b.NodeID != in.NodeID {
-		if b.S3Key == "" || !s.storage().Enabled() {
+	sameNode := b.NodeID != nil && *b.NodeID == in.NodeID
+	offsite := b.S3Key != "" && s.storage().Enabled()
+	if !sameNode {
+		if !offsite {
 			return errors.New("backup file is stored on a different node than the database server (configure S3 for off-site backups)")
 		}
 		// Fetch the off-site copy onto the database server's node.
@@ -528,7 +530,15 @@ func (s *Server) restoreBackup(ctx context.Context, db *store.Database, b *store
 	if err != nil {
 		return err
 	}
-	return s.execOnService(ctx, srv.ID, cmd, b.Path, "", 1)
+	err = s.execOnService(ctx, srv.ID, cmd, b.Path, "", 1)
+	if err != nil && sameNode && offsite && strings.Contains(err.Error(), "no such file") {
+		// The local copy is gone (disk lost or cleaned up): fetch the off-site copy and retry.
+		if terr := s.transfer(ctx, in.NodeID, http.MethodGet, b.S3Key, b.Path); terr != nil {
+			return fmt.Errorf("%w; download backup from S3: %v", err, terr)
+		}
+		err = s.execOnService(ctx, srv.ID, cmd, b.Path, "", 1)
+	}
+	return err
 }
 
 func (s *Server) runScheduledBackups(ctx context.Context) {
