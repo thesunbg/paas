@@ -211,7 +211,7 @@ func planUsage(svcs []templates.Service, tdbs []templates.Database, existing map
 		if !ok {
 			size, _ = resources.SizeByName("small")
 		}
-		resources.Apply(&spec, size, model.QoSBurstable)
+		resources.Apply(&spec, size, firstNonEmpty(ts.QoS, model.QoSBurstable))
 		_ = resources.Normalize(typ, &spec)
 		u = u.plus(serviceUsage(typ, spec))
 		u.Services++

@@ -276,6 +276,7 @@ func (s *Server) recoverDedicated(ctx context.Context, db *store.Database, old *
 		fail(fmt.Errorf("create the new server: %w", err))
 		return
 	}
+	oldHost, _ := s.serverHost(ctx, old.ID)
 	tdb := *db
 	tdb.ServerServiceID = &target.ID
 	if err := s.waitServiceRunning(ctx, target.ID, 15*time.Minute); err != nil {
@@ -297,6 +298,16 @@ func (s *Server) recoverDedicated(ctx context.Context, db *store.Database, old *
 		msg += ", empty"
 	}
 	_ = s.store.SetDatabaseStatus(ctx, db.ID, "ready", "")
+	// The new server has another host: env vars that name the old one (templates) follow it.
+	if newHost, err := s.serverHost(ctx, target.ID); err == nil {
+		skip := map[string]bool{}
+		if links, err := s.store.LinksForDatabase(ctx, db.ID); err == nil {
+			for _, l := range links {
+				skip[l.ServiceID] = true // restartLinked below restarts them
+			}
+		}
+		s.retargetEnv(ctx, s.envDependents(ctx, &tdb, oldHost, old.ID), oldHost, newHost, skip)
+	}
 	s.restartLinked(ctx, db.ID)
 	s.publishAll(ctx)
 	s.notify(ctx, s.teamOfDatabase(ctx, db), "database.recover", fmt.Sprintf("Database %s %s.", db.Name, msg), map[string]any{"database": db.ID})

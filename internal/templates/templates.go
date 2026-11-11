@@ -21,6 +21,7 @@ type Service struct {
 	Volumes []model.Volume    `json:"volumes,omitempty"`
 	Command []string          `json:"command,omitempty"`
 	Size    string            `json:"size,omitempty"`
+	QoS     string            `json:"qos,omitempty"` // "": burstable
 	Health  string            `json:"health_path,omitempty"`
 	// HealthTimeout is how long the first start may take (seconds; default 180).
 	// JVM apps that set themselves up on first boot need more on small servers.
@@ -35,6 +36,24 @@ type Service struct {
 	Inputs []EnvInput `json:"inputs,omitempty"`
 	// DependsOn names services (of the same plan) to start first.
 	DependsOn []string `json:"depends_on,omitempty"`
+	// KeepAwake: the app does work without requests (schedules, polling triggers), so it
+	// does not get sleep unless the installer asks for it explicitly.
+	KeepAwake bool `json:"keep_awake,omitempty"`
+	// VolumeBackupHours: how often the volumes go off-site (0: the platform default, daily).
+	VolumeBackupHours int `json:"volume_backup_hours,omitempty"`
+	// Restricted is added to Env when the install is restricted (a class of learners on one
+	// server): it turns off what lets a user run code on the host or read its environment.
+	Restricted map[string]string `json:"restricted,omitempty"`
+}
+
+// KeepAwake reports whether one of the template's services must not sleep by default.
+func (t *Template) KeepAwake() bool {
+	for _, s := range t.Services {
+		if s.KeepAwake {
+			return true
+		}
+	}
+	return false
 }
 
 // Build locates a service's Dockerfile in a repository.
@@ -51,6 +70,8 @@ type Database struct {
 	Engine  string `json:"engine"`
 	Mode    string `json:"mode,omitempty"`
 	Version string `json:"version,omitempty"`
+	// BackupHours: how often it is dumped (0: the platform default, daily).
+	BackupHours int `json:"backup_hours,omitempty"`
 }
 
 type Template struct {
@@ -86,15 +107,33 @@ var All = []Template{
 	{
 		ID: "n8n", Title: "n8n", Category: "Automation",
 		Description: "Workflow automation (Zapier alternative) backed by PostgreSQL.",
-		Databases:   []Database{{Name: "n8n", Engine: "postgres"}},
+		// Workflows and credentials live in the database: dumped every 6 hours, not daily.
+		Databases: []Database{{Name: "n8n", Engine: "postgres", BackupHours: 6}},
 		Services: []Service{{
-			Name: "n8n", Image: "docker.io/n8nio/n8n:latest", Type: "web", Port: 5678, Size: "small",
+			// Pinned: :latest would jump major versions (breaking changes) on a redeploy.
+			// medium: n8n 2.x peaks at ~460 MB just starting (main process + its task runner),
+			// so the 512 MB of small gets it OOM-killed on a first boot.
+			Name: "n8n", Image: "docker.io/n8nio/n8n:2.47.3", Type: "web", Port: 5678, Size: "medium",
 			Env: map[string]string{
 				"DB_TYPE": "postgresdb", "DB_POSTGRESDB_HOST": "${db.n8n.host}", "DB_POSTGRESDB_PORT": "${db.n8n.port}",
 				"DB_POSTGRESDB_DATABASE": "${db.n8n.name}", "DB_POSTGRESDB_USER": "${db.n8n.user}", "DB_POSTGRESDB_PASSWORD": "${db.n8n.password}",
 				"N8N_HOST": "${host}", "WEBHOOK_URL": "${url}/", "N8N_PORT": "5678", "N8N_LISTEN_ADDRESS": "0.0.0.0", "N8N_ENCRYPTION_KEY": "${random}",
+				// Behind the edge proxy: the client IP comes from X-Forwarded-For (login rate limits).
+				"N8N_PROXY_HOPS": "1",
+				// Keep the execution history bounded (14 days) so the database does not grow forever.
+				"EXECUTIONS_DATA_PRUNE": "true", "EXECUTIONS_DATA_MAX_AGE": "336",
 			},
 			Volumes: []model.Volume{{Name: "data", Path: "/home/node/.n8n"}},
+			// Schedule and polling triggers stop while n8n sleeps.
+			KeepAwake:         true,
+			VolumeBackupHours: 12,
+			// A class on one server: no shell commands or host file triggers, no access to the
+			// container's env (it holds the database password), files only in one folder.
+			Restricted: map[string]string{
+				"NODES_EXCLUDE":                `["n8n-nodes-base.executeCommand","n8n-nodes-base.localFileTrigger"]`,
+				"N8N_BLOCK_ENV_ACCESS_IN_NODE": "true",
+				"N8N_RESTRICT_FILE_ACCESS_TO":  "/home/node/.n8n-files",
+			},
 		}},
 	},
 	{

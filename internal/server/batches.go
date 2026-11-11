@@ -72,9 +72,46 @@ type batchInput struct {
 	// Pacing. Parallel copies start at the same time (default 2, at most 10).
 	// Sleep (default on) puts each copy to sleep once it is up and after
 	// IdleMinutes (default 30) without a request; it wakes on the next request.
+	// Sleep is off by default for templates that work without requests (n8n: schedules).
 	Parallel    int   `json:"parallel"`
 	Sleep       *bool `json:"sleep"`
 	IdleMinutes int   `json:"idle_minutes"`
+	// Size and QoS of each copy's main service ("" keeps the template's).
+	Size string `json:"size"`
+	QoS  string `json:"qos"`
+	// Restricted (default on) applies the template's restricted env to every copy: a class
+	// shares one server, so no copy may run commands on it or read its environment.
+	Restricted *bool `json:"restricted"`
+	// LearnerCanDeploy (accounts mode): by default a learner's team is held to its copy (no
+	// new services, databases, projects or domains); true leaves it the default quota.
+	LearnerCanDeploy bool `json:"learner_can_deploy"`
+}
+
+// applyDefaults fills the choices that depend on the template. Run it once, before the
+// input is stored: an explicit sleep: true then still reads as asked for.
+func (in *batchInput) applyDefaults(tpl *templates.Template) {
+	if in.Sleep == nil && tpl.KeepAwake() {
+		off := false
+		in.Sleep = &off
+	}
+	if in.Restricted == nil {
+		on := true
+		in.Restricted = &on
+	}
+}
+
+// installOptions is what each copy is installed with.
+func (in *batchInput) installOptions() installOptions {
+	_, sl := in.pacing()
+	return installOptions{Sleep: sl, SleepExplicit: in.Sleep != nil && *in.Sleep, Size: in.Size, QoS: in.QoS,
+		Restricted: in.Restricted != nil && *in.Restricted}
+}
+
+// sized is tpl with the batch's size and QoS on its main service (for estimates and quotas).
+func (in *batchInput) sized(tpl *templates.Template) *templates.Template {
+	t := *tpl
+	t.Services = sizedServices(tpl.Services, in.Size, in.QoS)
+	return &t
 }
 
 // pacing returns the batch's start concurrency and sleep policy, with defaults applied.
@@ -144,7 +181,13 @@ func computeBatchEstimate(tpl *templates.Template, n, parallel int, sleep bool, 
 		if !ok {
 			size, _ = resources.SizeByName("small")
 		}
-		svcReq += size.MemoryRequestMB
+		switch ts.QoS {
+		case model.QoSGuaranteed:
+			svcReq += size.MemoryLimitMB // reserved whole
+		case model.QoSBestEffort:
+		default:
+			svcReq += size.MemoryRequestMB
+		}
 		svcLim += size.MemoryLimitMB
 	}
 	for _, d := range tpl.Databases {
@@ -198,14 +241,19 @@ func (s *Server) handleBatchEstimate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, fmt.Sprintf("count must be 1 to %d", batchMax))
 		return
 	}
-	in := batchInput{IdleMinutes: 0}
+	in := batchInput{IdleMinutes: 0, Size: r.URL.Query().Get("size"), QoS: r.URL.Query().Get("qos")}
+	if err := validInstallSize(in.Size, in.QoS); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
 	in.Parallel, _ = strconv.Atoi(r.URL.Query().Get("parallel"))
 	if v := r.URL.Query().Get("sleep"); v != "" {
 		b := v == "true" || v == "1"
 		in.Sleep = &b
 	}
+	in.applyDefaults(tpl)
 	parallel, sl := in.pacing()
-	writeJSON(w, 200, s.estimateBatch(r.Context(), tpl, n, parallel, sl.Enabled))
+	writeJSON(w, 200, s.estimateBatch(r.Context(), in.sized(tpl), n, parallel, sl.Enabled))
 }
 
 // POST /api/v1/batches (platform administrators)
@@ -290,8 +338,13 @@ func (s *Server) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "idle_minutes must be 0 to 1440")
 		return
 	}
+	if err := validInstallSize(in.Size, in.QoS); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	in.applyDefaults(tpl)
 	parallel, sleep := in.pacing()
-	est := s.estimateBatch(ctx, tpl, len(labels), parallel, sleep.Enabled)
+	est := s.estimateBatch(ctx, in.sized(tpl), len(labels), parallel, sleep.Enabled)
 	if est.Blocked {
 		writeJSON(w, 409, map[string]any{"error": est.Warning, "estimate": est})
 		return
@@ -303,7 +356,7 @@ func (s *Server) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 
 	// Quotas are checked for the whole batch up front: copies are created in the
 	// background, and a class half installed is worse than a clear refusal.
-	perCopy := planUsage(tpl.Services, tpl.Databases, nil, "")
+	perCopy := planUsage(in.sized(tpl).Services, tpl.Databases, nil, "")
 	if in.Mode == "accounts" {
 		// Each learner gets a new team (with the default quota) holding one project and one copy.
 		if err := s.defaultQuota(ctx).fits(TeamUsage{}, perCopy.plus(TeamUsage{Projects: 1})); err != nil {
@@ -326,22 +379,21 @@ func (s *Server) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 				writeLimitError(w, err)
 				return
 			}
+			projectID = &p.ID
 		} else {
+			// Each copy gets a project of its own: projects are isolated from each other on
+			// the network, so one learner's app cannot reach another's.
 			team := firstNonEmpty(in.TeamID, s.firstTeam(ctx, u.ID))
 			if team == "" {
 				writeError(w, 400, "team_id is required")
 				return
 			}
-			if err := s.checkQuota(ctx, team, need.plus(TeamUsage{Projects: 1})); err != nil {
+			if err := s.checkQuota(ctx, team, need.plus(TeamUsage{Projects: len(labels)})); err != nil {
 				writeLimitError(w, err)
 				return
 			}
-			if p, err = s.store.CreateProject(ctx, team, in.Name, s.uniqueProjectSlug(ctx, in.Name)); err != nil {
-				writeError(w, 500, err.Error())
-				return
-			}
+			in.TeamID = team // stored with the input: the runner creates the projects in it
 		}
-		projectID = &p.ID
 	}
 	var id string
 	// The input is kept (encrypted: it holds the template inputs) so another control
@@ -413,10 +465,16 @@ func (s *Server) runBatch(ctx context.Context, id string, tpl *templates.Templat
 	}
 	rows.Close()
 	var shared *store.Project
-	if in.Mode == "instances" {
-		var pid string
-		_ = s.store.Q(ctx).QueryRow(ctx, `SELECT project_id FROM batches WHERE id=$1`, id).Scan(&pid)
-		if shared, err = s.store.ProjectByID(ctx, pid); err != nil {
+	var pid *string
+	_ = s.store.Q(ctx).QueryRow(ctx, `SELECT project_id FROM batches WHERE id=$1`, id).Scan(&pid)
+	perCopyProject := in.Mode == "instances" && pid == nil // a project for each copy (see handleCreateBatch)
+	if perCopyProject && in.TeamID == "" {
+		_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET error='no team to create the copies in' WHERE batch_id=$1 AND service_id IS NULL AND error=''`, id)
+		_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batches SET status='ready' WHERE id=$1 AND status='creating'`, id)
+		return
+	}
+	if in.Mode == "instances" && !perCopyProject {
+		if shared, err = s.store.ProjectByID(ctx, *pid); err != nil {
 			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET error='the project is gone' WHERE batch_id=$1 AND service_id IS NULL AND error=''`, id)
 			_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batches SET status='ready' WHERE id=$1 AND status='creating'`, id)
 			return
@@ -460,10 +518,29 @@ func (s *Server) runBatch(ctx context.Context, id string, tpl *templates.Templat
 			}
 			name = ""
 		}
-		svcs, dbs, err := s.installTemplate(ctx, p, tpl, name, "", in.Env, sleep)
+		if perCopyProject {
+			if it.project != nil { // resumed: the project was made before the stop
+				if p, err = s.store.ProjectByID(ctx, *it.project); err != nil {
+					fail(errors.New("the copy's project is gone"))
+					continue
+				}
+			} else {
+				title := in.Name + " " + it.label
+				if p, err = s.store.CreateProject(ctx, in.TeamID, title, s.uniqueProjectSlug(ctx, title)); err != nil {
+					fail(err)
+					continue
+				}
+				_, _ = s.store.Q(ctx).Exec(ctx, `UPDATE batch_items SET project_id=$3 WHERE batch_id=$1 AND idx=$2`, id, it.idx, p.ID)
+			}
+			name = "" // the project names the copy; the app keeps the template's name
+		}
+		svcs, dbs, err := s.installTemplateWith(ctx, p, tpl, name, "", in.Env, in.installOptions())
 		if err != nil {
 			fail(err)
 			continue
+		}
+		if in.Mode == "accounts" && !in.LearnerCanDeploy {
+			s.holdToCopy(ctx, p.TeamID, len(svcs), len(dbs))
 		}
 		dbIDs := []string{}
 		for _, d := range dbs {
@@ -586,6 +663,33 @@ func (s *Server) resumeStaleBatches(ctx context.Context) {
 		}
 		slog.Info("resuming batch", "batch", b.id)
 		go s.runBatch(ctx, b.id, tpl, in)
+	}
+}
+
+// holdToCopy sets a learner's team quota to what its copy uses: the learner manages that
+// copy (restart, logs, env) but cannot create services, databases or projects, nor grow
+// memory, on a server the class shares. 0 means unlimited in a quota, so a dimension the
+// copy does not use stays at 1 at most.
+func (s *Server) holdToCopy(ctx context.Context, teamID string, services, dbs int) {
+	u, err := s.teamUsage(ctx, teamID)
+	if err != nil {
+		slog.Warn("learner quota", "team", teamID, "err", err)
+		return
+	}
+	atLeast1 := func(v int) *int { v = max(v, 1); return &v }
+	q := quotaOverride{
+		MaxProjects:      atLeast1(u.Projects),
+		MaxServices:      atLeast1(max(u.Services, services)),
+		MaxDatabases:     atLeast1(max(u.Databases, dbs)),
+		MaxMemoryMB:      atLeast1(u.MemoryMB),
+		MaxMemoryLimitMB: atLeast1(u.MemoryLimitMB),
+		MaxCPUMillis:     atLeast1(u.CPUMillis),
+		MaxPreviews:      atLeast1(0),
+		MaxDomains:       atLeast1(0),
+	}
+	raw, _ := json.Marshal(q)
+	if err := s.store.SetTeamQuota(ctx, teamID, raw); err != nil {
+		slog.Warn("learner quota", "team", teamID, "err", err)
 	}
 }
 
@@ -793,7 +897,8 @@ func (s *Server) deleteBatch(ctx context.Context, id string) {
 	}
 	rows.Close()
 	for _, it := range items {
-		if mode == "accounts" && it.project != nil {
+		// accounts mode, and instances mode with a project per copy: the copy's project goes whole.
+		if mode == "accounts" && it.project != nil || mode == "instances" && shared == nil && it.project != nil {
 			s.deleteProjectContents(ctx, *it.project)
 			if p, err := s.store.ProjectByID(ctx, *it.project); err == nil {
 				_ = s.store.DeleteProject(ctx, p.ID)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -219,8 +220,18 @@ func (s *Server) freezeWrites(ctx context.Context, db *store.Database, st *store
 	if err != nil {
 		return err
 	}
+	ids := make([]string, 0, len(links))
 	for _, l := range links {
-		svc, err := s.store.ServiceByID(ctx, l.ServiceID)
+		ids = append(ids, l.ServiceID)
+	}
+	// Services that carry the connection in plain env vars (templates) write to it too.
+	for _, id := range s.envDependents(ctx, db, oc.Host, serverID) {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		svc, err := s.store.ServiceByID(ctx, id)
 		if err != nil || svc.Status != model.StatusRunning {
 			continue
 		}
@@ -354,6 +365,17 @@ func (s *Server) finishMove(ctx context.Context, db *store.Database, st *store.M
 	}
 	_ = s.store.SetDatabaseStatus(ctx, db.ID, "ready", "")
 	versionCache.Delete(db.ID)
+	// Env vars that name the old server's host (templates) follow the database before the
+	// stopped services start again; the others that run are restarted.
+	if oldHost, err := s.serverHost(ctx, st.OldService); err == nil && db.ServerServiceID != nil {
+		if newHost, err := s.serverHost(ctx, *db.ServerServiceID); err == nil {
+			skip := map[string]bool{}
+			for _, id := range st.Stopped {
+				skip[id] = true
+			}
+			s.retargetEnv(ctx, s.envDependents(ctx, db, oldHost, st.OldService), oldHost, newHost, skip)
+		}
+	}
 	s.startStopped(ctx, st.Stopped)
 	// No way back: the old database goes now, with its users.
 	if err := s.dropPlacement(ctx, db, st.OldService, st.OldShared); err != nil {

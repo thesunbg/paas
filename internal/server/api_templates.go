@@ -47,8 +47,16 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 		// Name replaces the template's main name (its first service, and the databases
 		// named like it); "" keeps it. Names already taken get a -2, -3… suffix.
 		Name string `json:"name"`
+		// Size and QoS of the main service ("" keeps the template's): medium for heavy
+		// workflows, guaranteed so that it is never pushed out when memory runs short.
+		Size string `json:"size"`
+		QoS  string `json:"qos"`
 	}
 	_ = decode(r, &in)
+	if err := validInstallSize(in.Size, in.QoS); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
 	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
 	if in.Domain != "" {
 		if err := s.checkCustomDomain(r, in.Domain); err != nil {
@@ -56,12 +64,12 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.checkQuota(r.Context(), p.TeamID, planUsage(tpl.Services, tpl.Databases, nil, in.Domain)); err != nil {
+	if err := s.checkQuota(r.Context(), p.TeamID, planUsage(sizedServices(tpl.Services, in.Size, in.QoS), tpl.Databases, nil, in.Domain)); err != nil {
 		writeLimitError(w, err)
 		return
 	}
 	ctx := context.WithoutCancel(r.Context())
-	created, dbs, err := s.installTemplate(ctx, p, tpl, in.Name, in.Domain, in.Env, model.SleepPolicy{})
+	created, dbs, err := s.installTemplateWith(ctx, p, tpl, in.Name, in.Domain, in.Env, installOptions{Size: in.Size, QoS: in.QoS})
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -76,7 +84,46 @@ func (s *Server) handleInstallTemplate(w http.ResponseWriter, r *http.Request) {
 // its inputs by service.
 // sleep, when enabled, is given to the plan's public web services (batches); a
 // private service or a worker could not be woken by a request, so they never sleep.
+// installOptions are per-install choices on top of a template.
+type installOptions struct {
+	Sleep model.SleepPolicy
+	// SleepExplicit: sleep was asked for, so it also applies to KeepAwake services.
+	SleepExplicit bool
+	// Size and QoS replace those of the template's main service (its first).
+	Size, QoS string
+	// Restricted adds each service's Restricted env (a class on one server).
+	Restricted bool
+}
+
+// validInstallSize checks the size and QoS a caller asked for ("" keeps the template's).
+func validInstallSize(size, qos string) error {
+	if size != "" {
+		if _, ok := resources.SizeByName(size); !ok {
+			return fmt.Errorf("unknown size %q", size)
+		}
+	}
+	switch qos {
+	case "", model.QoSGuaranteed, model.QoSBurstable, model.QoSBestEffort:
+		return nil
+	}
+	return fmt.Errorf("qos must be %s, %s or %s", model.QoSGuaranteed, model.QoSBurstable, model.QoSBestEffort)
+}
+
+// sizedServices returns a copy of svcs whose first (main) service has size and qos when set.
+func sizedServices(svcs []templates.Service, size, qos string) []templates.Service {
+	out := slices.Clone(svcs)
+	if len(out) > 0 {
+		out[0].Size = firstNonEmpty(size, out[0].Size)
+		out[0].QoS = firstNonEmpty(qos, out[0].QoS)
+	}
+	return out
+}
+
 func (s *Server) installTemplate(ctx context.Context, p *store.Project, tpl *templates.Template, name, domain string, env map[string]map[string]string, sleep model.SleepPolicy) ([]*store.Service, []*store.Database, error) {
+	return s.installTemplateWith(ctx, p, tpl, name, domain, env, installOptions{Sleep: sleep})
+}
+
+func (s *Server) installTemplateWith(ctx context.Context, p *store.Project, tpl *templates.Template, name, domain string, env map[string]map[string]string, io installOptions) ([]*store.Service, []*store.Database, error) {
 	// Copy the services: the catalogue is shared, the values are this install's.
 	svcs := make([]templates.Service, len(tpl.Services))
 	for i, ts := range tpl.Services {
@@ -94,10 +141,16 @@ func (s *Server) installTemplate(ctx context.Context, p *store.Project, tpl *tem
 			}
 			vars[input.Key] = v
 		}
+		if io.Restricted {
+			for k, v := range ts.Restricted { // after the inputs: a learner's value does not lift it
+				vars[k] = v
+			}
+		}
 		ts.Env = vars
 		svcs[i] = ts
 	}
-	opts := templateOpts{Domain: domain, Rename: map[string]string{}, Sleep: sleep}
+	svcs = sizedServices(svcs, io.Size, io.QoS)
+	opts := templateOpts{Domain: domain, Rename: map[string]string{}, Sleep: io.Sleep, SleepExplicit: io.SleepExplicit}
 	if tpl.Repo != "" {
 		opts.Repo = &model.ServiceSource{Kind: "git", Repo: tpl.Repo, Branch: firstNonEmpty(tpl.Branch, "main")}
 	}
@@ -266,6 +319,8 @@ type templateOpts struct {
 	Repo        *model.ServiceSource // repository of services with a build section
 	GitTokenEnc string
 	Sleep       model.SleepPolicy // public web services get it (batches)
+	// SleepExplicit: Sleep also applies to KeepAwake services.
+	SleepExplicit bool
 }
 
 // freeNames renames the plan's services and databases whose name is already taken in the
@@ -393,7 +448,11 @@ func (s *Server) installPlan(ctx context.Context, p *store.Project, svcs []templ
 		if _, err := databases.CheckCreate(tdb.Engine, version, time.Now()); err != nil {
 			version = "" // not offered or past EOL: the engine's default
 		}
-		db, err := s.createDatabase(ctx, p, CreateDatabaseInput{Name: opts.name(tdb.Name), Engine: tdb.Engine, Mode: tdb.Mode, Version: version})
+		dbIn := CreateDatabaseInput{Name: opts.name(tdb.Name), Engine: tdb.Engine, Mode: tdb.Mode, Version: version}
+		if tdb.BackupHours > 0 {
+			dbIn.BackupHours = &tdb.BackupHours
+		}
+		db, err := s.createDatabase(ctx, p, dbIn)
 		if err != nil {
 			return nil, createdDBs, fmt.Errorf("database %s: %v", tdb.Name, err)
 		}
@@ -458,8 +517,9 @@ func (s *Server) createTemplateServices(ctx context.Context, p *store.Project, l
 		if !ok {
 			size, _ = resources.SizeByName("small")
 		}
-		resources.Apply(&spec, size, model.QoSBurstable)
-		if opts.Sleep.Enabled && typ == model.TypeWeb && host != "" {
+		resources.Apply(&spec, size, firstNonEmpty(ts.QoS, model.QoSBurstable))
+		spec.VolumeBackupHours = ts.VolumeBackupHours
+		if opts.Sleep.Enabled && typ == model.TypeWeb && host != "" && (!ts.KeepAwake || opts.SleepExplicit) {
 			spec.Sleep = opts.Sleep
 		}
 		if err := resources.Normalize(typ, &spec); err != nil {
